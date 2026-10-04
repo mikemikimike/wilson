@@ -98,7 +98,9 @@ describe('blind rule: an agent-opened detail panel hides the human label until a
     expect(src).toContain('BLIND_NOTICE');
     // The panel listens for real pointer and key events and passes isTrusted.
     expect(src).toMatch(/type:\s*'interact',\s*isTrusted:\s*[A-Za-z.]*isTrusted/);
-    expect(src).toMatch(/onPointerDownCapture|onKeyDownCapture/);
+    expect(src).toMatch(/onClickCapture|onKeyDownCapture/);
+    // Not on pointerdown: the reveal moves the dialog's footer, so the press would end off its button (no click, no submit).
+    expect(src).not.toContain('onPointerDownCapture={handlePanelInteract}');
     // A person's click on a row opens a visible panel.
     expect(src).toMatch(/byAgent:\s*false/);
   });

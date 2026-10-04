@@ -369,7 +369,12 @@ function TrainingContent({
     }
   }
 
-  /** Pointer and key events inside the panel. Only a trusted one (a real click or key press) counts as a person. */
+  /**
+   * Click and key events inside the panel. Only a trusted one (a real click or key press) counts as a person. A click, not
+   * a pointerdown: revealing removes the blind notice, the centred dialog shrinks and its footer moves, so a reveal on
+   * pointerdown slid the button out from under the pointer and the press never became a click (the first click on
+   * "Submit judgement" in an agent-opened panel did nothing). By click time the target is settled.
+   */
   function handlePanelInteract(e: { nativeEvent: { isTrusted: boolean } }) {
     if (!labelsHidden(blind) || selectedId === null) return;
     const next = nextBlindState(blind, { type: 'interact', isTrusted: e.nativeEvent.isTrusted });
@@ -590,7 +595,7 @@ function TrainingContent({
         title={detail ? `Interaction #${detail.id} — ${detail.model}` : 'Loading...'}
         className="max-w-3xl"
         footer={detail && !detailLoading ? (
-          <div className="space-y-3" onPointerDownCapture={handlePanelInteract} onKeyDownCapture={handlePanelInteract}>
+          <div className="space-y-3" onClickCapture={handlePanelInteract} onKeyDownCapture={handlePanelInteract}>
             <div className="flex items-center justify-between">
               <div className="flex flex-wrap items-center gap-4">
                 <div className="flex items-center gap-2">
@@ -621,7 +626,7 @@ function TrainingContent({
       >
         {detailLoading && <div className="h-[200px] animate-pulse bg-border-muted rounded" />}
         {detail && !detailLoading && (
-          <div className="space-y-4" onPointerDownCapture={handlePanelInteract} onKeyDownCapture={handlePanelInteract}>
+          <div className="space-y-4" onClickCapture={handlePanelInteract} onKeyDownCapture={handlePanelInteract}>
             {labelsHidden(blind) && (
               <div role="status" className="rounded border border-yellow/40 bg-yellow/10 px-3 py-2 text-xs text-yellow" data-testid="blind-notice">
                 {BLIND_NOTICE}
