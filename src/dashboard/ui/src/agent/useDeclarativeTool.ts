@@ -5,6 +5,7 @@ import {
   declarativeAttrs,
   buildFormArgs,
   AgentFormSession,
+  agentSubmitEntries,
   liveHeldFlag,
   handleDeclarativeSubmit,
   isBrowserAgentFill,
@@ -56,6 +57,12 @@ export interface UseDeclarativeToolOptions {
   afterServer?: (args: Record<string, unknown>, serverResult: unknown) => unknown | Promise<unknown>;
   /** Clear the controlled field state of a mutating form: called when the agent-touched flag drops. */
   onAgentCleared?: () => void;
+  /**
+   * Show what the browser's agent filled: called with the call's whole record (field name -> text) on each fill, in the
+   * same event, so a controlled form can set its state to it. Without it the re-render that publishes the hold puts the
+   * form's old state back into the field (the agent's text never shows, though the submit still carries it).
+   */
+  onAgentFill?: (fills: ReadonlyMap<string, string>) => void;
   /** The page's existing handler for a human submit (the REST path). */
   onHumanSubmit?: (args: Record<string, unknown>) => void | Promise<void>;
   /**
@@ -321,7 +328,7 @@ export function useDeclarativeTool(options: UseDeclarativeToolOptions): Declarat
         // re-render of the held form puts the person's text back over the agent's (V1). A person's submit reads the form.
         getArgs: () =>
           buildFormArgs({
-            entries: new FormData(formEl).entries(),
+            entries: nativeEvent.agentInvoked === true ? agentSubmitEntries(tool, new FormData(formEl).entries()) : new FormData(formEl).entries(),
             schema: infoRef.current?.inputSchema,
             fills: nativeEvent.agentInvoked === true ? (sessionRef.current as AgentFormSession).agentFills() : NO_FILLS,
           }),
@@ -369,7 +376,12 @@ export function useDeclarativeTool(options: UseDeclarativeToolOptions): Declarat
       if (isBrowserAgentFill({ isTrusted: ev.isTrusted, isInputEvent, targetFocused: e.target === document.activeElement })) {
         touch({ type: 'agentfill' });
         // Record what the agent wrote NOW: `touch` re-renders the form before the field's onChange, which resets a controlled field.
-        if (fill) (sessionRef.current as AgentFormSession).noteFill(fill.name, fill.value);
+        if (fill) {
+          const session = sessionRef.current as AgentFormSession;
+          session.noteFill(fill.name, fill.value);
+          // Recorded (not dropped by a person's save in flight): let the form show it, batched with the hold's re-render.
+          if (session.agentFills().has(fill.name)) optionsRef.current.onAgentFill?.(session.agentFills());
+        }
       } else if (fill) {
         (sessionRef.current as AgentFormSession).noteHumanEdit(fill.name);
       }

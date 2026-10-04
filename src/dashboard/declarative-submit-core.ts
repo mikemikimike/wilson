@@ -508,8 +508,13 @@ export class AgentFormSession<S = unknown> {
     this.fills.set(name, value);
   }
 
-  /** A person changed this field after the agent filled it: that value is theirs now, not the agent's. */
+  /**
+   * A person changed this field after the agent filled it: that value is theirs now, not the agent's. Except on a proposal
+   * form: only an agent can submit one, so its agent submit carries the agent's own record whatever a person typed since
+   * (`agentSubmitEntries`); the form shows that record and ignores the person's edits while the agent's call is open.
+   */
   noteHumanEdit(name: string): void {
+    if (DECLARATIVE_FORMS[this.tracker.toolName]?.classification === 'proposal') return;
     this.fills.delete(name);
   }
 
@@ -657,6 +662,19 @@ export function overlayAgentFills(entries: Iterable<[string, unknown]>, fills: R
   }
   for (const [key, value] of fills) if (!placed.has(key)) out.push([key, value]);
   return out;
+}
+
+/**
+ * The form entries an `agentInvoked` submit may read from the DOM (the agent's recorded fills go on top, `buildFormArgs`).
+ * A proposal form's agent submit is the agent's own judgement, so only the form's allowed read-only inputs (the
+ * interaction the panel is open on) come from the DOM: text a person left in a field the agent did not fill would
+ * otherwise be submitted, and recorded, as the agent's. Every other form reads all of its entries.
+ */
+export function agentSubmitEntries(toolName: string, entries: Iterable<[string, unknown]>): Array<[string, unknown]> {
+  const list = [...entries];
+  if (DECLARATIVE_FORMS[toolName]?.classification !== 'proposal') return list;
+  const readonly = ALLOWED_READONLY_INPUTS[toolName] ?? [];
+  return list.filter(([key]) => readonly.includes(key));
 }
 
 /**
