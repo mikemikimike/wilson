@@ -17,10 +17,12 @@
 import {
   CARD_COLUMN_GAP_PX,
   CARD_HOLD_MS,
+  cardColumnParent,
   confirmationCardModel,
   fitCardCount,
   holdProgress,
   morePendingLabel,
+  nextModalStack,
   outcomeCopy,
   placeholderPxFor,
 } from '../mcp/confirmation-card.js';
@@ -241,7 +243,13 @@ let lastPointerType = 'mouse';
 function getCardHost(): HTMLElement {
   if (!cardHost) {
     // No scrolling: a column that scrolls moves the card under the pointer. It caps instead (`layoutCards`).
-    const host = el('div', 'position:fixed;bottom:16px;right:16px;z-index:2147483647;display:flex;flex-direction:column;gap:8px;max-height:90vh;overflow:hidden;');
+    // A manual popover, so it is drawn in the top layer (see `placeCardHost`); the rest overrides the UA popover box.
+    const host = el(
+      'div',
+      'position:fixed;bottom:16px;right:16px;z-index:2147483647;display:flex;flex-direction:column;gap:8px;max-height:90vh;overflow:hidden;' +
+        `top:auto;left:auto;margin:0;padding:0;border:0;background:transparent;color:${T.text};width:auto;height:auto;`
+    );
+    host.setAttribute('popover', 'manual');
     // The pointer left: the space held open for removed cards collapses and the column settles.
     host.addEventListener('pointerover', (e) => { lastPointerType = e.pointerType || 'mouse'; });
     host.addEventListener('pointerleave', () => {
@@ -251,8 +259,50 @@ function getCardHost(): HTMLElement {
     cardHost = host;
     document.body.appendChild(host);
     window.addEventListener('resize', layoutCards);
+    // A modal dialog opening or closing (the `open` attribute) or being removed with the column inside it re-places it.
+    if (typeof MutationObserver === 'function') {
+      new MutationObserver(placeCardHost).observe(document.documentElement ?? document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['open'],
+      });
+    }
+    placeCardHost();
   }
   return cardHost;
+}
+
+/** Open modal dialogs, oldest first (`nextModalStack`). */
+let modalStack: Element[] = [];
+
+/**
+ * Keep the card column usable above a modal `<dialog>` (the Training, Review and transaction detail panels): inside the
+ * topmost open one (everything outside it is inert), and shown as a popover so it is drawn in the top layer above it.
+ * Moving the column re-shows it (removing a popover from its parent hides it); the cards inside are the same nodes, so a
+ * card keeps its timers and its hold state. Runs on every relevant DOM change; a no-op when the column is already right.
+ */
+function placeCardHost(): void {
+  const host = cardHost;
+  if (!host) return;
+  let open: Element[] = [];
+  try {
+    open = [...document.querySelectorAll('dialog:modal')];
+  } catch {
+    // No `:modal` support (or no DOM to query): the column stays where it is.
+    return;
+  }
+  modalStack = nextModalStack(modalStack, open);
+  const parent = cardColumnParent<Element>(modalStack, document.body);
+  if (host.parentElement !== parent) parent.appendChild(host);
+  const popover = host as HTMLElement & { showPopover?: () => void };
+  if (typeof popover.showPopover === 'function' && !host.matches(':popover-open')) {
+    try {
+      popover.showPopover();
+    } catch {
+      // Not connected yet, or already shown by a racing call: the next DOM change places it again.
+    }
+  }
 }
 
 /**

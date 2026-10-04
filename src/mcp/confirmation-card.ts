@@ -290,3 +290,22 @@ export function reconcileStack(prev: StackEntry[], pendingIds: string[], pointer
 export function releasePlaceholders(entries: StackEntry[]): StackEntry[] {
   return entries.filter((e) => e.placeholderPx === null);
 }
+
+// ── Above a modal dialog ─────────────────────────────────────────────────────
+//
+// A modal `<dialog>` (`showModal()`) sits in the browser's top layer, above any z-index, and makes everything outside
+// it inert: a card column appended to <body> was drawn behind the Training detail panel and could not be clicked
+// ("<dialog open> intercepts pointer events"). The column is a `popover="manual"` element, shown in the top layer, and
+// while a modal dialog is open it lives INSIDE the topmost one: a flat-tree descendant of the blocking dialog is the only
+// part of the page that is not inert, and the popover's own top-layer box is drawn above the dialog, not clipped by it.
+
+/** Modal dialogs open now, oldest first: the last one is on top (the one that blocks the rest). `openNow` in document order. */
+export function nextModalStack<T>(prev: readonly T[], openNow: readonly T[]): T[] {
+  const kept = prev.filter((d) => openNow.includes(d));
+  return [...kept, ...openNow.filter((d) => !kept.includes(d))];
+}
+
+/** Where the card column must live: inside the topmost modal dialog, or <body> when none is open. */
+export function cardColumnParent<T>(modalStack: readonly T[], body: T): T {
+  return modalStack.length > 0 ? modalStack[modalStack.length - 1] : body;
+}
