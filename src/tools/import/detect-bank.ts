@@ -27,7 +27,8 @@ export function detectFormat(content: string): DetectedFormat {
   // QIF: lines starting with !Type: or first non-empty line starts with D followed by date
   const lines = trimmed.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
   if (lines.length > 0) {
-    if (lines[0].startsWith('!Type:')) {
+    // Quicken full exports may open with !Option:AutoSwitch or !Account.
+    if (/^!(Type:|Account$|Option:|Clear:)/i.test(lines[0])) {
       return { format: 'qif', bank: 'qif' };
     }
     // First non-empty line starts with D followed by a date-like pattern (e.g. D01/15/2026)
