@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,11 +12,13 @@ import { setPolicy } from '../mcp/policies.js';
 import { toAgentResolvedView } from '../mcp/operation-view.js';
 import { awaitOperationOutcome } from '../mcp/http-server.js';
 import { getGrant, getOperation, validateGrant } from '../mcp/store.js';
+import * as catalogModule from '../mcp/tool-catalog.js';
 import { schemaDigest } from '../mcp/tool-catalog.js';
 import { listClientTokens, mintClientToken, resolveClientToken, updateClientTokenTools } from '../mcp/client-tokens.js';
 import { handleMcpHttpRequest } from '../mcp/http-server.js';
 import {
   DEFAULT_AGENT_ACCESS_FILE,
+  KILL_SWITCH_MESSAGE,
   getGlobalAgentState,
   getKillSwitchEpoch,
   isAgentAccessEnabled,
@@ -212,6 +214,125 @@ describe('switching agent access off', () => {
     });
     expect(res.status).toBe(403);
     expect(isAgentAccessEnabled()).toBe(true);
+  });
+});
+
+/**
+ * The switch unexposes every tool. A call that still reaches the server after it (in flight on a card, racing it, or
+ * arriving on /mcp from a client that listed before) is refused in KILL_SWITCH_MESSAGE's words and audited as
+ * `denied_kill_switch`, never as a bare `rejected` or `tool not found`.
+ */
+describe('calls that reach the server after the switch', () => {
+  async function mcpCall(db: ReturnType<typeof createTestDb>, token: string, body: unknown) {
+    const res = await handleMcpHttpRequest(
+      db,
+      new Request('http://localhost/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      }),
+      '127.0.0.1',
+      'test',
+    );
+    return (await res.json()) as any;
+  }
+
+  test('a call waiting on its card gets its own denied_kill_switch row, attributed like the call', async () => {
+    const db = createTestDb();
+    seedTestData(db);
+    const { op } = await pendingEdit(db);
+    const created = db.prepare("SELECT transport, principal_kind, principal_id FROM mcp_audit_log WHERE operation_id = @id AND decision = 'operation_created'").get({ id: op.id }) as any;
+    setKillSwitch(db, false);
+    const row = db.prepare("SELECT transport, principal_kind, principal_id, tool_name, error_code FROM mcp_audit_log WHERE operation_id = @id AND decision = 'denied_kill_switch'").get({ id: op.id }) as any;
+    expect(row).toEqual({ ...created, tool_name: 'update_transaction', error_code: 'kill_switch' });
+    // The operation's own history keeps its lifecycle row too.
+    expect(count(db, 'mcp_audit_log', `operation_id = '${op.id}' AND decision = 'rejected'`)).toBe(1);
+  });
+
+  test("the waiting agent's poll and the /mcp wait both end with the kill switch message", async () => {
+    const db = createTestDb();
+    seedTestData(db);
+    const { op, scope } = await pendingEdit(db);
+    setKillSwitch(db, false);
+    const view = toAgentResolvedView(db, getOperation(db, op.id)!, { sessionGeneration: scope.sessionGeneration });
+    expect(view).toMatchObject({ status: 'rejected', error: { code: 'kill_switch', message: KILL_SWITCH_MESSAGE } });
+    expect(await awaitOperationOutcome(db, op.id, 10)).toEqual({ outcome: 'rejected', operationId: op.id, reason: KILL_SWITCH_MESSAGE });
+  });
+
+  test('a read-ask waiting on its card keeps its reason (only committed read data is wiped), so it ends with the message too', async () => {
+    const db = createTestDb();
+    seedTestData(db);
+    const scope = testScope();
+    setPolicy(db, { userId: null, role: 'admin', authEnabled: false }, 'search_transactions', 'ask');
+    const grants = grantTools(db, scope, ['search_transactions']);
+    const out = await callTool(db, scope, grants.search_transactions, 'search_transactions', { query: 'groceries' }, 'imperative');
+    if (!out.ok || out.kind !== 'operation') throw new Error('expected a read-ask operation');
+    setKillSwitch(db, false);
+    expect(JSON.parse(getOperation(db, out.operation.id)!.outcome_json!)).toEqual({ reason: 'kill_switch' });
+    const view = toAgentResolvedView(db, getOperation(db, out.operation.id)!, { sessionGeneration: scope.sessionGeneration });
+    expect(view.error).toEqual({ code: 'kill_switch', message: KILL_SWITCH_MESSAGE });
+    expect(view.data).toBeUndefined();
+    expect(count(db, 'mcp_audit_log', `operation_id = '${out.operation.id}' AND decision = 'denied_kill_switch'`)).toBe(1);
+  });
+
+  test('a rejection by the user is not dressed up as the kill switch', async () => {
+    const db = createTestDb();
+    seedTestData(db);
+    const { op, scope } = await pendingEdit(db);
+    const { rejectOperation } = await import('../mcp/engine.js');
+    rejectOperation(db, op.id);
+    const view = toAgentResolvedView(db, getOperation(db, op.id)!, { sessionGeneration: scope.sessionGeneration });
+    expect(view.status).toBe('rejected');
+    expect(view.error).toBeUndefined();
+  });
+
+  test('a read in flight across the flip is refused with the message, audited, and its data never leaves', async () => {
+    const db = createTestDb();
+    seedTestData(db);
+    const scope = testScope();
+    const grants = grantTools(db, scope, ['search_transactions']);
+    const real = catalogModule.executeRead;
+    const spy = spyOn(catalogModule, 'executeRead').mockImplementation(async (...args: Parameters<typeof real>) => {
+      const data = await real(...args);
+      setGlobalAgentState({ enabled: false }); // flipped from another request (or process) while the read ran
+      return data;
+    });
+    try {
+      const out = await callTool(db, scope, grants.search_transactions, 'search_transactions', { query: 'groceries' }, 'imperative');
+      expect(out).toEqual({ ok: false, status: 403, code: 'kill_switch', error: KILL_SWITCH_MESSAGE });
+      expect(JSON.stringify(out)).not.toContain('Grocery');
+      expect(count(db, 'mcp_audit_log', "decision = 'denied_kill_switch' AND tool_name = 'search_transactions'")).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('/mcp: a tools/call from a token the flip never revoked is refused with the message and audited as denied_kill_switch', async () => {
+    const db = createTestDb();
+    seedTestData(db);
+    const { token } = mintTestToken(db, ['search_transactions']);
+    // Flipped from another profile or process: this database's token and grants were not touched.
+    setGlobalAgentState({ enabled: false });
+    const body = await mcpCall(db, token, { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'search_transactions', arguments: { query: 'x' } } });
+    expect(body).toEqual({ jsonrpc: '2.0', id: 7, result: { isError: true, content: [{ type: 'text', text: `kill_switch: ${KILL_SWITCH_MESSAGE}` }] } });
+    expect(count(db, 'mcp_audit_log', "decision = 'denied_kill_switch' AND transport = 'http-mcp' AND tool_name = 'search_transactions'")).toBe(1);
+    expect(count(db, 'mcp_audit_log', "decision = 'denied_grant'")).toBe(0);
+    // Still nothing exposed.
+    const list = await mcpCall(db, token, { jsonrpc: '2.0', id: 8, method: 'tools/list' });
+    expect(list.result.tools).toEqual([]);
+  });
+
+  test('/mcp: a batch while it is off is audited as denied_kill_switch once, not also as denied_grant', async () => {
+    const db = createTestDb();
+    seedTestData(db);
+    const { token } = mintTestToken(db, ['search_transactions']);
+    setGlobalAgentState({ enabled: false });
+    await mcpCall(db, token, [
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'search_transactions', arguments: { query: 'x' } } },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'search_transactions', arguments: { query: 'y' } } },
+    ]);
+    const rows = db.prepare("SELECT decision, count FROM mcp_audit_log WHERE transport = 'http-mcp'").all() as any[];
+    expect(rows).toEqual([{ decision: 'denied_kill_switch', count: 2 }]);
   });
 });
 

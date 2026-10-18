@@ -8,7 +8,7 @@
  * client-reported `transport` is not evidence of where a call came from, and
  * the confirmation card must not call another tab's request "this page".
  */
-import { isAgentAccessEnabled } from './global-state.js';
+import { KILL_SWITCH_MESSAGE, isAgentAccessEnabled } from './global-state.js';
 import { clearReadOutcome, readDeliveryRefusal, type McpOperation, type OperationKind, type OperationStatus } from './store.js';
 import { principalFor } from './audit.js';
 import type { Database } from '../db/compat-sqlite.js';
@@ -165,6 +165,27 @@ export interface AgentOperationView {
   result?: unknown;
   /** A committed read's capped data, for the requesting principal only. Delivered once (the route clears it after). */
   data?: unknown;
+  /**
+   * Why the call was refused, in the words a direct call would have got. Set only for an operation the kill switch
+   * rejected while its agent waited on the card, so that agent ends with the kill switch's message, not a bare `rejected`.
+   */
+  error?: KillSwitchRefusal;
+}
+
+export interface KillSwitchRefusal {
+  code: 'kill_switch';
+  message: string;
+}
+
+/** The refusal of an operation the kill switch rejected (`setKillSwitch` stores `{reason:'kill_switch'}`), or undefined. */
+export function killSwitchRefusalOf(op: Pick<McpOperation, 'status' | 'outcome_json'>): KillSwitchRefusal | undefined {
+  if (op.status !== 'rejected' || op.outcome_json === null) return undefined;
+  try {
+    const outcome = JSON.parse(op.outcome_json) as { reason?: unknown } | null;
+    return outcome?.reason === 'kill_switch' ? { code: 'kill_switch', message: KILL_SWITCH_MESSAGE } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function toAgentOperationView(_db: Database, op: McpOperation, viewer: OperationViewer): AgentOperationView {
@@ -201,7 +222,8 @@ export function toAgentResolvedView(db: Database, op: McpOperation, viewer: Oper
       return view;
     }
   }
-  return { ...view, result: sanitizeStoredOutcomeForAgent(db, op.outcome_json) };
+  const refusal = killSwitchRefusalOf(op);
+  return { ...view, result: sanitizeStoredOutcomeForAgent(db, op.outcome_json), ...(refusal ? { error: refusal } : {}) };
 }
 
 const OUTCOME_TEXT_MAX = 64;

@@ -79,6 +79,18 @@ describe('L3 + L4 wiring in the bridge (source guard)', () => {
 
   test('a revoked grant is a ToolCallError result, not a bare Error', () => {
     expect(code).not.toMatch(/new Error\(`Access to/);
-    expect(code).toContain("new ToolCallError('grant_invalid'");
+    expect(code).toContain('return Promise.reject(revokedToolError(name));');
+    expect(code).toContain('return Promise.reject(revokedToolError(tool.name));');
+  });
+
+  test('a call that outlives its tool still goes to the server under its last grant, on both call paths (kill switch)', () => {
+    expect(code.match(/grantForCall\((name|tool\.name), grantIdByTool, lastGrantIdByTool\)/g)).toHaveLength(2);
+    expect(code.match(/throw staleGrantRefusal\(/g)).toHaveLength(2);
+    // Every live grant is remembered (the server decides what a stale one is worth). Only an authorization failure of
+    // the tab itself forgets them: then the tab makes no call at all.
+    expect(code).toContain('lastGrantIdByTool.set(tool.name, tool.grantId);');
+    expect(code.match(/lastGrantIdByTool\.clear\(\)/g)).toHaveLength(1);
+    expect(code).toMatch(/if \(!isAuthFailure\(err\)\) return;\s*grantIdByTool\.clear\(\);\s*lastGrantIdByTool\.clear\(\);/);
+    expect(code).not.toContain('lastGrantIdByTool.delete(');
   });
 });

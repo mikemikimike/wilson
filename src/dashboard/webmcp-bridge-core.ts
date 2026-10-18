@@ -415,6 +415,8 @@ interface WireOperation {
   result?: unknown;
   /** A committed read's data, delivered once to the tab that asked. */
   data?: unknown;
+  /** The server's refusal of a call that was waiting on its card (the kill switch rejected it): handed back as is. */
+  error?: { code?: unknown; message?: unknown };
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 800;
@@ -558,6 +560,7 @@ async function pollOperation(
   const withdrawal = () => deps.ledger?.withdrawal(id);
   const withdrawnResult = async (pending: Promise<CancelAnswer | undefined>) => withdrawnAnswer(id, await pending);
 
+  let refusal: ToolCallError | undefined;
   while (now() < deadline) {
     if (signal?.aborted) return cancelAndThrow();
     const w0 = withdrawal();
@@ -573,6 +576,11 @@ async function pollOperation(
       }
       if (res.ok) {
         const op = (await readJson(res))?.operation as WireOperation | undefined;
+        if (op && op.status !== 'pending' && typeof op.error?.code === 'string' && typeof op.error.message === 'string') {
+          // Refused while it waited (the kill switch): the call ends with that message, like a call refused up front.
+          refusal = new ToolCallError(op.error.code, op.error.message);
+          break;
+        }
         if (op && op.status !== 'pending') {
           if (op.kind === 'read' && op.status === 'committed') {
             // The user allowed the read: the agent gets what a direct read would have returned. For a page tool the
@@ -596,7 +604,46 @@ async function pollOperation(
     const w2 = withdrawal();
     if (w2) return withdrawnResult(w2);
   }
+  // Thrown outside the loop: inside it, a throw would read as a transport hiccup and be retried.
+  if (refusal) throw refusal;
   return value({ outcome: 'unknown', operationId: id, reason: 'No response within the approval window — the card is still open.' });
+}
+
+// ── Calls that outlive their tool ────────────────────────────────────────────
+
+/** The grant a call goes out under. `stale`: the tool is no longer live in this tab; this is the grant it last had. */
+export interface CallGrant {
+  grantId: string;
+  stale: boolean;
+}
+
+/**
+ * The live grant for `name`, or else the last one this tab held for it. A call can reach the bridge after its tool stopped
+ * being live: the kill switch, a revoke or a policy change landed between Chrome starting the call and the bridge
+ * unregistering the tool, or Chrome kept an in-flight run alive. Such a call still goes to the server under its last
+ * grant, so the server refuses it in its own words (the kill switch's message) and writes the audit row, instead of the
+ * page answering alone with nothing in the log. A stale grant authorizes nothing: the server checks everything again.
+ * Undefined only for a tool this tab never held.
+ */
+export function grantForCall(name: string, live: ReadonlyMap<string, string>, last: ReadonlyMap<string, string>): CallGrant | undefined {
+  const current = live.get(name);
+  if (current !== undefined) return { grantId: current, stale: false };
+  const previous = last.get(name);
+  return previous === undefined ? undefined : { grantId: previous, stale: true };
+}
+
+/** What an agent is told when the tool it called is no longer granted to this tab. */
+export function revokedToolError(name: string): ToolCallError {
+  return new ToolCallError('grant_invalid', `Access to ${name} was revoked. Ask the user to grant it again.`);
+}
+
+/**
+ * The error a call made under `grant` ends with. A server refusal goes through as it is (the kill switch, a policy Off,
+ * a rate limit), except the plain "grant invalid" of a stale grant, which becomes the one line that says what to do.
+ */
+export function staleGrantRefusal(name: string, grant: CallGrant, err: unknown): unknown {
+  if (grant.stale && err instanceof ToolCallError && err.code === 'grant_invalid') return revokedToolError(name);
+  return err;
 }
 
 // ── Reconcile scheduling ─────────────────────────────────────────────────────

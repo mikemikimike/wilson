@@ -43,8 +43,11 @@ import {
   endChromeCall,
   executePageTool,
   executeServerTool,
+  grantForCall,
   liveToolsSignature,
   registerLiveTools,
+  revokedToolError,
+  staleGrantRefusal,
   type AgentCall,
   type ChromeCallEnd,
   type LiveToolDescriptor,
@@ -60,7 +63,6 @@ import {
   type AgentPendingOperation,
   type AgentState,
 } from './agent-access-model.js';
-import { ToolCallError } from './webmcp-tool-error.js';
 
 export {}; // makes this a module so `declare global` below is valid
 
@@ -672,6 +674,11 @@ const registeredTools = new Map<string, AbortController>();
 // declarative form's submit) reads this at call time, so a revoke-and-regrant never
 // leaves a tool holding a dead grant id.
 const grantIdByTool = new Map<string, string>();
+/**
+ * The grant each tool last ran under in this tab, kept after the tool stops being live, so a call that outlives its
+ * tool (the kill switch flipped while Chrome was starting it) is still refused and audited by the server (`grantForCall`).
+ */
+const lastGrantIdByTool = new Map<string, string>();
 /** What the page registry was last told, so a sync that changed nothing does not re-render every form. */
 let publishedSignature: string | null = null;
 
@@ -688,15 +695,19 @@ function serverDeps() {
   return { fetch: (url: string, init?: RequestInit) => fetch(url, init), sessionGeneration: getSessionGeneration(), authHeaders, ledger };
 }
 
-/** Tab-session call into the server's one tool endpoint, with the live grant for `name`. */
+/** Tab-session call into the server's one tool endpoint, with the live grant for `name` (or its last one: `grantForCall`). */
 function callWithGrant(name: string, args: Record<string, unknown>, transport: 'imperative' | 'declarative' | 'page', signal?: AbortSignal, agentCall?: AgentCall): Promise<unknown> {
-  const grantId = grantIdByTool.get(name);
-  if (!grantId) return Promise.reject(new ToolCallError('grant_invalid', `Access to ${name} was revoked. Ask the user to grant it again.`));
+  const grant = grantForCall(name, grantIdByTool, lastGrantIdByTool);
+  if (!grant) return Promise.reject(revokedToolError(name));
   callsAwaitingServer++;
   kickConfirmationPoller();
-  return callServerTool(serverDeps(), { grantId, tool: name, args, transport, agentCall }, signal).finally(() => {
-    callsAwaitingServer--;
-  });
+  return callServerTool(serverDeps(), { grantId: grant.grantId, tool: name, args, transport, agentCall }, signal)
+    .catch((err: unknown) => {
+      throw staleGrantRefusal(name, grant, err);
+    })
+    .finally(() => {
+      callsAwaitingServer--;
+    });
 }
 
 /**
@@ -751,18 +762,22 @@ function makeExecute(tool: LiveToolDescriptor): (args: Record<string, unknown>, 
         signal: options.signal,
         runtime: pageRegistry(),
         serverCall: (signal) => {
-          const grantId = grantIdByTool.get(tool.name);
-          if (!grantId) return Promise.reject(new ToolCallError('grant_invalid', `Access to ${tool.name} was revoked. Ask the user to grant it again.`));
+          const grant = grantForCall(tool.name, grantIdByTool, lastGrantIdByTool);
+          if (!grant) return Promise.reject(revokedToolError(tool.name));
           callsAwaitingServer++;
           kickConfirmationPoller();
           return callServerToolAnswer(
             serverDeps(),
-            { grantId, tool: tool.name, args, transport: 'page', agentCall: call },
+            { grantId: grant.grantId, tool: tool.name, args, transport: 'page', agentCall: call },
             signal,
             { pageMode: true }
-          ).finally(() => {
-            callsAwaitingServer--;
-          });
+          )
+            .catch((err: unknown) => {
+              throw staleGrantRefusal(tool.name, grant, err);
+            })
+            .finally(() => {
+              callsAwaitingServer--;
+            });
         },
       })
     );
@@ -842,9 +857,11 @@ async function syncRegisteredTools(): Promise<void> {
   } catch (err) {
     // A transient failure (network, server restart) keeps what is live until the next sync. An authorization
     // failure does not: the live set is "granted, policy not Off, access on", and this tab can no longer say so,
-    // so forms drop their tool attributes and imperative tools are unregistered until a sync succeeds.
+    // so forms drop their tool attributes and imperative tools are unregistered until a sync succeeds. Calls do not go
+    // out under a remembered grant either: this tab is not authorized to make them.
     if (!isAuthFailure(err)) return;
     grantIdByTool.clear();
+    lastGrantIdByTool.clear();
     liveTools = [];
     publishLiveSet([]);
     await scheduler.flush();
@@ -854,7 +871,10 @@ async function syncRegisteredTools(): Promise<void> {
   // The server already answers [] while agent access is off and leaves out a tool whose policy is Off,
   // so a kill switch or a policy change unregisters everything it covers on this sync.
   grantIdByTool.clear();
-  for (const tool of tools) grantIdByTool.set(tool.name, tool.grantId);
+  for (const tool of tools) {
+    grantIdByTool.set(tool.name, tool.grantId);
+    lastGrantIdByTool.set(tool.name, tool.grantId);
+  }
   liveTools = tools;
 
   // Forms first: they need the live set even where the browser has no `modelContext` to register with.

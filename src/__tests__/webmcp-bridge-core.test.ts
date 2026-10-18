@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import {
-  callServerTool, callServerToolAnswer, createReconcileScheduler, desiredTools, executePageTool, reconcile, registerLiveTools,
-  liveToolsSignature, SESSION_HEADER, type ServerCallDeps, type LiveToolDescriptor, type PageToolRuntime,
+  callServerTool, callServerToolAnswer, createReconcileScheduler, desiredTools, executePageTool, executeServerTool, grantForCall,
+  reconcile, registerLiveTools, liveToolsSignature, revokedToolError, staleGrantRefusal, SESSION_HEADER,
+  type ServerCallDeps, type LiveToolDescriptor, type PageToolRuntime,
 } from '../dashboard/webmcp-bridge-core.js';
+import { ToolCallError } from '../dashboard/webmcp-tool-error.js';
+import { KILL_SWITCH_MESSAGE } from '../mcp/global-state.js';
 import { getPageRegistry } from '../dashboard/webmcp-page-registry.js';
 import { MCP_TOOL_CATALOG, jsonSchemaFor, tabOpenHint, toolAnnotations } from '../mcp/tool-catalog.js';
 
@@ -238,6 +241,51 @@ describe('callServerTool', () => {
   test('a body without a kind is an error, not silent success', async () => {
     const { fetchFn } = fakeServer({ 'POST /api/mcp/call': jsonResponse({ unexpected: true }) });
     await expect(callServerTool(deps(fetchFn), call)).rejects.toThrow();
+  });
+});
+
+describe('kill switch: a call that outlives its tool', () => {
+  const KILL = { code: 'kill_switch', message: KILL_SWITCH_MESSAGE };
+
+  test('grantForCall: the live grant, else the last one held (stale), else none', () => {
+    const live = new Map([['a', 'g-live']]);
+    const last = new Map([['a', 'g-old-a'], ['b', 'g-old-b']]);
+    expect(grantForCall('a', live, last)).toEqual({ grantId: 'g-live', stale: false });
+    expect(grantForCall('b', live, last)).toEqual({ grantId: 'g-old-b', stale: true });
+    expect(grantForCall('c', live, last)).toBeUndefined();
+  });
+
+  test("staleGrantRefusal: the server's kill switch refusal goes through; a stale grant's plain grant_invalid becomes the revoked line", () => {
+    const kill = new ToolCallError(KILL.code, KILL.message);
+    expect(staleGrantRefusal('t', { grantId: 'g', stale: true }, kill)).toBe(kill);
+    const invalid = new ToolCallError('grant_invalid', 'Grant invalid: revoked');
+    expect(staleGrantRefusal('t', { grantId: 'g', stale: true }, invalid)).toEqual(revokedToolError('t'));
+    expect(staleGrantRefusal('t', { grantId: 'g', stale: false }, invalid)).toBe(invalid);
+  });
+
+  test('a card the kill switch rejected ends the waiting call with the server message, as a result', async () => {
+    const { calls, fetchFn } = fakeServer({
+      'POST /api/mcp/call': jsonResponse({ kind: 'operation', operation: { id: 'op1', status: 'pending' } }),
+      'GET /api/mcp/operations/op1?view=agent': [
+        jsonResponse({ operation: { id: 'op1', status: 'pending' } }),
+        jsonResponse({ operation: { id: 'op1', status: 'rejected', result: { reason: 'kill_switch' }, error: KILL } }),
+      ],
+    });
+    await expect(callServerTool(deps(fetchFn), call)).rejects.toMatchObject(KILL);
+    expect(await executeServerTool(() => callServerTool(deps(fakeServer({
+      'POST /api/mcp/call': jsonResponse({ kind: 'operation', operation: { id: 'op1', status: 'pending' } }),
+      'GET /api/mcp/operations/op1?view=agent': jsonResponse({ operation: { id: 'op1', status: 'rejected', error: KILL } }),
+    }).fetchFn), call))).toEqual({ error: KILL });
+    // It stopped polling at the refusal.
+    expect(calls.filter((c) => c.method === 'GET')).toHaveLength(2);
+  });
+
+  test('a refusal on a page tool waiting on its Ask card ends the same way', async () => {
+    const { fetchFn } = fakeServer({
+      'POST /api/mcp/call': jsonResponse({ kind: 'operation', operation: { id: 'op1', status: 'pending', kind: 'read' } }),
+      'GET /api/mcp/operations/op1?view=agent': jsonResponse({ operation: { id: 'op1', status: 'rejected', kind: 'read', error: KILL } }),
+    });
+    await expect(callServerToolAnswer(deps(fetchFn), call, undefined, { pageMode: true })).rejects.toMatchObject(KILL);
   });
 });
 

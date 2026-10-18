@@ -1,12 +1,13 @@
 import { describe, expect, test, afterEach } from 'bun:test';
 import { runInNewContext } from 'node:vm';
 import { createTestDb, seedTestData } from './helpers.js';
-import { bfetch } from './mcp-helpers.js';
+import { bfetch, count } from './mcp-helpers.js';
 import { startDashboardServer, stopDashboardServer } from '../dashboard/server.js';
 import { setInitialProfile, closeAll } from '../dashboard/db-manager.js';
 import { TOOL_SYNC_LIVE_MS, TOOL_SYNC_LATE_REGISTRATION_MS, TOOL_SYNC_LATE_ATTEMPTS } from '../dashboard/webmcp-polling.js';
 import { WILSON_AGENT_CHANNEL, WILSON_MCP_SESSION_KEY, WILSON_GRANTS_CHANGED_EVENT, WILSON_AGENT_STATE_CHANGED_EVENT } from '../dashboard/webmcp-session.js';
 import { SESSION_HEADER } from '../dashboard/webmcp-bridge-core.js';
+import { KILL_SWITCH_MESSAGE } from '../mcp/global-state.js';
 
 /**
  * Runs the real bundle the server serves at /webmcp-bridge.js against a stub
@@ -480,6 +481,74 @@ describe('page tools through the served bridge bundle', () => {
     } finally {
       setKillSwitch(db, true);
     }
+  });
+});
+
+/**
+ * The kill switch unexposes every tool (an agent then gets webmcp_tool_not_found from the browser). A call that still
+ * reaches the bridge after the flip, racing the unregistration or already waiting on a card, is refused by the server in
+ * the kill switch's words and leaves a `denied_kill_switch` row.
+ */
+describe('kill switch: calls that outlive their tool', () => {
+  const killRows = (db: any, tool: string) => count(db, 'mcp_audit_log', `decision = 'denied_kill_switch' AND tool_name = '${tool}'`);
+
+  test('a call racing the unregistration is refused with the kill switch message and audited; the tool stays unexposed', async () => {
+    const { db, registered, win, resync } = await bootBridge();
+    const registry = (win as any).__wilsonPageTools;
+    const tool = registered.get('search_transactions')!;
+    const { setKillSwitch } = await import('../mcp/engine.js');
+    setKillSwitch(db, false);
+    try {
+      await resync();
+      await until(() => registered.size === 0);
+      // Unexposed: nothing is registered and no form carries a tool.
+      expect(registered.size).toBe(0);
+      expect([...registry.liveTools()]).toEqual([]);
+      // Chrome still runs the execute it had started: the server answers it, not the page.
+      const out = (await tool.execute({ query: 'groceries' }, { signal: new AbortController().signal })) as { error: { code: string; message: string } };
+      expect(out.error).toEqual({ code: 'kill_switch', message: KILL_SWITCH_MESSAGE });
+      expect(killRows(db, 'search_transactions')).toBe(1);
+      // A declarative form's submit that raced the flip goes the same way.
+      await expect(registry.callServerTool('search_transactions', { query: 'x' }, { transport: 'declarative', agentCall: true })).rejects.toMatchObject({ code: 'kill_switch', message: KILL_SWITCH_MESSAGE });
+    } finally {
+      setKillSwitch(db, true);
+    }
+  });
+
+  test('a call waiting on its card when the switch flips ends with the kill switch message, and the call is audited as refused', async () => {
+    const { db, registered, resync } = await bootBridge();
+    const tool = registered.get('update_transaction')!;
+    const id = (db.prepare('SELECT id FROM transactions ORDER BY id LIMIT 1').get() as { id: number }).id;
+    const run = tool.execute({ id, notes: 'in flight' }, { signal: new AbortController().signal }) as Promise<{ error?: { code: string; message: string } }>;
+    await until(() => count(db, 'mcp_operations', "status = 'pending'") === 1, 2000);
+    const op = db.prepare("SELECT id FROM mcp_operations WHERE status = 'pending'").get() as { id: string };
+    const { setKillSwitch } = await import('../mcp/engine.js');
+    setKillSwitch(db, false);
+    try {
+      await resync();
+      const out = await run;
+      expect(out.error).toEqual({ code: 'kill_switch', message: KILL_SWITCH_MESSAGE });
+      expect(count(db, 'mcp_audit_log', `decision = 'denied_kill_switch' AND operation_id = '${op.id}'`)).toBe(1);
+      expect((db.prepare('SELECT notes FROM transactions WHERE id = @id').get({ id }) as { notes: string | null }).notes).toBeNull();
+      expect(registered.size).toBe(0);
+    } finally {
+      setKillSwitch(db, true);
+    }
+  });
+
+  test('after the switch is back on, a call under the dead grant is the page\'s "revoked" line (the server still decides)', async () => {
+    const { db, registered, resync } = await bootBridge();
+    const tool = registered.get('search_transactions')!;
+    const { setKillSwitch } = await import('../mcp/engine.js');
+    setKillSwitch(db, false);
+    await resync();
+    await until(() => registered.size === 0);
+    setKillSwitch(db, true);
+    await resync();
+    const out = (await tool.execute({ query: 'groceries' }, { signal: new AbortController().signal })) as { error: { code: string; message: string } };
+    expect(out.error.code).toBe('grant_invalid');
+    expect(out.error.message).toContain('revoked');
+    expect(count(db, 'mcp_audit_log', "decision = 'denied_grant' AND tool_name = 'search_transactions'")).toBe(1);
   });
 });
 

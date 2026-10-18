@@ -77,7 +77,7 @@ import {
   type McpToolDef,
   type ToolTransport,
 } from './tool-catalog.js';
-import { appendAudit, previewArgs, principalFor, userPrincipal, type AuditDecision, type Principal } from './audit.js';
+import { appendAudit, previewArgs, principalFor, userPrincipal, type AuditDecision, type Principal, type PrincipalKind } from './audit.js';
 import { isAuthEnabled } from '../dashboard/auth.js';
 import type { TabId } from '../dashboard/webmcp-session.js';
 import { retiredNameHint } from './tool-names.js';
@@ -646,6 +646,12 @@ export async function callTool(
         note.detail = err instanceof Error ? err.message.slice(0, 120) : 'unknown error';
         return deny('error', fail(500, 'internal', 'Internal error'));
       }
+      // The read awaited: the switch may have been flipped meanwhile (another request, another process). A call in
+      // flight across the flip is refused like one that arrived after it, and its data never leaves.
+      if (!isAgentAccessEnabled()) {
+        reservation.settle();
+        return deny('denied_kill_switch', fail(403, 'kill_switch', KILL_SWITCH_MESSAGE));
+      }
 
       const resultChars = JSON.stringify(data).length;
       const items = (data as { items?: unknown[] } | null)?.items;
@@ -1191,7 +1197,9 @@ export interface KillSwitchResult {
  * The global kill switch. `enabled=false` writes the process-global state
  * (agent-access.json: `enabled=false`, `killSwitchEpoch=now`), revokes every
  * active grant and client token and rejects every pending agent operation (`{reason:'kill_switch'}`)
- * in `db`; from then on `callTool`, `exposedTools` and `/mcp` tools/list refuse in
+ * in `db`. Each of those operations is an agent call still in flight, waiting on its card: it gets a
+ * `denied_kill_switch` row of its own, and its agent's next poll ends with KILL_SWITCH_MESSAGE
+ * (operation-view.ts `killSwitchRefusalOf`). From then on `callTool`, `exposedTools` and `/mcp` tools/list refuse in
  * EVERY profile. The epoch also kills grants left in other profiles' databases, even after
  * the switch is turned back on. `enabled=true` only lifts the refusal: nothing
  * revoked comes back.
@@ -1211,15 +1219,48 @@ export function setKillSwitch(db: Database, enabled: boolean): KillSwitchResult 
   const rejected = rejectPendingAgentOperations(db, 'kill_switch');
   for (const id of rejected) {
     const op = getOperation(db, id);
-    if (op) lifecycleAudit(db, op, 'rejected', undefined, 'kill_switch');
+    if (!op) continue;
+    lifecycleAudit(db, op, 'rejected', undefined, 'kill_switch');
+    inFlightKillSwitchAudit(db, op);
   }
   const revokedGrants = revokeAllGrants(db);
-  // Data a user allowed but the agent has not fetched yet must not be delivered after "no tools are exposed".
-  db.prepare("UPDATE mcp_operations SET outcome_json = NULL WHERE kind = 'read' AND outcome_json IS NOT NULL").run();
+  // Data a user allowed but the agent has not fetched yet must not be delivered after "no tools are exposed". Only a
+  // committed read holds data; the read-asks just rejected keep their `{reason:'kill_switch'}` for the waiting agent.
+  db.prepare("UPDATE mcp_operations SET outcome_json = NULL WHERE kind = 'read' AND status = 'committed' AND outcome_json IS NOT NULL").run();
   // The credentials too: with only their grants gone, turning the switch back on would let the same bearer be
   // handed fresh grants from the tools editor. "Nothing revoked comes back."
   db.prepare('UPDATE mcp_client_tokens SET revoked_at = @now WHERE revoked_at IS NULL').run({ now: new Date().toISOString() });
   return { revokedGrants, rejectedOperations: rejected.length };
+}
+
+/**
+ * The `denied_kill_switch` row of an agent call the switch refused while it waited on its card. It is attributed like
+ * the call itself (the `operation_created` row's transport and principal), so the log reads as that call being refused.
+ */
+function inFlightKillSwitchAudit(db: Database, op: McpOperation): void {
+  try {
+    const created = db
+      .prepare("SELECT transport, principal_kind, principal_id FROM mcp_audit_log WHERE operation_id = @id AND decision = 'operation_created' ORDER BY id LIMIT 1")
+      .get({ id: op.id }) as { transport: string; principal_kind: PrincipalKind; principal_id: string } | undefined;
+    const principal = created ? { kind: created.principal_kind, id: created.principal_id } : principalOfOperation(op);
+    appendAudit(db, {
+      transport: created?.transport ?? (op.source === 'http-mcp' ? 'http-mcp' : 'imperative'),
+      principalKind: principal.kind,
+      principalId: principal.id,
+      userId: op.user_id,
+      role: op.role,
+      origin: op.origin,
+      toolName: op.tool_name,
+      classification: classify(op.tool_name) ?? 'unknown',
+      decision: 'denied_kill_switch',
+      operationId: op.id,
+      grantId: op.grant_id,
+      argsPreview: 'in flight: waiting on its card',
+      errorCode: 'kill_switch',
+    });
+  } catch (err) {
+    console.error('[mcp-audit] failed to write kill-switch row:', err);
+  }
 }
 
 /** Whether agent access is on right now (the global switch). Re-exported for the routes. */

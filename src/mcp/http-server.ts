@@ -31,7 +31,7 @@ import { KILL_SWITCH_MESSAGE, isAgentAccessEnabled } from './global-state.js';
 import { callTool, UNKNOWN_TOOL_LABEL } from './engine.js';
 import { appendAudit, previewArgs, ANONYMOUS_PRINCIPAL, type Principal } from './audit.js';
 import { limiterFor, LIMIT_MCP_FAILED_BEARER, LIMIT_MCP_REFUSED_CALLS } from './rate-limit.js';
-import { sanitizeStoredOutcomeForAgent } from './operation-view.js';
+import { killSwitchRefusalOf, sanitizeStoredOutcomeForAgent } from './operation-view.js';
 import { CLIENT_TOKEN_PREFIX, HTTP_MCP_ORIGIN, resolveClientToken, type ResolvedClientToken } from './client-tokens.js';
 import { retiredNameHint } from './tool-names.js';
 import { isAuthEnabled } from '../dashboard/auth.js';
@@ -99,6 +99,9 @@ export async function awaitOperationOutcome(
   if (resolvedOp.status === 'expired') {
     return { outcome: 'expired', operationId, reason: 'The approval window closed before the user answered. Propose the change again.' };
   }
+  // The kill switch rejected it while this call waited on the card: say so, in the kill switch's words.
+  const killed = killSwitchRefusalOf(resolvedOp);
+  if (killed) return { outcome: 'rejected', operationId, reason: killed.message };
   if (resolvedOp.kind === 'read' && resolvedOp.status === 'committed' && !isAgentAccessEnabled()) {
     return { outcome: 'forbidden', operationId, reason: KILL_SWITCH_MESSAGE };
   }
@@ -204,17 +207,23 @@ function refusedCalls(calls: Array<{ name: string; args: unknown }>, reached: Ma
  * `count`), written in one transaction. The row's tool label is a catalog name
  * only when every call in the group named that one tool; otherwise a fixed
  * label, so invented names cannot mint rows. Without a live token the
- * principal is one constant.
+ * principal is one constant. `killSwitch`: agent access is off, so every call
+ * was refused for that, whatever else is true of it.
  */
-function auditRefusedCalls(db: Database, resolved: ResolvedClientToken | null, calls: Array<{ name: string; args: unknown }>): void {
+function auditRefusedCalls(
+  db: Database,
+  resolved: ResolvedClientToken | null,
+  calls: Array<{ name: string; args: unknown }>,
+  opts: { killSwitch?: boolean } = {}
+): void {
   const principal: Principal = resolved ? { kind: 'client_token', id: resolved.id } : ANONYMOUS_PRINCIPAL;
 
   interface Group { count: number; names: Set<string>; firstArgs: unknown }
-  const groups = new Map<'invalid_args' | 'denied_grant', Group>();
+  const groups = new Map<'invalid_args' | 'denied_grant' | 'denied_kill_switch', Group>();
   for (const call of calls) {
     const def = getToolDef(call.name);
     const granted = !!def && !!resolved?.grantByTool.has(def.name);
-    const decision = granted ? 'invalid_args' : 'denied_grant';
+    const decision = opts.killSwitch ? 'denied_kill_switch' : granted ? 'invalid_args' : 'denied_grant';
     const group = groups.get(decision) ?? { count: 0, names: new Set<string>(), firstArgs: call.args };
     group.count++;
     group.names.add(def ? def.name : UNKNOWN_TOOL_LABEL);
@@ -237,7 +246,7 @@ function auditRefusedCalls(db: Database, resolved: ResolvedClientToken | null, c
           classification: def ? def.classification : 'unknown',
           decision,
           argsPreview: group.count === 1 ? previewArgs(group.firstArgs) : `${group.count} refused calls in one request`,
-          errorCode: decision === 'invalid_args' ? 'invalid_args' : 'grant_invalid',
+          errorCode: decision === 'invalid_args' ? 'invalid_args' : decision === 'denied_kill_switch' ? 'kill_switch' : 'grant_invalid',
           count: group.count,
         });
       }
@@ -413,10 +422,27 @@ export async function handleMcpHttpRequest(
     }
   }
 
+  const single = !Array.isArray(parsedBody) ? (parsedBody as { id?: unknown; method?: unknown; params?: { name?: unknown } } | null) : null;
+
+  // Agent access is off: tools/list is [] (buildServerForRequest), so no tool is exposed, but a call that still arrives
+  // (a client that listed before the switch, or raced it) is refused in the kill switch's own words and audited as such.
+  // A single tools/call is answered here; in a batch the SDK refuses the names it does not know, and the rows say why.
+  const accessOff = !isAgentAccessEnabled();
+  if (calls.length > 0 && accessOff) {
+    auditRefusedCalls(db, resolved, calls, { killSwitch: true });
+    for (let i = 0; i < calls.length; i++) limiter.take(refusedKey, LIMIT_MCP_REFUSED_CALLS);
+    if (single && single.method === 'tools/call') {
+      return Response.json({
+        jsonrpc: '2.0',
+        id: single.id ?? null,
+        result: { isError: true, content: [{ type: 'text', text: `kill_switch: ${KILL_SWITCH_MESSAGE}` }] },
+      });
+    }
+  }
+
   // A retired tool name gets a hint, never a registration: when the body is a single (not batched) tools/call for a
   // retired name, answer it here so the client learns the new name. The SDK would only say the tool is unknown.
   // This grants nothing: no handler runs, and the refusal is audited exactly as the SDK's refusal is.
-  const single = !Array.isArray(parsedBody) ? (parsedBody as { id?: unknown; method?: unknown; params?: { name?: unknown } } | null) : null;
   if (single && single.method === 'tools/call' && typeof single.params?.name === 'string' && retiredNameHint(single.params.name)) {
     auditRefusedCalls(db, resolved, calls);
     limiter.take(refusedKey, LIMIT_MCP_REFUSED_CALLS);
@@ -440,7 +466,8 @@ export async function handleMcpHttpRequest(
     : new Request(req.url, { method: req.method, headers: req.headers, body: bufferedBody });
   const response = await transport.handleRequest(forTransport, parsedBody !== undefined ? { parsedBody } : undefined);
   const refused = refusedCalls(calls, state.reached);
-  if (refused.length > 0) {
+  // While access is off the calls were audited (and charged) above.
+  if (refused.length > 0 && !accessOff) {
     auditRefusedCalls(db, resolved, refused);
     for (let i = 0; i < refused.length; i++) limiter.take(refusedKey, LIMIT_MCP_REFUSED_CALLS);
   }
