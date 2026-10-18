@@ -122,7 +122,8 @@ describe('hybrid chat init with an origin-prefixing fetch', () => {
 
   test('the React hook wires authedFetch (which prefixes the origin) through hybridOptsForOriginFetch', () => {
     const api = readFileSync(join(UI, 'api.ts'), 'utf8');
-    expect(api).toMatch(/export function authedFetch[\s\S]*?fetch\(`\$\{getBaseUrl\(\)\}\$\{path\}`/);
+    // async since the login gate: it awaits the response to report a 401.
+    expect(api).toMatch(/export (?:async )?function authedFetch[\s\S]*?fetch\(`\$\{getBaseUrl\(\)\}\$\{path\}`/);
     const hook = readFileSync(join(UI, 'hooks/useHybridChat.ts'), 'utf8');
     const inits = hook.match(/hybrid\.init\([^;]*\);/g) ?? [];
     expect(inits.length).toBeGreaterThan(0);
