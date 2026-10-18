@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { existsSync, mkdirSync, symlinkSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,6 +11,9 @@ const real = await import('@huggingface/transformers-structured-output');
 const RealProcessor = real.StructuredOutputProcessor;
 
 let passThrough = false;
+// Set once this file is done: bun shares module mocks across files, so a later file in a plain
+// `bun test` run (e.g. constraint-schema-real-processor.test.ts) must get the real processor.
+let released = false;
 let constructorError: Error | null = null;
 let warmupError: Error | null = null;
 const constructed: Array<{ tokenizer: unknown; format: unknown; instance: object }> = [];
@@ -18,6 +21,8 @@ const warmedTokenizers: unknown[] = [];
 
 class SpyProcessor {
   constructor(tokenizer: unknown, format: unknown) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (released) return new RealProcessor(tokenizer as any, format as any);
     if (constructorError) throw constructorError;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const instance = passThrough ? new RealProcessor(tokenizer as any, format as any) : this;
@@ -25,6 +30,8 @@ class SpyProcessor {
     return instance;
   }
   static warmup(tokenizer: unknown) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (released) return RealProcessor.warmup(tokenizer as any);
     warmedTokenizers.push(tokenizer);
     if (warmupError) throw warmupError;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -88,6 +95,28 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await setPipelineForTests();
+});
+
+afterAll(() => {
+  released = true;
+});
+
+describe('the module mock once this file is done', () => {
+  test('builds the real processor, unrecorded, for later files', async () => {
+    const { StructuredOutputProcessor } = await import('@huggingface/transformers-structured-output');
+    const { toConstraintSchema } = await import('../model/constraint-schema.js');
+    const tokenizer = { tokens: [Uint8Array.of(123), Uint8Array.of(125), new Uint8Array()], eosTokenId: 2 };
+    released = true;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const p = new StructuredOutputProcessor(tokenizer as any, { type: 'json_schema', json_schema: toConstraintSchema(z.object({})) } as any);
+      expect(p).toBeInstanceOf(RealProcessor);
+      expect(typeof (p as unknown as { _call?: unknown })._call).toBe('function');
+      expect(constructed).toHaveLength(0);
+    } finally {
+      released = false;
+    }
+  });
 });
 
 describe('TransformersAdapter with outputSchema (stubbed pipe)', () => {
