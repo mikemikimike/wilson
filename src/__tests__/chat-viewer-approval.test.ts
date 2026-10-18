@@ -278,4 +278,52 @@ describe('#167: /api/chat says where the server agent model runs, for the proven
     expect(body.serverModelLocal).toBe(true);
     expect(body.serverProvider).toBeNull();
   });
+
+  // An 'ollama:' model is not automatically local: a cloud tag goes to
+  // ollama.com, and OLLAMA_BASE_URL can point at another machine. callLlm is
+  // scripted, so nothing here reaches Ollama.
+  describe('Ollama cloud models and remote base URLs', () => {
+    const savedBaseUrl = process.env.OLLAMA_BASE_URL;
+    afterEach(() => {
+      if (savedBaseUrl === undefined) delete process.env.OLLAMA_BASE_URL;
+      else process.env.OLLAMA_BASE_URL = savedBaseUrl;
+    });
+
+    test('an Ollama cloud model is not local, and is named as Ollama Cloud', async () => {
+      delete process.env.OLLAMA_BASE_URL;
+      setSetting('modelId', 'ollama:gpt-oss:120b-cloud');
+      setSetting('provider', 'ollama');
+      const body = await chat('hello');
+      expect(body.serverModelLocal).toBe(false);
+      expect(body.serverProvider).toBe('Ollama Cloud');
+    });
+
+    test('OLLAMA_BASE_URL on a LAN IP is not local, and names the host', async () => {
+      process.env.OLLAMA_BASE_URL = 'http://192.168.1.20:11434';
+      setSetting('modelId', 'ollama:qwen3:8b');
+      setSetting('provider', 'ollama');
+      const body = await chat('hello');
+      expect(body.serverModelLocal).toBe(false);
+      expect(body.serverProvider).toBe('Ollama at 192.168.1.20:11434');
+    });
+
+    test('OLLAMA_BASE_URL on IPv6 loopback stays local', async () => {
+      process.env.OLLAMA_BASE_URL = 'http://[::1]:11434';
+      setSetting('modelId', 'ollama:qwen3:8b');
+      setSetting('provider', 'ollama');
+      const body = await chat('hello');
+      expect(body.serverModelLocal).toBe(true);
+      expect(body.serverProvider).toBeNull();
+    });
+
+    test('a local chat model with categorization pinned to an Ollama cloud model is not local', async () => {
+      delete process.env.OLLAMA_BASE_URL;
+      setSetting('modelId', 'ollama:qwen3:8b');
+      setSetting('provider', 'ollama');
+      setSetting('modelOverride.categorization', 'ollama:glm-4.6:cloud');
+      const body = await chat('hello');
+      expect(body.serverModelLocal).toBe(false);
+      expect(body.serverProvider).toBe('Ollama Cloud');
+    });
+  });
 });

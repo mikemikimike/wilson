@@ -31,7 +31,8 @@
 import { z } from 'zod';
 import type { Database } from '../db/compat-sqlite.js';
 import { executeRead, getToolDef } from '../mcp/tool-catalog.js';
-import { getProviderById, resolveProvider } from '../providers.js';
+import { getProviderById } from '../providers.js';
+import { isModelLocal } from '../model/locality.js';
 import { getConfiguredModel } from '../utils/config.js';
 import { ensureHandoffSecret, handoffTag } from '../training/handoff-tag.js';
 import {
@@ -116,14 +117,16 @@ function parseReadArgs(tool: string, args: Record<string, unknown>): Record<stri
 // ── Provider policy (Q10) ────────────────────────────────────────────────────
 
 /**
- * Does the dashboard chat agent run on this device? Local only when BOTH the
- * configured provider and the model it will actually call (routed by prefix)
- * are local providers; any mismatch counts as cloud.
+ * Does the dashboard chat agent run on this device? Local only when the
+ * configured provider is a local provider AND the model it will actually call
+ * (routed by prefix) stays on this machine by isModelLocal: an Ollama cloud
+ * model or an OLLAMA_BASE_URL on another host is not local. Any mismatch
+ * counts as cloud.
  */
 export function isChatProviderLocal(cfg: { model: string; provider: string }): boolean {
   const provider = getProviderById(cfg.provider);
   if (!provider?.isLocal) return false;
-  return resolveProvider(cfg.model).isLocal === true;
+  return isModelLocal(cfg.model);
 }
 
 function configuredProviderIsLocal(): boolean {

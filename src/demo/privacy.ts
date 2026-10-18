@@ -15,8 +15,8 @@
  *    rows are ISO strings; `created_at` is `YYYY-MM-DD HH:MM:SS` UTC at
  *    second granularity) — a string-compare watermark across them is lossy.
  *
- *    Classification comes from the provider registry's `isLocal` (the single
- *    place local-vs-server classification comes from) plus the Speed
+ *    Classification comes from the shared locality rule (src/model/locality.ts:
+ *    the registry's `isLocal`, narrowed by model and base URL) plus the Speed
  *    Showdown's two markers: a `simulated` row is never a cloud call, and an
  *    unrecognized provider is never silently counted as local. The verdict
  *    must be able to fail — a real cloud call during the run renders red and
@@ -36,6 +36,7 @@
 
 import type { Database } from '../db/compat-sqlite.js';
 import { getProviderById } from '../providers.js';
+import { recordedCallLocality } from '../model/locality.js';
 import { buildCategorizationPrompt } from '../tools/categorize/prompt.js';
 import { traceStore, type LlmTrace } from '../utils/trace-store.js';
 import { getSampleBySlug, SAMPLE_TRANSACTIONS } from './samples.js';
@@ -62,14 +63,16 @@ export const BUCKET_LABELS: Record<LedgerBucket, string> = {
  * The one classification rule. 'simulated' can never be 'cloud' (the Speed
  * Showdown marker exists precisely to prevent that misattribution) and an
  * unrecognized provider is never silently 'local' — it lands in its own
- * honest bucket.
+ * honest bucket. A registered provider is local only by the shared locality
+ * rule (src/model/locality.ts), so an Ollama cloud model or an Ollama on
+ * another host is 'cloud', not 'localhost'.
  */
-export function classifyProvider(provider: string): LedgerBucket {
+export function classifyProvider(provider: string, model = ''): LedgerBucket {
   if (provider === SIMULATED_PROVIDER) return 'simulated';
   if (provider === BROWSER_LOCAL_PROVIDER) return 'local';
-  const def = getProviderById(provider);
-  if (!def) return 'unknown';
-  return def.isLocal ? 'local' : 'cloud';
+  const locality = recordedCallLocality(provider, model);
+  if (!locality) return 'unknown';
+  return locality.local ? 'local' : 'cloud';
 }
 
 // ── The ledger ──────────────────────────────────────────────────────────────
@@ -118,7 +121,7 @@ export function buildProviderLedger(input: {
     timestamp: normalizeTimestamp(row.timestamp),
     provider: row.provider,
     model: row.model,
-    bucket: classifyProvider(row.provider),
+    bucket: classifyProvider(row.provider, row.model),
     durationMs: row.durationMs,
     status: row.status,
     ...(row.error !== undefined ? { error: row.error } : {}),
