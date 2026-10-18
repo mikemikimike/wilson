@@ -58,9 +58,9 @@ describe('local chat config', () => {
     expect(cfg.dtype).toBe('q4');
   });
 
-  test('bundle defaults fit a 0.6B-class context window', () => {
+  test('bundle defaults fit a small in-tab model context window', () => {
     // 6000 chars ≈ ~1500 tokens of transaction context — bounded, and well
-    // inside the window the 0.6B model can attend over alongside the rules.
+    // inside the window a small in-tab model can attend over alongside the rules.
     expect(LOCAL_CHAT_BUNDLE_DEFAULTS.days).toBeGreaterThan(0);
     expect(LOCAL_CHAT_BUNDLE_DEFAULTS.limit).toBeGreaterThan(0);
     expect(LOCAL_CHAT_BUNDLE_DEFAULTS.maxChars).toBeGreaterThan(0);

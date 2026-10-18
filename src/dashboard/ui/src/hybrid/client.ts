@@ -413,7 +413,7 @@ export function createHybridChat(opts: HybridOpts) {
     };
 
     // Project to the narrow field subset + window/limit, then render with
-    // the size guard for the 0.6B context window.
+    // the size guard for the small in-tab model's context window.
     const projected = projectTransactions(txnRows, {
       days: cfg.bundle.days,
       limit: cfg.bundle.limit,
@@ -726,7 +726,7 @@ export type HybridChat = ReturnType<typeof createHybridChat>;
 
 export interface CategorizeSampleResult {
   ok: boolean;
-  /** Hub repo that actually ran (e.g. 'onnx-community/Qwen3-0.6B-ONNX'). */
+  /** Hub repo that actually ran (e.g. 'onnx-community/gemma-4-E2B-it-ONNX'). */
   model: string;
   raw: string;
   /** Parsed decision, or null when the output was unparseable (raw shown honestly). */

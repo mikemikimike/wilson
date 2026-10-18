@@ -81,9 +81,9 @@ function localSubagentConfig(): LocalChatSubagentConfig {
 export interface LocalChatModelConfig {
   /** False when the provider registry has no fastModel (browser skips local). */
   enabled: boolean;
-  /** The fastModel id verbatim, e.g. 'transformers:onnx-community/Qwen3-0.6B-ONNX'. */
+  /** The fastModel id verbatim, e.g. 'transformers:onnx-community/gemma-4-E2B-it-ONNX'. */
   id: string;
-  /** Hub repo with the provider prefix stripped, e.g. 'onnx-community/Qwen3-0.6B-ONNX'. */
+  /** Hub repo with the provider prefix stripped, e.g. 'onnx-community/gemma-4-E2B-it-ONNX'. */
   repo: string;
   /** Display name from the model catalog. */
   displayName: string;

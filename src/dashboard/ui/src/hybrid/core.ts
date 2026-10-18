@@ -96,7 +96,7 @@ export const BUNDLE_START_MARKER = '[Pre-fetched transaction context]';
 export const BUNDLE_END_MARKER = '[End of pre-fetched context]';
 
 /**
- * Render the context bundle and size-guard it for a 0.6B-class context window.
+ * Render the context bundle and size-guard it for a small in-tab model's context window.
  *
  * Framing mirrors the repo's injected-context marker style; the size guard
  * drops the OLDEST transaction rows first and never touches the weekly
@@ -156,7 +156,7 @@ export function buildBundle(
 /**
  * The local system prompt carries the repo's honesty rules: answer only from
  * the bundle, never invent figures, no tool-calling, deterministic opt-out.
- * The bundle itself rides in the user turn (single copy in the 0.6B window),
+ * The bundle itself rides in the user turn (single copy in the small model's window),
  * directly under CURRENT_MESSAGE_MARKER.
  */
 export const LOCAL_SYSTEM_PROMPT_TEMPLATE = `You are Open Accountant's local browser assistant. Today is {date}.
