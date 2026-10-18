@@ -49,6 +49,8 @@ const PROVIDER_MODELS: Record<string, Model[]> = {
     { id: 'transformers:LiquidAI/LFM2.5-1.2B-Instruct-ONNX',        displayName: 'LFM2.5 1.2B Instruct (WebGPU)', tags: ['local', 'small', 'webgpu'], device: 'webgpu', dtype: 'q4f16', downloadSize: '~760MB' },
     { id: 'transformers:onnx-community/granite-4.0-350m-ONNX-web',  displayName: 'Granite 4.0 350M (WebGPU)',     tags: ['local', 'small', 'webgpu'], device: 'webgpu', dtype: 'q4f16', downloadSize: '~350MB' },
     { id: 'transformers:onnx-community/Qwen3-0.6B-ONNX',            displayName: 'Qwen3 0.6B (WebGPU)',           tags: ['local', 'small', 'webgpu'], device: 'webgpu', dtype: 'q4f16', downloadSize: '~570MB' },
+    // Gemma 4 E2B: q4 ONLY, never q4f16 (Gemma fp16 activation overflow, ORT#26732). Text-only load = embed_tokens_q4 + decoder_model_merged_q4.
+    { id: 'transformers:onnx-community/gemma-4-E2B-it-ONNX',        displayName: 'Gemma 4 E2B (WebGPU)',          tags: ['local', 'small', 'webgpu'], device: 'webgpu', dtype: 'q4',    downloadSize: '~3.6GB' },
     // CPU/WASM models — work out of the box, no GPU required
     { id: 'transformers:HuggingFaceTB/SmolLM3-3B-ONNX',             displayName: 'SmolLM3 3B (CPU)',              tags: ['local', 'small'],            device: 'cpu',    dtype: 'q4',    downloadSize: '~2.8GB' },
     { id: 'transformers:onnx-community/Qwen2.5-1.5B-Instruct',      displayName: 'Qwen 2.5 1.5B (CPU)',           tags: ['local', 'small'],            device: 'cpu',    dtype: 'q4',    downloadSize: '~1.8GB' },

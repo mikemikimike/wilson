@@ -54,7 +54,8 @@ describe('local chat config', () => {
     expect(catalogEntry.device).toBe('webgpu');
     expect(catalogEntry.dtype).toBeDefined();
     expect(cfg.dtype).toBe(catalogEntry.dtype!);
-    expect(cfg.dtype).toBe('q4f16');
+    // Gemma 4 E2B is pinned to q4: its q4f16 weights overflow in fp16 (ORT#26732).
+    expect(cfg.dtype).toBe('q4');
   });
 
   test('bundle defaults fit a 0.6B-class context window', () => {

@@ -104,7 +104,7 @@ describe('demo showdown endpoints', () => {
 
     expect(data.systemPrompt).toBe(CATEGORIZER_SYSTEM_PROMPT);
     expect(data.config.cloudModel).toBe('openrouter:openai/gpt-4o-mini');
-    expect(data.config.localRepo).toBe('onnx-community/Qwen3-0.6B-ONNX');
+    expect(data.config.localRepo).toBe('onnx-community/gemma-4-E2B-it-ONNX');
   });
 
   test('POST cloud with the Harborview slug runs simulated, cleanly attributed', async () => {

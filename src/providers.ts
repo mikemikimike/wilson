@@ -41,7 +41,7 @@ export const PROVIDERS: ProviderDef[] = [
     // webgpu-tagged id from the model catalog (src/utils/model.ts) — a test
     // cross-checks this, and the local-chat config endpoint exposes it to the
     // browser verbatim, so this is the single place to change the model.
-    fastModel: 'transformers:onnx-community/Qwen3-0.6B-ONNX',
+    fastModel: 'transformers:onnx-community/gemma-4-E2B-it-ONNX',
   },
   // Cloud providers
   {

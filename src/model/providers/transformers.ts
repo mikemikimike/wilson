@@ -13,12 +13,13 @@
  * browser hybrid client uses. No dtype is hardcoded: repos publish different
  * subsets (granite-4.0-micro-ONNX-web ships only q4f16).
  *
- * WebGPU models (q4f16) — require a GPU that ORT's bundled WebGPU EP can drive:
+ * WebGPU models (q4f16 unless noted) — require a GPU that ORT's bundled WebGPU EP can drive:
  * - onnx-community/granite-4.0-micro-ONNX-web  ~3B Micro, IBM tool-calling   ~2.3GB
  * - onnx-community/Qwen3-1.7B-ONNX             ~1.7B, Qwen3 architecture     ~1.4GB
  * - LiquidAI/LFM2.5-1.2B-Instruct-ONNX         ~1.2B, trained for tool use   ~760MB
  * - onnx-community/granite-4.0-350m-ONNX-web   ~350M, IBM Granite, fast      ~350MB
  * - onnx-community/Qwen3-0.6B-ONNX             ~0.6B, Qwen3 architecture     ~570MB
+ * - onnx-community/gemma-4-E2B-it-ONNX         Gemma 4 E2B, q4 only          ~3.6GB
  *
  * CPU/WASM models (q4, no GPU required):
  * - HuggingFaceTB/SmolLM3-3B-ONNX         ~2.8GB, 92.3% BFCL score

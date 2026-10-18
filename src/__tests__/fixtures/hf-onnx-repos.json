@@ -1,5 +1,5 @@
 {
-  "_recorded": "2026-10-02 from https://huggingface.co/api/models/<repo> (siblings, onnx/ only) and <repo>/resolve/main/config.json (transformers.js_config)",
+  "_recorded": "2026-10-02 from https://huggingface.co/api/models/<repo> (siblings, onnx/ only) and <repo>/resolve/main/config.json (transformers.js_config); onnx-community/gemma-4-E2B-it-ONNX added 2026-10-04 the same way",
   "repos": {
     "HuggingFaceTB/SmolLM3-3B-ONNX": {
       "siblings": [
@@ -165,6 +165,81 @@
         "use_external_data_format": {
           "model.onnx": true,
           "model_fp16.onnx": true
+        }
+      }
+    },
+    "onnx-community/gemma-4-E2B-it-ONNX": {
+      "siblings": [
+        "onnx/audio_encoder.onnx",
+        "onnx/audio_encoder.onnx_data",
+        "onnx/audio_encoder_fp16.onnx",
+        "onnx/audio_encoder_fp16.onnx_data",
+        "onnx/audio_encoder_q4.onnx",
+        "onnx/audio_encoder_q4.onnx_data",
+        "onnx/audio_encoder_q4f16.onnx",
+        "onnx/audio_encoder_q4f16.onnx_data",
+        "onnx/audio_encoder_quantized.onnx",
+        "onnx/audio_encoder_quantized.onnx_data",
+        "onnx/decoder_model_merged.onnx",
+        "onnx/decoder_model_merged.onnx_data",
+        "onnx/decoder_model_merged.onnx_data_1",
+        "onnx/decoder_model_merged.onnx_data_2",
+        "onnx/decoder_model_merged.onnx_data_3",
+        "onnx/decoder_model_merged.onnx_data_4",
+        "onnx/decoder_model_merged_fp16.onnx",
+        "onnx/decoder_model_merged_fp16.onnx_data",
+        "onnx/decoder_model_merged_fp16.onnx_data_1",
+        "onnx/decoder_model_merged_fp16.onnx_data_2",
+        "onnx/decoder_model_merged_q4.onnx",
+        "onnx/decoder_model_merged_q4.onnx_data",
+        "onnx/decoder_model_merged_q4f16.onnx",
+        "onnx/decoder_model_merged_q4f16.onnx_data",
+        "onnx/decoder_model_merged_quantized.onnx",
+        "onnx/decoder_model_merged_quantized.onnx_data",
+        "onnx/decoder_model_merged_quantized.onnx_data_1",
+        "onnx/embed_tokens.onnx",
+        "onnx/embed_tokens.onnx_data",
+        "onnx/embed_tokens.onnx_data_1",
+        "onnx/embed_tokens_fp16.onnx",
+        "onnx/embed_tokens_fp16.onnx_data",
+        "onnx/embed_tokens_fp16.onnx_data_1",
+        "onnx/embed_tokens_q4.onnx",
+        "onnx/embed_tokens_q4.onnx_data",
+        "onnx/embed_tokens_q4f16.onnx",
+        "onnx/embed_tokens_q4f16.onnx_data",
+        "onnx/embed_tokens_quantized.onnx",
+        "onnx/embed_tokens_quantized.onnx_data",
+        "onnx/embed_tokens_quantized.onnx_data_1",
+        "onnx/embed_tokens_quantized.onnx_data_2",
+        "onnx/vision_encoder.onnx",
+        "onnx/vision_encoder.onnx_data",
+        "onnx/vision_encoder_fp16.onnx",
+        "onnx/vision_encoder_fp16.onnx_data",
+        "onnx/vision_encoder_q4.onnx",
+        "onnx/vision_encoder_q4.onnx_data",
+        "onnx/vision_encoder_q4f16.onnx",
+        "onnx/vision_encoder_q4f16.onnx_data",
+        "onnx/vision_encoder_quantized.onnx",
+        "onnx/vision_encoder_quantized.onnx_data"
+      ],
+      "transformers.js_config": {
+        "use_external_data_format": {
+          "audio_encoder": 1,
+          "vision_encoder": 1,
+          "decoder_model_merged.onnx": 5,
+          "decoder_model_merged_fp16.onnx": 3,
+          "decoder_model_merged_quantized.onnx": 2,
+          "decoder_model_merged_q4.onnx": 1,
+          "decoder_model_merged_q4f16.onnx": 1,
+          "embed_tokens.onnx": 2,
+          "embed_tokens_fp16.onnx": 2,
+          "embed_tokens_quantized.onnx": 3,
+          "embed_tokens_q4.onnx": 1,
+          "embed_tokens_q4f16.onnx": 1
+        },
+        "kv_cache_dtype": {
+          "q4f16": "float16",
+          "fp16": "float16"
         }
       }
     }

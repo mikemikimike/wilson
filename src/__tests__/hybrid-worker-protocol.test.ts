@@ -56,7 +56,7 @@ describe('isMainToWorker', () => {
 
 describe('isWorkerToMain', () => {
   test('accepts progress, ok results and error results', () => {
-    expect(isWorkerToMain({ t: 'progress', label: 'Downloading local model… 5%' })).toBe(true);
+    expect(isWorkerToMain({ t: 'progress', label: 'Loading local model… 5%' })).toBe(true);
     expect(isWorkerToMain({ t: 'progress', id: 4, label: 'x' })).toBe(true);
     expect(isWorkerToMain({ t: 'result', id: 1, ok: true, result: 'ready' })).toBe(true);
     expect(isWorkerToMain({ t: 'result', id: 1, ok: true, result: null })).toBe(true);

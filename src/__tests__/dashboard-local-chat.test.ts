@@ -83,9 +83,9 @@ describe('local chat endpoints', () => {
       bundle: { days: number; limit: number; maxChars: number };
     };
     expect(cfg.enabled).toBe(true);
-    expect(cfg.id).toBe('transformers:onnx-community/Qwen3-0.6B-ONNX');
-    expect(cfg.repo).toBe('onnx-community/Qwen3-0.6B-ONNX'); // prefix stripped for the browser
-    expect(cfg.displayName).toContain('Qwen3 0.6B');
+    expect(cfg.id).toBe('transformers:onnx-community/gemma-4-E2B-it-ONNX');
+    expect(cfg.repo).toBe('onnx-community/gemma-4-E2B-it-ONNX'); // prefix stripped for the browser
+    expect(cfg.displayName).toContain('Gemma 4 E2B');
     expect(cfg.bundle).toEqual({ days: 30, limit: 200, maxChars: 6000 });
   });
 

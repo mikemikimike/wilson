@@ -509,18 +509,43 @@ describe('model catalog dtype pins', () => {
   for (const entry of entries) {
     const repo = entry.id.replace(/^transformers:/, '');
 
+    // Multi-session exports (Gemma 4: embed_tokens + decoder_model_merged + encoders) publish no
+    // onnx/model*.onnx, so the single-session file checks below do not apply; transformers.js loads
+    // them text-only from the embed_tokens and decoder_model_merged sessions at the pinned dtype.
+    const multiSession = dtypesFromFileList(REPOS[repo]?.siblings ?? []).size === 0;
+
     test(`${repo}: pins a device and a dtype the repo actually publishes`, () => {
       expect(entry.device).toBeDefined();
       expect(entry.dtype).toBeDefined();
       const published = REPOS[repo].siblings;
-      expect(published).toContain(onnxFileForDtype(entry.dtype!));
+      if (!multiSession) {
+        expect(published).toContain(onnxFileForDtype(entry.dtype!));
+        return;
+      }
+      const suffix = onnxFileForDtype(entry.dtype!).replace(/^onnx\/model/, '');
+      expect(published).toContain(`onnx/embed_tokens${suffix}`);
+      expect(published).toContain(`onnx/decoder_model_merged${suffix}`);
     });
 
-    test(`${repo}: the pin is what the resolver itself would choose from the Hub`, () => {
-      const available = dtypesFromFileList(REPOS[repo].siblings);
-      const configDtype = configDtypeFor(REPOS[repo]['transformers.js_config'], entry.device!);
-      expect(pickDtype({ repo, device: entry.device!, available, configDtype })).toBe(entry.dtype!);
-    });
+    if (!multiSession) {
+      test(`${repo}: the pin is what the resolver itself would choose from the Hub`, () => {
+        const available = dtypesFromFileList(REPOS[repo].siblings);
+        const configDtype = configDtypeFor(REPOS[repo]['transformers.js_config'], entry.device!);
+        expect(pickDtype({ repo, device: entry.device!, available, configDtype })).toBe(entry.dtype!);
+      });
+    } else {
+      // The resolver cannot pick from a multi-session file list, so the catalog pin must win
+      // outright, with no Hub request, on every WebGPU adapter (shader-f16 or not).
+      test(`${repo}: the resolver takes the catalog pin without asking the Hub`, async () => {
+        for (const shaderF16 of [true, false, undefined]) {
+          clearDtypeMetadataCache();
+          const hub = fakeHub();
+          const res = await resolveTransformersDtype(repo, entry.device!, { ...hub, catalogDtype: entry.dtype!, shaderF16 });
+          expect(res).toEqual({ dtype: entry.dtype!, source: 'catalog' });
+          expect(hub.calls).toEqual([]);
+        }
+      });
+    }
 
     test(`${repo}: 'webgpu' tag agrees with device, and the server routes it there`, () => {
       expect(entry.tags?.includes('webgpu') ?? false).toBe(entry.device === 'webgpu');

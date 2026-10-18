@@ -172,9 +172,9 @@ export function createModelEngine(engineOpts: ModelEngineOpts) {
 
         const progress = (p: ProgressEvent) => {
           if (p.status === 'progress' && typeof p.progress === 'number') {
-            onProgress?.(`Downloading local model… ${Math.round(p.progress)}%`);
+            onProgress?.(`Loading local model… ${Math.round(p.progress)}%`);
           } else if (p.status === 'initiate') {
-            onProgress?.('Downloading local model…');
+            onProgress?.('Loading local model…');
           }
         };
 

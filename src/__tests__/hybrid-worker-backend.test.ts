@@ -84,11 +84,11 @@ describe('createWorkerBackend', () => {
     const first = backend.load((l) => labels.push(l));
     await Promise.resolve();
     const loadMsg = w.posted.find((m) => m.t === 'load')!;
-    w.reply({ t: 'progress', id: (loadMsg as { id: number }).id, label: 'Downloading local model… 10%' });
+    w.reply({ t: 'progress', id: (loadMsg as { id: number }).id, label: 'Loading local model… 10%' });
     w.reply({ t: 'progress', id: 9999, label: 'someone else' });
     w.reply({ t: 'result', id: (loadMsg as { id: number }).id, ok: true, result: { loadMs: 1, loadFresh: false, dtype: null } });
     await first;
-    expect(labels).toEqual(['Downloading local model… 10%']);
+    expect(labels).toEqual(['Loading local model… 10%']);
   });
 
   test('a worker error reply rejects with the WorkerError', async () => {
@@ -141,7 +141,7 @@ describe('createWorkerBackend', () => {
     const id = (workers[0].posted.find((m) => m.t === 'load') as { id: number }).id;
     for (let i = 0; i < 4; i++) {
       await new Promise((r) => setTimeout(r, 30));
-      workers[0].reply({ t: 'progress', id, label: `Downloading local model… ${i}%` });
+      workers[0].reply({ t: 'progress', id, label: `Loading local model… ${i}%` });
     }
     workers[0].reply({ t: 'result', id, ok: true, result: { loadMs: 1, loadFresh: true, dtype: 'q4f16' } });
     await expect(p).resolves.toMatchObject({ loadFresh: true });
@@ -371,7 +371,7 @@ describe('createHybridChat over the worker backend', () => {
       w.handler = (msg, self) => {
         if (msg.t === 'probe') self.reply({ t: 'result', id: msg.id, ok: true, result: 'ready' });
         if (msg.t === 'load') {
-          self.reply({ t: 'progress', id: msg.id, label: 'Downloading local model… 50%' });
+          self.reply({ t: 'progress', id: msg.id, label: 'Loading local model… 50%' });
           self.reply({ t: 'result', id: msg.id, ok: true, result: { loadMs: 3, loadFresh: true, dtype: 'q4f16' } });
         }
         if (msg.t === 'bundleAnswer') self.reply({ t: 'result', id: msg.id, ok: true, result: { kind: 'answer', text } });
@@ -390,7 +390,7 @@ describe('createHybridChat over the worker backend', () => {
 
     const r = await chat.tryLocal('how much did I spend?', (l) => progress.push(l));
     expect(r).toEqual({ ok: true, answer: 'You spent $0 this week.', sessionId: 's1', source: 'local' });
-    expect(progress).toContain('Downloading local model… 50%');
+    expect(progress).toContain('Loading local model… 50%');
     expect(api.calls.some((c) => c.includes('/api/transactions'))).toBe(true);
     expect(JSON.parse(storage.getItem(CAPABILITY_STORAGE_KEY)!)).toMatchObject({ verdict: 'ready' });
 
