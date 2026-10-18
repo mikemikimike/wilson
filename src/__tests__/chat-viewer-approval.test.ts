@@ -279,6 +279,30 @@ describe('#167: /api/chat says where the server agent model runs, for the proven
     expect(body.serverProvider).toBeNull();
   });
 
+  // The browser asks before a turn, while the in-tab model downloads, whether this server may answer meanwhile.
+  test('GET /api/config/local-chat says whether the next turn would stay local, including a change since the last reply', async () => {
+    const config = async () => {
+      const res = await fetch(base + '/api/config/local-chat', { headers: { Origin: base, 'Sec-Fetch-Site': 'same-origin' } });
+      expect(res.status).toBe(200);
+      return (await res.json()) as { serverModelLocal?: unknown; repo?: unknown };
+    };
+    expect((await config()).serverModelLocal).toBe(false); // OpenAI
+    setSetting('modelId', 'ollama:qwen3:8b');
+    setSetting('provider', 'ollama');
+    expect((await config()).serverModelLocal).toBe(true);
+    await chat('hello'); // applies the local model to the runner
+    // Switched to a cloud model in Settings, no message since: the next turn applies it first, so it is not local.
+    setSetting('modelId', 'gpt-5.2');
+    setSetting('provider', 'openai');
+    const cfg = await config();
+    expect(cfg.serverModelLocal).toBe(false);
+    expect(typeof cfg.repo).toBe('string'); // still the in-tab model's config
+    setSetting('modelId', 'ollama:qwen3:8b');
+    setSetting('provider', 'ollama');
+    setSetting('modelOverride.categorization', 'claude-haiku-4-5');
+    expect((await config()).serverModelLocal).toBe(false);
+  });
+
   // An 'ollama:' model is not automatically local: a cloud tag goes to
   // ollama.com, and OLLAMA_BASE_URL can point at another machine. callLlm is
   // scripted, so nothing here reaches Ollama.

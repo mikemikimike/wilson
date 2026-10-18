@@ -365,6 +365,8 @@ const CFG: LocalChatConfigResponse = {
   downloadSize: '~570MB',
   dtype: 'q4f16',
   bundle: { days: 30, limit: 200, maxChars: 6000 },
+  // The server's chat model is local, so the server answers while the in-tab model loads.
+  serverModelLocal: true,
 };
 
 function dashboardFetch() {
@@ -430,7 +432,7 @@ describe('createHybridChat over the worker backend', () => {
     // progress reaches the status, not the turn.
     expect(await chat.tryLocal('how much did I spend?')).toEqual({ ok: false });
     await settled(chat);
-    expect(statuses).toContainEqual({ state: 'loading', label: 'Downloading in-tab model (570 MB, first use only)… 50%' });
+    expect(statuses).toContainEqual({ state: 'loading', label: 'Downloading in-tab model (570 MB, first use only)… 50%', serverMeanwhile: true });
     expect(statuses.at(-1)).toEqual({ state: 'ready' });
 
     const r = await chat.tryLocal('how much did I spend?');

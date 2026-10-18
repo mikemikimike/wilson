@@ -17,12 +17,16 @@
  * Hard contract for the UIs: every failure path — no WebGPU, config/bundle
  * fetch failure, model load/download failure, generation error, worker crash,
  * tool-call or NEED_MORE_DATA output — resolves {ok:false} (→ server path).
- * So does a turn that needs the model before it is ready: a chat turn never
- * waits for the first-use download (~3.6 GB for Gemma 4 E2B) or for
- * initialisation. It starts the load in the background, resolves {ok:false}
- * at once so the server answers, and later turns use the model once
- * getModelStatus() says 'ready'. The Speed Showdown's categorizeSample is the
- * one caller that still waits, because it times the load.
+ * A turn that needs the model before it is ready (the first-use download,
+ * ~3.6 GB for Gemma 4 E2B, or initialisation) depends on where the server's
+ * chat model runs (serverModelLocal, from src/model/locality.ts):
+ * - on this machine: the turn starts the load in the background and resolves
+ *   {ok:false} at once, so the server answers meanwhile, and later turns use
+ *   the model once getModelStatus() says 'ready';
+ * - anywhere else, or unknown: the turn waits for the in-tab model, so a
+ *   question meant for the device does not silently go to the cloud while it
+ *   downloads. The status line says answers start when it is ready.
+ * The Speed Showdown's categorizeSample always waits, because it times the load.
  * Nothing here ever throws into a UI catch block, so no hybrid-eligible
  * failure can surface as an error bubble. When the local MODEL itself failed,
  * {ok:false} carries a `detail` the UI shows as a small note, and the cause is
@@ -139,6 +143,11 @@ export interface LocalChatConfigResponse {
   /** Catalog-pinned ONNX dtype (e.g. 'q4f16'); null → resolve from the Hub file list. */
   dtype?: string | null;
   bundle: BundleParams;
+  /**
+   * Whether the server's chat model (and the task models its tools call) run on this machine (serverChatModelInfo).
+   * Absent from older servers = not local: a turn then waits for the in-tab model rather than go to the server.
+   */
+  serverModelLocal?: boolean;
   /** Browser subagent flag (absent from older servers = off). */
   subagent?: {
     enabled: boolean;
@@ -182,14 +191,15 @@ export const CAPABILITY_STORAGE_KEY = 'wilson-hybrid-capability';
  * - idle: no load started yet (nothing has needed the model);
  * - loading: downloading or initialising; `label` is the progress text
  *   ("Downloading in-tab model (3.6 GB, first use only)… 42%");
+ *   `serverMeanwhile` is true when the server answers turns until it is ready
+ *   (its model is local), false when turns wait for it;
  * - ready: loaded in the worker, so chat turns can use it;
  * - failed: the last load failed (`detail` says why); the next turn that
  *   needs the model retries unless the failure is a capability verdict.
- * Turns are answered by the server whenever this is not 'ready'.
  */
 export type InTabModelStatus =
   | { state: 'idle' }
-  | { state: 'loading'; label: string }
+  | { state: 'loading'; label: string; serverMeanwhile: boolean }
   | { state: 'ready' }
   | { state: 'failed'; detail: string | null };
 
@@ -357,36 +367,82 @@ export function createHybridChat(opts: HybridOpts) {
     setModelStatus({ state: 'idle' });
   }
 
+  /** Progress callbacks of the turns waiting for the load (the server's model is not local). */
+  const waitingTurns = new Set<ProgressCb>();
+
   /**
    * Start loading the model in the background, once; status updates carry the
-   * progress. Never rejects: loadModel resolves null on any failure.
+   * progress, and `serverMeanwhile` says whether the server answers until it
+   * is ready (a later turn may change it, if the server's model moved). Never
+   * rejects: loadModel resolves null on any failure.
    */
-  function startBackgroundLoad(): void {
-    if (backgroundLoad) return;
-    setModelStatus({ state: 'loading', label: IN_TAB_PREPARING_LABEL });
+  function startBackgroundLoad(serverMeanwhile: boolean): Promise<unknown> {
+    if (backgroundLoad) {
+      if (modelStatus.state === 'loading' && modelStatus.serverMeanwhile !== serverMeanwhile) {
+        setModelStatus({ ...modelStatus, serverMeanwhile });
+      }
+      return backgroundLoad;
+    }
+    setModelStatus({ state: 'loading', label: IN_TAB_PREPARING_LABEL, serverMeanwhile });
     backgroundLoad = loadModel((label) => {
       // Every progress event reaches here (the worker's load timeout restarts on each); the UIs hear only a label
       // that reads differently (a new whole percent, a new phase), not hundreds of identical re-renders.
-      if (modelStatus.state === 'loading' && modelStatus.label !== label) setModelStatus({ state: 'loading', label });
+      if (modelStatus.state !== 'loading' || modelStatus.label === label) return;
+      setModelStatus({ ...modelStatus, label });
+      for (const onProgress of waitingTurns) onProgress(label);
     })
       .catch(() => null)
       .finally(() => {
         backgroundLoad = null;
       });
+    return backgroundLoad;
   }
 
   /**
-   * For a turn that needs the model: null when it is ready now. Otherwise
-   * starts (or keeps) the background load and returns the {ok:false} the turn
-   * resolves with, so the server answers instead of the turn waiting. It
-   * carries the previous load's failure when that is why the model is not
-   * ready (the load being retried now).
+   * Whether the server would answer a turn on this machine, asked fresh for
+   * each turn that finds the model not ready (the chat model can change in
+   * Settings at any time). Anything but a clear yes counts as no.
    */
-  function notReadyForTurn(): HybridResult | null {
+  async function serverAnswersLocally(): Promise<boolean> {
+    try {
+      const res = await fetchImpl(`${base}/api/config/local-chat`);
+      if (!res.ok) return false;
+      return ((await res.json()) as Partial<LocalChatConfigResponse> | null)?.serverModelLocal === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * For a turn that needs the model: null when it is ready (now, or after
+   * waiting). Otherwise the {ok:false} the turn resolves with, carrying the
+   * load failure when that is why the model is not ready.
+   *
+   * With the server's model on this machine the turn never waits: it starts
+   * (or keeps) the background load and hands off to the server at once.
+   * Otherwise the server would send the question (and the rows its tools
+   * read) off the machine, so the turn waits for the in-tab model, as before
+   * the non-blocking first use; only a load that fails hands it to the server.
+   */
+  async function notReadyForTurn(onProgress?: ProgressCb): Promise<HybridResult | null> {
     if (modelReady()) return null;
     const lastFailure = modelStatus.state === 'failed' ? modelStatus.detail : null;
-    startBackgroundLoad();
-    return unavailableResult(lastFailure);
+    if (await serverAnswersLocally()) {
+      if (modelReady()) return null; // finished while we asked
+      void startBackgroundLoad(true);
+      return unavailableResult(lastFailure);
+    }
+    const load = startBackgroundLoad(false);
+    if (onProgress) {
+      if (modelStatus.state === 'loading') onProgress(modelStatus.label);
+      waitingTurns.add(onProgress);
+    }
+    try {
+      await load;
+    } finally {
+      if (onProgress) waitingTurns.delete(onProgress);
+    }
+    return modelReady() ? null : unavailableResult(lastLoadError);
   }
 
   // ── Model load + real-generation proof (layer 3), in the worker ─────────
@@ -469,8 +525,8 @@ export function createHybridChat(opts: HybridOpts) {
     onProgress?: ProgressCb,
     sessionId?: string | null,
   ): Promise<HybridResult> {
-    // Never wait for the model: not ready → the server answers this turn while it loads.
-    const notReady = notReadyForTurn();
+    // Not ready: the server answers this turn while it loads (its model is local), or the turn waits for it.
+    const notReady = await notReadyForTurn(onProgress);
     if (notReady) return notReady;
 
     // ── Pre-fetched context bundle (localhost only, existing endpoints) ──
@@ -629,9 +685,9 @@ export function createHybridChat(opts: HybridOpts) {
       }
       // Round 4 (R4-0): template mode writes the answer without the model, so the turn
       // never loads it (no download, no GPU session). Only compose: 'model' needs it.
-      // Never waits: a model that is not ready yet hands the turn to the server.
+      // A model that is not ready yet hands the turn to a local server model, or the turn waits for it.
       if (limits.compose === 'model') {
-        const notReady = notReadyForTurn();
+        const notReady = await notReadyForTurn(onProgress);
         if (notReady) return notReady;
       }
       const backend = getBackend();

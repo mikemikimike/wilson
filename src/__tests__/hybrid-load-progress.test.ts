@@ -56,11 +56,20 @@ describe('labels', () => {
     expect(loadingLabel(42.9)).toBe('Loading in-tab model… 42%');
   });
 
-  test('inTabStatusLine: only while loading, and says the server answers meanwhile', () => {
-    expect(inTabStatusLine({ state: 'loading', label: 'Downloading in-tab model (3.6 GB, first use only)… 42%' })).toBe(
+  test('inTabStatusLine: only while loading; "the server answers" only for a local server model', () => {
+    const at42 = 'Downloading in-tab model (3.6 GB, first use only)… 42%';
+    expect(inTabStatusLine({ state: 'loading', label: at42, serverMeanwhile: true })).toBe(
       "Downloading in-tab model (3.6 GB, first use only)… 42% · the server answers until it's ready",
     );
-    expect(inTabStatusLine({ state: 'loading', label: '' })).toBe(`${IN_TAB_PREPARING_LABEL} · the server answers until it's ready`);
+    expect(inTabStatusLine({ state: 'loading', label: '', serverMeanwhile: true })).toBe(`${IN_TAB_PREPARING_LABEL} · the server answers until it's ready`);
+    // Not local (or not said): turns wait, and the line says so.
+    expect(inTabStatusLine({ state: 'loading', label: 'Downloading in-tab model (3.6 GB, first use only)…', serverMeanwhile: false })).toBe(
+      "Downloading in-tab model (3.6 GB, first use only)… answers start when it's ready",
+    );
+    expect(inTabStatusLine({ state: 'loading', label: at42, serverMeanwhile: false })).toBe(
+      "Downloading in-tab model (3.6 GB, first use only)… 42% · answers start when it's ready",
+    );
+    expect(inTabStatusLine({ state: 'loading', label: at42 })).not.toContain('server');
     expect(inTabStatusLine({ state: 'idle' })).toBeNull();
     expect(inTabStatusLine({ state: 'ready' })).toBeNull();
     expect(inTabStatusLine({ state: 'failed' })).toBeNull();
@@ -210,13 +219,16 @@ const CFG: LocalChatConfigResponse = {
   downloadSize: '~3.6GB',
   dtype: 'q4',
   bundle: { days: 30, limit: 200, maxChars: 6000 },
+  // The server's chat model is local, so the server answers while the in-tab model loads.
+  serverModelLocal: true,
 };
 
-function dashboardFetch() {
+/** `config()` is read on every request, so a test can move the server's chat model mid-session. */
+function dashboardFetch(config: () => Partial<LocalChatConfigResponse> = () => CFG) {
   const urls: string[] = [];
   const fn = async (input: string): Promise<Response> => {
     urls.push(input);
-    if (input.endsWith('/api/config/local-chat')) return Response.json(CFG);
+    if (input.endsWith('/api/config/local-chat')) return Response.json({ ...CFG, ...config() });
     if (input.includes('/api/transactions')) return Response.json([]);
     if (input.endsWith('/api/weekly-summary')) {
       return Response.json({ thisWeek: { total: 0 }, lastWeek: { total: 0 }, change: { amount: 0, percent: 0 } });
@@ -301,12 +313,12 @@ describe('client: chat turns go to the server until the in-tab model is ready', 
 
     // The load never settles during these turns: if a turn waited for it, this would hang.
     expect(await chat.tryLocal('how much did I spend?')).toEqual({ ok: false });
-    expect(chat.getModelStatus()).toEqual({ state: 'loading', label: IN_TAB_PREPARING_LABEL });
+    expect(chat.getModelStatus()).toEqual({ state: 'loading', label: IN_TAB_PREPARING_LABEL, serverMeanwhile: true });
     // Nothing is fetched for a bundle the model cannot answer yet.
     expect(api.urls.some((u) => u.includes('/api/transactions'))).toBe(false);
 
     held.progress('Downloading in-tab model (3.6 GB, first use only)… 42%');
-    expect(chat.getModelStatus()).toEqual({ state: 'loading', label: 'Downloading in-tab model (3.6 GB, first use only)… 42%' });
+    expect(chat.getModelStatus()).toEqual({ state: 'loading', label: 'Downloading in-tab model (3.6 GB, first use only)… 42%', serverMeanwhile: true });
 
     expect(await chat.tryLocal('and last week?')).toEqual({ ok: false });
     expect(held.log).toEqual(['load']); // one background load, not one per turn
@@ -357,6 +369,79 @@ describe('client: chat turns go to the server until the in-tab model is ready', 
     expect(chat.getModelStatus().state).toBe('loading');
   });
 
+  test('server model NOT local: the turn waits for the in-tab model instead of going to the server meanwhile', async () => {
+    const held = heldBackend();
+    const statuses: InTabModelStatus[] = [];
+    const chat = createHybridChat({
+      baseUrl: '',
+      fetchImpl: dashboardFetch(() => ({ serverModelLocal: false })).fn,
+      backend: held.backend,
+      onModelStatus: (s) => statuses.push(s),
+    });
+    const turnProgress: string[] = [];
+    let settledWith: unknown = 'pending';
+    const turn = chat.tryLocal('how much did I spend?', (l) => turnProgress.push(l)).then((r) => (settledWith = r));
+    await tick();
+    expect(settledWith).toBe('pending'); // no {ok:false}: nothing goes to the (cloud) server during the download
+    expect(chat.getModelStatus()).toEqual({ state: 'loading', label: IN_TAB_PREPARING_LABEL, serverMeanwhile: false });
+    expect(inTabStatusLine(chat.getModelStatus())).toBe("Preparing in-tab model… answers start when it's ready");
+
+    held.progress('Downloading in-tab model (3.6 GB, first use only)… 42%');
+    expect(inTabStatusLine(chat.getModelStatus())).toBe("Downloading in-tab model (3.6 GB, first use only)… 42% · answers start when it's ready");
+    // The waiting turn shows the same progress in its own bubble.
+    expect(turnProgress).toEqual([IN_TAB_PREPARING_LABEL, 'Downloading in-tab model (3.6 GB, first use only)… 42%']);
+
+    held.release();
+    await turn;
+    expect(settledWith).toEqual({ ok: true, answer: 'You spent $0 this week.', sessionId: 's1', source: 'local' });
+    expect(held.log).toEqual(['load', 'bundleAnswer']);
+    expect(statuses.every((st) => st.state !== 'loading' || st.serverMeanwhile === false)).toBe(true);
+  });
+
+  test('server model NOT local and the load fails: only then does the turn go to the server, with the reason', async () => {
+    const held = heldBackend();
+    const chat = createHybridChat({ baseUrl: '', fetchImpl: dashboardFetch(() => ({ serverModelLocal: false })).fn, backend: held.backend });
+    const turn = chat.tryLocal('q');
+    await tick();
+    held.fail({ phase: 'load', message: 'Failed to fetch' });
+    const r = await turn;
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.detail).toContain('Failed to fetch');
+  });
+
+  test('an older server (no serverModelLocal) or an unreadable answer counts as not local: the turn waits', async () => {
+    for (const config of [() => ({ serverModelLocal: undefined }), () => ({ serverModelLocal: 'yes' as unknown as boolean })]) {
+      const held = heldBackend();
+      const chat = createHybridChat({ baseUrl: '', fetchImpl: dashboardFetch(config).fn, backend: held.backend });
+      let done = false;
+      const turn = chat.tryLocal('q').then(() => (done = true));
+      await tick();
+      expect(done).toBe(false);
+      expect(chat.getModelStatus()).toMatchObject({ state: 'loading', serverMeanwhile: false });
+      held.release();
+      await turn;
+    }
+  });
+
+  test('locality is asked per turn: a server model moved to the cloud mid-download stops the hand-offs', async () => {
+    const held = heldBackend();
+    let serverModelLocal = true;
+    const chat = createHybridChat({ baseUrl: '', fetchImpl: dashboardFetch(() => ({ serverModelLocal })).fn, backend: held.backend });
+    expect(await chat.tryLocal('q')).toEqual({ ok: false });
+    expect(inTabStatusLine(chat.getModelStatus())).toBe("Preparing in-tab model… · the server answers until it's ready");
+
+    serverModelLocal = false; // Settings → Models: chat now on a cloud provider
+    let settledWith: unknown = 'pending';
+    const turn = chat.tryLocal('how much did I spend?').then((r) => (settledWith = r));
+    await tick();
+    expect(settledWith).toBe('pending');
+    expect(inTabStatusLine(chat.getModelStatus())).toBe("Preparing in-tab model… answers start when it's ready");
+    expect(held.log).toEqual(['load']); // it waits on the load already running
+    held.release();
+    await turn;
+    expect(settledWith).toMatchObject({ ok: true, source: 'local' });
+  });
+
   test('categorizeSample (Speed Showdown) still waits for the load, which it times', async () => {
     const held = heldBackend();
     const chat = createHybridChat({ baseUrl: '', fetchImpl: dashboardFetch().fn, backend: held.backend });
@@ -404,7 +489,10 @@ describe('legacy dashboard (src/dashboard/html.ts) shows the same status line', 
   test('has the status element and renders inTabStatusLine for each status', () => {
     expect(html).toContain('id="chatModelStatus"');
     const statuses: InTabModelStatus[] = [
-      { state: 'loading', label: 'Downloading in-tab model (3.6 GB, first use only)… 42%' },
+      { state: 'loading', label: 'Downloading in-tab model (3.6 GB, first use only)… 42%', serverMeanwhile: true },
+      { state: 'loading', label: 'Downloading in-tab model (3.6 GB, first use only)… 42%', serverMeanwhile: false },
+      { state: 'loading', label: 'Downloading in-tab model (3.6 GB, first use only)…', serverMeanwhile: false },
+      { state: 'loading', label: '', serverMeanwhile: false },
       { state: 'ready' },
       { state: 'failed', detail: 'x' },
     ];

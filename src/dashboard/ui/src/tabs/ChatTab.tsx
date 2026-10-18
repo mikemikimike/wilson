@@ -189,7 +189,8 @@ export function ChatTab() {
   const loadSeq = useRef(0);
   const [importOpen, setImportOpen] = useState(false);
   const hybrid = useHybridChat();
-  // First use downloads the in-tab model in the background; turns go to the server meanwhile.
+  // First use downloads the in-tab model in the background; turns go to the server meanwhile only when its model is
+  // local, and otherwise wait for it (the line says which).
   const inTabStatus = inTabStatusLine(hybrid.modelStatus);
   // Turns answered on-device in this chat, so a later server handoff can close the history gap.
   const priorLocalTurnsRef = useRef<PriorLocalTurn[]>([]);
@@ -664,8 +665,10 @@ export function ChatTab() {
     // ── Local-first: try the on-device WebGPU path ────────────────────────
     // Every hybrid failure resolves {ok:false} (no WebGPU, model load or
     // generation failure, tool-call attempt, question outside the bundle,
-    // in-tab model still downloading or initialising) and falls through to
-    // the server agent at once: a turn never waits for the model. The belt-and-braces catch guarantees
+    // in-tab model still downloading or initialising while the server's model
+    // is local) and falls through to the server agent at once. With a cloud
+    // server model a turn waits for the in-tab model instead, so it is not
+    // sent off the machine meanwhile. The belt-and-braces catch guarantees
     // hybrid problems can never reach the Error: bubble below, which is
     // reserved for genuine server-path failures. When the local MODEL itself
     // failed, the reason rides along as a small note under the server answer.

@@ -8,7 +8,7 @@
  * function escapes ALL HTML entities before applying markdown transforms.
  */
 import { PROVENANCE_LABELS } from './chat-provenance.js';
-import { IN_TAB_PREPARING_LABEL, IN_TAB_SERVER_MEANWHILE } from './ui/src/hybrid/load-progress.js';
+import { IN_TAB_PREPARING_LABEL, IN_TAB_SERVER_MEANWHILE, IN_TAB_WAITS_FOR_MODEL } from './ui/src/hybrid/load-progress.js';
 
 export function getDashboardHtml(port: number): string {
   return `<!DOCTYPE html>
@@ -476,11 +476,14 @@ export function getDashboardHtml(port: number): string {
     if (hybridInited || !window.WilsonHybridChat) return;
     window.WilsonHybridChat.init({ baseUrl: BASE, fetchImpl: authFetch });
     hybridInited = true;
-    // First use downloads the in-tab model in the background while the server
-    // answers; mirrors inTabStatusLine in ui/src/hybrid/load-progress.ts.
+    // First use downloads the in-tab model in the background; the server
+    // answers meanwhile only when its model is local, otherwise turns wait.
+    // Mirrors inTabStatusLine in ui/src/hybrid/load-progress.ts.
     if (window.WilsonHybridChat.onModelStatus) {
       window.WilsonHybridChat.onModelStatus(function(s) {
-        var line = s && s.state === 'loading' ? (s.label || ${JSON.stringify(IN_TAB_PREPARING_LABEL)}) + ${JSON.stringify(IN_TAB_SERVER_MEANWHILE)} : '';
+        var label = s && s.state === 'loading' ? (String(s.label || '').trim() || ${JSON.stringify(IN_TAB_PREPARING_LABEL)}) : '';
+        var line = !label ? '' : s.serverMeanwhile === true ? label + ${JSON.stringify(IN_TAB_SERVER_MEANWHILE)}
+          : label + (label.slice(-1) === '\u2026' ? ' ' : ' \u00b7 ') + ${JSON.stringify(IN_TAB_WAITS_FOR_MODEL)};
         var el = document.getElementById('chatModelStatus');
         if (el) { el.textContent = line; el.hidden = !line; }
       });

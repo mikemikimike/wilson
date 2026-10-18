@@ -37,6 +37,8 @@ function cfg(subagent?: { enabled: boolean; maxSteps: number; compose?: 'templat
     downloadSize: '~570MB',
     dtype: 'q4f16',
     bundle: { days: 30, limit: 200, maxChars: 6000 },
+    // A local server model: turns hand off to it while the in-tab model loads.
+    serverModelLocal: true,
     ...(subagent ? { subagent } : {}),
   };
 }

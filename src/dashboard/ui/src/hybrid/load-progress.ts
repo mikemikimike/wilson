@@ -80,18 +80,31 @@ export function createLoadProgressReporter(opts: LoadProgressReporterOpts): (eve
   };
 }
 
-/** Appended to the load progress in the chat status line (the legacy dashboard embeds it too). */
+/**
+ * Appended to the load progress in the chat status line while the server
+ * answers meanwhile: only when the server's chat model runs on this machine
+ * (the legacy dashboard embeds it too).
+ */
 export const IN_TAB_SERVER_MEANWHILE = " · the server answers until it's ready";
+/**
+ * Appended instead when chat turns wait for the in-tab model (the server's
+ * model is not on this machine, or that is unknown): "Downloading in-tab
+ * model (3.6 GB, first use only)… answers start when it's ready", with a " · "
+ * after a percent.
+ */
+export const IN_TAB_WAITS_FOR_MODEL = "answers start when it's ready";
 
 /**
  * The status line the chat shows beside the composer while the in-tab model
- * is loading: its progress, and that the server answers meanwhile. Null when
- * there is nothing to say (idle, ready, or failed: a failure shows as the
- * note under the server's answer). The legacy dashboard (html.ts) mirrors it
- * inline from the same constants.
+ * is loading: its progress, and whether the server answers meanwhile
+ * (`serverMeanwhile`, true only for a local server model) or answers start
+ * once it is ready. Null when there is nothing to say (idle, ready, or
+ * failed: a failure shows as the note under the server's answer). The legacy
+ * dashboard (html.ts) mirrors it inline from the same constants.
  */
-export function inTabStatusLine(status: { state: string; label?: string }): string | null {
+export function inTabStatusLine(status: { state: string; label?: string; serverMeanwhile?: boolean }): string | null {
   if (status.state !== 'loading') return null;
   const label = status.label?.trim() || IN_TAB_PREPARING_LABEL;
-  return `${label}${IN_TAB_SERVER_MEANWHILE}`;
+  if (status.serverMeanwhile === true) return `${label}${IN_TAB_SERVER_MEANWHILE}`;
+  return `${label}${label.endsWith('…') ? ' ' : ' · '}${IN_TAB_WAITS_FOR_MODEL}`;
 }

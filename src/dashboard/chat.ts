@@ -67,8 +67,23 @@ const AGENT_TASK_MODELS: readonly OverridableTask[] = ['categorization', 'entity
  * the reply cloud too, named when the chat model itself is not cloud.
  */
 export function serverChatModelInfo(): { serverModelLocal: boolean; serverProvider: string | null } {
+  return chatModelInfo(() => appliedModel ?? getConfiguredModel());
+}
+
+/**
+ * The same, for the turn the browser is about to send rather than the reply it
+ * got: the saved setting, which every message applies first (refreshChatModel),
+ * so a model changed in Settings since the last message already counts.
+ * GET /api/config/local-chat reports it, and the browser lets this server
+ * answer while the in-tab model downloads only when it is local.
+ */
+export function nextChatModelInfo(): { serverModelLocal: boolean; serverProvider: string | null } {
+  return chatModelInfo(() => getConfiguredModel());
+}
+
+function chatModelInfo(model: () => { model: string; provider: string }): { serverModelLocal: boolean; serverProvider: string | null } {
   try {
-    const cfg = appliedModel ?? getConfiguredModel();
+    const cfg = model();
     const routed = modelLocality(cfg.model);
     const cloudTask = AGENT_TASK_MODELS.map((task) => modelLocality(getTaskModel(task))).find((l) => !l.local);
     const serverProvider = !routed.local ? routed.displayName : (cloudTask?.displayName ?? null);
