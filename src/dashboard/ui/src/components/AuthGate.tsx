@@ -17,7 +17,7 @@ import {
 } from '@/lib/authSession';
 import { apiErrorMessage, firstAdminBody, validateFirstAdmin } from '@/lib/firstAdmin';
 import { lockMirror, suspendMirror, unlockMirror } from '@/store/mirror-client';
-import { noteAuthStatus, offlineLoginRequired, readMirrorOwner, writeMirrorOwner } from '@/store/mirror-session';
+import { noteAuthEnabled, offlineLoginRequired, readMirrorOwner, writeMirrorOwner } from '@/store/mirror-session';
 
 function localStore(): Storage | null {
   try {
@@ -72,7 +72,9 @@ export function AuthGate() {
       coalesced(async () => {
         const check = await checkAuth();
         const storage = localStore();
-        if (check.kind === 'status') noteAuthStatus(storage, check.status.authEnabled);
+        // Only "on" is recorded: the status names no profile, and an "off" for the server's active one must not
+        // unlock another profile's offline copy (only a sync pull, which knows its profile, clears a flag).
+        if (check.kind === 'status' && check.status.authEnabled) noteAuthEnabled(storage);
         const offlineLocked = offlineLoginRequired(storage, readAuthToken() !== null);
         const { view: next, remount, wipe, session, mirrorOwner } = settleAuthCheck(
           check, viewRef.current, undefined, offlineLocked, mirrorOwnerRef.current,

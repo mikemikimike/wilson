@@ -93,12 +93,19 @@ export function writeMirrorOwner(storage: MirrorStorage | null, owner: number | 
 /**
  * Remember whether `profile` has auth on. Set before that profile's rows are written to the mirror (a sync pull
  * learns both together), so no copy of an auth profile ever sits in the pool without the flag that locks it.
+ *
+ * The first answer this browser records speaks for `profile` only. A mirror profile stored before the flags existed
+ * (a pre-0.10 pool, possibly another profile's) is flagged along with it, so writing the list cannot unlock that
+ * pool offline; a later pull for that profile clears it if its auth is off.
  */
 export function recordProfileAuth(storage: MirrorStorage | null, profile: string, authEnabled: boolean): void {
+  const first = !flagsWritten(storage);
   const current = readAuthProfiles(storage);
   const has = current.includes(profile);
-  if (has === authEnabled && flagsWritten(storage)) return;
+  if (has === authEnabled && !first) return;
   const next = authEnabled ? [...current, profile] : current.filter((p) => p !== profile);
+  const stored = readStoredMirrorProfile(storage);
+  if (first && mirrorProfileStored(storage) && stored !== profile && !next.includes(stored)) next.push(stored);
   try {
     // An empty list is still written: its absence means "never asked" (offlineLoginRequired).
     storage?.setItem(MIRROR_AUTH_PROFILES_KEY, JSON.stringify(next));
@@ -126,26 +133,12 @@ function mirrorProfileStored(storage: MirrorStorage | null): boolean {
 }
 
 /**
- * The login check reached the server. With auth on, the stored mirror profile is flagged (noteAuthEnabled). Either
- * way the flag list now exists, so a mirror kept from before the flags existed stops reading as "never asked".
- */
-export function noteAuthStatus(storage: MirrorStorage | null, authEnabled: boolean): void {
-  if (authEnabled) {
-    noteAuthEnabled(storage);
-    return;
-  }
-  if (flagsWritten(storage)) return;
-  try {
-    storage?.setItem(MIRROR_AUTH_PROFILES_KEY, '[]');
-  } catch {
-    // Blocked storage: nothing was persisted either.
-  }
-}
-
-/**
  * The login check said auth is on. Which profile it is for is not public (GET /api/auth/status names none), so the
  * stored mirror profile is flagged: at worst a profile is locked offline until its next sync pull says otherwise.
- * Nothing here ever clears a flag; only a sync pull, which knows its profile, does.
+ *
+ * An "auth off" answer is not recorded at all: it is the server's active profile's, which need not be the stored
+ * mirror profile (pools are per profile), so taking it as an answer could unlock another profile's copy offline.
+ * Nothing here ever clears a flag or settles the list; only a sync pull, which knows its profile, does.
  */
 export function noteAuthEnabled(storage: MirrorStorage | null): void {
   recordProfileAuth(storage, readStoredMirrorProfile(storage), true);
@@ -154,8 +147,8 @@ export function noteAuthEnabled(storage: MirrorStorage | null): void {
 /**
  * Offline, with no login: must the login form show instead of the stored profile's mirror? Yes when that profile has
  * auth on, and when a mirror was synced before this browser ever recorded an auth answer (a pool kept from before
- * the flags existed may belong to an auth profile; the first check that reaches the server settles it). A fresh
- * browser with no mirror, and profiles known to be without auth, keep today's offline behaviour.
+ * the flags existed may belong to an auth profile; the first sync pull settles it). A fresh browser with no mirror,
+ * and profiles known to be without auth, keep today's offline behaviour.
  *
  * A stored token is taken as a login: offline, a revoked or expired token cannot be told from a valid one, and the
  * first check that reaches the server ends that session (and wipes the mirror) if it is dead.

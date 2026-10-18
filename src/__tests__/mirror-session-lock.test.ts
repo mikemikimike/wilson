@@ -11,7 +11,6 @@ import {
   POOL_RELEASE_RETRY_MS,
   clearLedgerStorage,
   noteAuthEnabled,
-  noteAuthStatus,
   offlineLoginRequired,
   poolDirectoryName,
   profilesToWipe,
@@ -74,17 +73,22 @@ describe('the "auth is on" flag', () => {
     expect(fresh.data.get(MIRROR_AUTH_PROFILES_KEY)).toBe('[]');
   });
 
-  test('every status check that reaches the server writes the list; only "on" flags a profile', () => {
-    const off = memoryStorage({ [MIRROR_PROFILE_KEY]: 'household' });
-    noteAuthStatus(off, false);
-    expect(off.data.get(MIRROR_AUTH_PROFILES_KEY)).toBe('[]');
-    // "Off" says nothing about which profile, so it never clears a flag a sync pull set.
-    const flagged = memoryStorage({ [MIRROR_PROFILE_KEY]: 'household', [MIRROR_AUTH_PROFILES_KEY]: '["household"]' });
-    noteAuthStatus(flagged, false);
-    expect(readAuthProfiles(flagged)).toEqual(['household']);
-    noteAuthStatus(off, true);
-    expect(readAuthProfiles(off)).toEqual(['household']);
-    expect(() => noteAuthStatus(throwingStorage, false)).not.toThrow();
+  test("the first answer speaks for its own profile only: a pre-flags mirror profile stays flagged", () => {
+    // A 0.9 browser's stored mirror is "business"; the first pull this version makes is for "household".
+    const upgraded = memoryStorage({ [MIRROR_PROFILE_KEY]: 'business' });
+    recordProfileAuth(upgraded, 'household', false);
+    expect(readAuthProfiles(upgraded)).toEqual(['business']);
+    expect(offlineLoginRequired(upgraded, false)).toBe(true);
+    // A pull for "business" itself settles it.
+    recordProfileAuth(upgraded, 'business', false);
+    expect(readAuthProfiles(upgraded)).toEqual([]);
+    expect(offlineLoginRequired(upgraded, false)).toBe(false);
+    const upgradedOn = memoryStorage({ [MIRROR_PROFILE_KEY]: 'business' });
+    recordProfileAuth(upgradedOn, 'household', true);
+    expect(readAuthProfiles(upgradedOn)).toEqual(['household', 'business']);
+    // Once the list exists, later answers touch only their own profile.
+    recordProfileAuth(upgradedOn, 'other', false);
+    expect(readAuthProfiles(upgradedOn)).toEqual(['household', 'business']);
   });
 
   test('the gate flags the stored mirror profile (or the default one) when the status check says auth is on', () => {
@@ -148,15 +152,26 @@ describe('offlineLoginRequired', () => {
     expect(offlineLoginRequired(throwingStorage, false)).toBe(false);
   });
 
-  test('a mirror synced before the flags existed stays shut until a check reaches the server', () => {
+  test('a mirror synced before the flags existed stays shut until a sync pull for its profile says otherwise', () => {
     const upgraded = memoryStorage({ [MIRROR_PROFILE_KEY]: 'household' });
     expect(offlineLoginRequired(upgraded, false)).toBe(true);
     expect(offlineLoginRequired(upgraded, true)).toBe(false);
-    noteAuthStatus(upgraded, false);
+    recordProfileAuth(upgraded, 'household', false);
     expect(offlineLoginRequired(upgraded, false)).toBe(false);
     const upgradedAuth = memoryStorage({ [MIRROR_PROFILE_KEY]: 'household' });
-    noteAuthStatus(upgradedAuth, true);
+    noteAuthEnabled(upgradedAuth);
     expect(offlineLoginRequired(upgradedAuth, false)).toBe(true);
+  });
+
+  test("an \"auth off\" status check (the server's active profile, maybe not the mirror's) never unlocks a copy", () => {
+    // The status route names no profile. With per-profile pools, the "off" may be another profile's: the gate
+    // records only "on", so the pre-flags mirror stays shut until its own sync pull.
+    const gate = readFileSync(join(import.meta.dir, '../dashboard/ui/src/components/AuthGate.tsx'), 'utf8');
+    expect(gate).toContain("if (check.kind === 'status' && check.status.authEnabled) noteAuthEnabled(storage);");
+    expect(gate).not.toContain('noteAuthStatus');
+    const source = readFileSync(join(import.meta.dir, '../dashboard/ui/src/store/mirror-session.ts'), 'utf8');
+    expect(source).not.toContain("setItem(MIRROR_AUTH_PROFILES_KEY, '[]')");
+    expect(offlineLoginRequired(memoryStorage({ [MIRROR_PROFILE_KEY]: 'household' }), false)).toBe(true);
   });
 });
 
@@ -350,7 +365,6 @@ describe('wiring (source pins: these modules need a browser worker or React)', (
     expect(remember).toBeGreaterThan(wipe);
     expect(remember).toBeLessThan(unlock);
     expect(gate).toContain('writeMirrorOwner(storage, mirrorOwner);');
-    expect(gate).toContain("if (check.kind === 'status') noteAuthStatus(storage, check.status.authEnabled);");
   });
 
   test('suspending stops syncs and reads without a wipe; unlocking reopens', () => {
