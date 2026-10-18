@@ -8,6 +8,8 @@
 //   { id, type: 'setProfile', profile }              → same shape (closes/reopens the pool)
 //   { id, type: 'applySync',  payload: SyncPayload } → ApplySyncResult + lastSyncedAt
 //   { id, type: 'serve',      path }                 → rows | null (null = cannot serve)
+//   { id, type: 'wipe',       profiles: string[] }   → { removed, failed }: closes the pool and
+//                                                      deletes these profiles' pools (session ended)
 //   { id, type: 'attachPort', profile } + transferred MessagePort
 //                                                    → null; the port then speaks the SCOPED
 //                                                      tool protocol (mirror-port-protocol.ts:
@@ -19,6 +21,7 @@ import { createWaSqliteHandle, type WaSqliteHandle } from './wa-sqlite-adapter.j
 import { applySync, getMeta, isMirrorSeeded } from './mirror-schema.js';
 import { serveApiPath } from './mirror-reads.js';
 import { servePort, type PortHost, type PortLike } from './mirror-port-protocol.js';
+import { removeMirrorPools, type PoolRoot } from './mirror-session.js';
 import type { MirrorStatus, SyncPayload } from './types.js';
 
 let handle: WaSqliteHandle | null = null;
@@ -58,6 +61,22 @@ async function dispatch(msg: Record<string, unknown>): Promise<unknown> {
     case 'serve': {
       if (!handle || !seeded) return null;
       return serveApiPath(handle.binding, msg.path as string);
+    }
+    case 'wipe': {
+      // The pool's access handles are this worker's, so only it can release them before the directory goes.
+      while (attachedPorts.length > 0) attachedPorts.shift()!.close();
+      if (handle) {
+        try {
+          await handle.close();
+        } catch {
+          // A connection that will not close cleanly still releases its handles below, with the worker.
+        }
+      }
+      handle = null;
+      profile = null;
+      seeded = false;
+      const root = (await navigator.storage.getDirectory()) as unknown as PoolRoot;
+      return removeMirrorPools(root, (msg.profiles as string[]) ?? []);
     }
     default:
       throw new Error(`mirror worker: unknown message type ${String(msg.type)}`);

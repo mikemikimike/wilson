@@ -142,8 +142,11 @@ export type AuthGateView =
   | { kind: 'checking' }
   /** `userId` is null when auth is off (or the server could not be reached). */
   | { kind: 'app'; userId: number | null }
-  /** `sessionEnded`: this tab had a login (a stored token, or the app was showing) and it is gone now. */
-  | { kind: 'login'; sessionEnded: boolean }
+  /**
+   * `sessionEnded`: this tab had a login (a stored token, or the app was showing) and it is gone now.
+   * `offline`: the server could not be reached, and the offline copy belongs to a profile with auth on.
+   */
+  | { kind: 'login'; sessionEnded: boolean; offline?: boolean }
   /** Auth is on and no user exists: /api/auth/setup is the only way in. */
   | { kind: 'setup' }
   | { kind: 'unavailable'; message: string };
@@ -159,20 +162,39 @@ export type AuthGateView =
  *   active user) is deliberately not exposed by the public status route; a deactivated account gets the same
  *   "Invalid credentials" as a wrong password.
  * - The server answered with an error (e.g. the LAN rule's 503 for a profile with no auth): say so, with its words.
- * - The server is unreachable on the first check: the app, which serves what the offline mirror holds, as before
+ * - The server is unreachable and `offlineLocked` (the offline copy is a profile with auth on, and there is no
+ *   stored login; store/mirror-session.ts offlineLoginRequired): the login form, marked offline. The mirror is
+ *   never served without a login.
+ * - Otherwise unreachable on the first check: the app, which serves what the offline mirror holds, as before
  *   this gate existed. On a re-check the screen stays as it was: a network blip must neither rebuild the app nor
  *   open it from the login form.
  */
-export function authGateView(check: AuthCheck, previous: AuthGateView = { kind: 'checking' }): AuthGateView {
-  if (check.kind === 'network-error') return previous.kind === 'checking' ? { kind: 'app', userId: null } : previous;
+export function authGateView(check: AuthCheck, previous: AuthGateView = { kind: 'checking' }, offlineLocked = false): AuthGateView {
+  if (check.kind === 'network-error') {
+    if (offlineLocked) return { kind: 'login', sessionEnded: endedSession(null, previous), offline: true };
+    return previous.kind === 'checking' ? { kind: 'app', userId: null } : previous;
+  }
   if (check.kind === 'http-error') return { kind: 'unavailable', message: check.message };
   const { status } = check;
   if (!status.authEnabled) return { kind: 'app', userId: null };
   if (status.user) return { kind: 'app', userId: status.user.id };
   if (status.userCount === 0) return { kind: 'setup' };
+  return { kind: 'login', sessionEnded: endedSession(check.sentToken, previous) };
+}
+
+/** Whether a login screen reached from `previous` follows a lost session (and says so). */
+function endedSession(sentToken: string | null, previous: AuthGateView): boolean {
   // A re-check while the login form shows (the second run of a 401 burst, another tab) keeps its notice.
-  const sessionEnded = check.sentToken !== null || previous.kind === 'app' || (previous.kind === 'login' && previous.sessionEnded);
-  return { kind: 'login', sessionEnded };
+  return sentToken !== null || previous.kind === 'app' || (previous.kind === 'login' && previous.sessionEnded);
+}
+
+/** What applying a status check asks of the gate. */
+export interface SettledAuthCheck {
+  view: AuthGateView;
+  /** Rebuild the app (a new login, or auth switched on or off). */
+  remount: boolean;
+  /** Lock and wipe the offline mirror before showing `view` (store/mirror-client.ts lockMirror). */
+  wipe: boolean;
 }
 
 /**
@@ -182,19 +204,24 @@ export function authGateView(check: AuthCheck, previous: AuthGateView = { kind: 
  * The app is rebuilt when it was not showing, or when it now belongs to a different login (another tab logged in
  * as someone else, or auth was switched on or off here), since role-dependent views and the mirror were loaded
  * for the old one. A re-check that confirms the same login keeps everything mounted.
+ *
+ * Every login or setup screen means auth is on and this tab has no login, so the offline mirror is wiped first,
+ * each time (a wipe that found nothing is cheap, and one another tab could not finish gets another go).
  */
 export function settleAuthCheck(
   check: AuthCheck,
   previous: AuthGateView,
   storage: TokenStorage | null = browserStorage(),
-): { view: AuthGateView; remount: boolean } {
+  offlineLocked = false,
+): SettledAuthCheck {
   if (check.kind === 'status' && check.status.authEnabled && !check.status.user && check.sentToken !== null
     && readAuthToken(storage) === check.sentToken) {
     clearAuthToken(storage);
   }
-  const view = authGateView(check, previous);
+  const view = authGateView(check, previous, offlineLocked);
   const remount = view.kind === 'app' && (previous.kind !== 'app' || previous.userId !== view.userId);
-  return { view, remount };
+  const wipe = view.kind === 'login' || view.kind === 'setup';
+  return { view, remount, wipe };
 }
 
 /** A `storage` event that changes the session: the token key itself, or the whole store cleared (key null). */

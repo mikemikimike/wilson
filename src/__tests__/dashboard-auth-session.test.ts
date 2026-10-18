@@ -208,6 +208,19 @@ describe('authGateView', () => {
     expect(authGateView({ kind: 'network-error' }, { kind: 'login', sessionEnded: false })).toEqual({ kind: 'login', sessionEnded: false });
     expect(authGateView({ kind: 'network-error' }, { kind: 'app', userId: 4 })).toEqual({ kind: 'app', userId: 4 });
   });
+
+  test('unreachable, offline copy of an auth profile, no stored login: the offline login form, never the app', () => {
+    const offline = (previous?: Parameters<typeof authGateView>[1]) => authGateView({ kind: 'network-error' }, previous, true);
+    expect(offline()).toEqual({ kind: 'login', sessionEnded: false, offline: true });
+    // Another tab logged out while this one showed the app and the server was down.
+    expect(offline({ kind: 'app', userId: 4 })).toEqual({ kind: 'login', sessionEnded: true, offline: true });
+    expect(offline({ kind: 'login', sessionEnded: true })).toEqual({ kind: 'login', sessionEnded: true, offline: true });
+  });
+
+  test('reachable again: the offline mark goes, whatever the lock said', () => {
+    expect(authGateView(ok(status({})), { kind: 'login', sessionEnded: false, offline: true }, true)).toEqual({ kind: 'login', sessionEnded: false });
+    expect(authGateView(ok(status({ authEnabled: false })), { kind: 'login', sessionEnded: false, offline: true }, true)).toEqual({ kind: 'app', userId: null });
+  });
 });
 
 describe('settleAuthCheck', () => {
@@ -227,8 +240,26 @@ describe('settleAuthCheck', () => {
   });
 
   test('a network blip on a re-check neither rebuilds the app nor opens it from the login form', () => {
-    expect(settleAuthCheck({ kind: 'network-error' }, { kind: 'app', userId: 1 }, memoryStorage())).toEqual({ view: { kind: 'app', userId: 1 }, remount: false });
+    expect(settleAuthCheck({ kind: 'network-error' }, { kind: 'app', userId: 1 }, memoryStorage())).toEqual({
+      view: { kind: 'app', userId: 1 },
+      remount: false,
+      wipe: false,
+    });
     expect(settleAuthCheck({ kind: 'network-error' }, login, memoryStorage()).view).toEqual(login);
+  });
+
+  test('every login or setup screen wipes the mirror first; the app never does', () => {
+    const asUser: AuthCheck = { kind: 'status', status: status({ user: { id: 1, username: 'u', role: 'admin' } }), sentToken: 't' };
+    const noLogin: AuthCheck = { kind: 'status', status: status({}), sentToken: null };
+    const noUsers: AuthCheck = { kind: 'status', status: status({ userCount: 0 }), sentToken: null };
+    expect(settleAuthCheck(noLogin, { kind: 'app', userId: 1 }, memoryStorage()).wipe).toBe(true);
+    expect(settleAuthCheck(noLogin, { kind: 'checking' }, memoryStorage()).wipe).toBe(true);
+    expect(settleAuthCheck(noLogin, login, memoryStorage()).wipe).toBe(true);
+    expect(settleAuthCheck(noUsers, { kind: 'checking' }, memoryStorage()).wipe).toBe(true);
+    expect(settleAuthCheck({ kind: 'network-error' }, { kind: 'app', userId: 1 }, memoryStorage(), true).wipe).toBe(true);
+    expect(settleAuthCheck(asUser, login, memoryStorage()).wipe).toBe(false);
+    expect(settleAuthCheck({ kind: 'network-error' }, { kind: 'checking' }, memoryStorage()).wipe).toBe(false);
+    expect(settleAuthCheck({ kind: 'http-error', message: 'x' }, { kind: 'app', userId: 1 }, memoryStorage()).wipe).toBe(false);
   });
 
   test('a token the status check reports as no login is forgotten, unless another tab replaced it', () => {

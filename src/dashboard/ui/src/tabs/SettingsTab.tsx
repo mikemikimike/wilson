@@ -7,6 +7,7 @@ import { reloadForProfileSwitch } from '@/hooks/useUrlState';
 import { AgentAccessCenter } from '@/components/agent/AgentAccessCenter';
 import { apiErrorMessage, firstAdminBody, shouldOfferFirstAdmin, validateFirstAdmin } from '@/lib/firstAdmin';
 import { clearAuthToken, notifySessionChange, writeAuthToken } from '@/lib/authSession';
+import { lockMirror } from '@/store/mirror-client';
 
 const MEMORY_TYPES = ['context', 'insight', 'advice'] as const;
 
@@ -262,8 +263,10 @@ function SecuritySection() {
     } catch {
       // silent
     }
-    // The reload lands on the login view (components/AuthGate.tsx).
+    // The reload lands on the login view (components/AuthGate.tsx). Before it, the offline copy of the ledger is
+    // deleted (other tabs delete theirs when they see the token go).
     clearAuthToken();
+    await lockMirror();
     window.location.reload();
   }
 

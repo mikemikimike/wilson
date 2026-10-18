@@ -15,6 +15,16 @@ import {
   type AuthStatusResponse,
 } from '@/lib/authSession';
 import { apiErrorMessage, firstAdminBody, validateFirstAdmin } from '@/lib/firstAdmin';
+import { lockMirror, unlockMirror } from '@/store/mirror-client';
+import { noteAuthEnabled, offlineLoginRequired } from '@/store/mirror-session';
+
+function localStore(): Storage | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * GET /api/auth/status with the stored token. A raw fetch rather than api(): an unreachable server must read as
@@ -44,6 +54,9 @@ async function checkAuth(): Promise<AuthCheck> {
  * auth on and no users, the first-admin setup) instead of the app; it re-checks whenever a request comes back 401,
  * this tab changes auth, or another tab logs in or out. The app mounts only once a check lets it, and is rebuilt
  * for a new login, so nothing loaded for the old session survives.
+ *
+ * The offline mirror follows the same decision: it is unlocked only for the app, and wiped before every login or
+ * setup screen. Offline, a profile with auth on and no stored login gets the login form, never the mirror.
  */
 export function AuthGate() {
   const [view, setView] = useState<AuthGateView>({ kind: 'checking' });
@@ -54,7 +67,13 @@ export function AuthGate() {
     () =>
       coalesced(async () => {
         const check = await checkAuth();
-        const { view: next, remount } = settleAuthCheck(check, viewRef.current);
+        const storage = localStore();
+        if (check.kind === 'status' && check.status.authEnabled) noteAuthEnabled(storage);
+        const offlineLocked = offlineLoginRequired(storage, readAuthToken() !== null);
+        const { view: next, remount, wipe } = settleAuthCheck(check, viewRef.current, undefined, offlineLocked);
+        // Wipe before the login view shows; unlock before the app mounts and starts its first sync.
+        if (wipe) await lockMirror();
+        else if (next.kind === 'app') unlockMirror();
         if (remount) setGeneration((g) => g + 1);
         viewRef.current = next;
         setView(next);
@@ -68,6 +87,13 @@ export function AuthGate() {
   }, [recheck]);
 
   useEffect(() => onSessionChange(() => void recheck()), [recheck]);
+
+  // Back online: the offline login form (or an app serving the mirror) checks again.
+  useEffect(() => {
+    const onOnline = () => void recheck();
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [recheck]);
 
   // Another tab logged in or out (storage events only reach the OTHER tabs of this origin).
   useEffect(() => {
@@ -89,7 +115,7 @@ export function AuthGate() {
     case 'app':
       return <App key={generation} />;
     case 'login':
-      return <LoginView sessionEnded={view.sessionEnded} onLoggedIn={loggedIn} />;
+      return <LoginView sessionEnded={view.sessionEnded} offline={view.offline === true} onLoggedIn={loggedIn} onRecheck={() => void recheck()} />;
     case 'setup':
       return <SetupView onLoggedIn={loggedIn} onRecheck={() => void recheck()} />;
     case 'unavailable':
@@ -128,7 +154,17 @@ const inputClass = 'w-full bg-surface border border-border rounded-md px-3 py-2 
 const submitClass =
   'w-full bg-green text-black rounded-md px-3 py-2 text-sm font-medium cursor-pointer border-none disabled:opacity-50 disabled:cursor-not-allowed';
 
-function LoginView({ sessionEnded, onLoggedIn }: { sessionEnded: boolean; onLoggedIn: (token: string) => void }) {
+function LoginView({
+  sessionEnded,
+  offline,
+  onLoggedIn,
+  onRecheck,
+}: {
+  sessionEnded: boolean;
+  offline: boolean;
+  onLoggedIn: (token: string) => void;
+  onRecheck: () => void;
+}) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -154,7 +190,21 @@ function LoginView({ sessionEnded, onLoggedIn }: { sessionEnded: boolean; onLogg
 
   return (
     <GateCard title="Sign in">
-      {sessionEnded && (
+      {offline ? (
+        <div role="status" className="space-y-2">
+          <p className="text-sm text-text-muted">
+            You're offline. This profile requires a sign-in, and its offline copy is never shown without one. Sign
+            in when the Wilson server is reachable.
+          </p>
+          <button
+            type="button"
+            onClick={onRecheck}
+            className="w-full bg-border-muted text-text border border-border rounded-md px-3 py-2 text-sm cursor-pointer hover:bg-surface"
+          >
+            Try again
+          </button>
+        </div>
+      ) : sessionEnded && (
         <p className="text-sm text-text-muted">Your session has ended. Sign in to continue.</p>
       )}
       <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); void submit(); }}>

@@ -15,6 +15,7 @@
 import SQLiteESMFactory from 'wa-sqlite/dist/wa-sqlite.mjs';
 import * as SQLite from 'wa-sqlite';
 import { AccessHandlePoolVFS } from 'wa-sqlite/src/examples/AccessHandlePoolVFS.js';
+import { poolDirectoryName } from './mirror-session.js';
 import type { MaybePromise, SqlParams, SqliteBinding, SqliteStatement, SqlRow } from './types.js';
 
 // Extra OPFS pool slots beyond the VFS default of 6: the WAL setup needs the
@@ -24,10 +25,6 @@ import type { MaybePromise, SqlParams, SqliteBinding, SqliteStatement, SqlRow } 
 const EXTRA_POOL_CAPACITY = 12;
 const MIRROR_DB_PATH = '/mirror.sqlite3';
 
-/** Per-profile OPFS pool directory (per-profile mirror keying). */
-export function poolDirectoryName(profile: string): string {
-  return `wilson-mirror-${encodeURIComponent(profile)}`;
-}
 
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
