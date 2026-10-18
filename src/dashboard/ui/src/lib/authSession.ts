@@ -192,6 +192,13 @@ function endedSession(sentToken: string | null, previous: AuthGateView): boolean
 /** What a settled check means for the login session: one began (the app opens for a login), one ended, or neither. */
 export type SessionTransition = 'started' | 'ended' | null;
 
+/**
+ * Whose login the offline mirror was last unlocked for: a user id, null for no login (auth off), undefined when
+ * nothing is known (never unlocked here, or wiped since). The gate keeps it apart from the screen it shows, so a
+ * screen in between (an error, a re-check) cannot hide that the app now opens for someone else.
+ */
+export type MirrorOwner = number | null | undefined;
+
 /** What applying a status check asks of the gate. */
 export interface SettledAuthCheck {
   view: AuthGateView;
@@ -201,6 +208,8 @@ export interface SettledAuthCheck {
   wipe: boolean;
   /** Tell the WebMCP bridge (webmcp-session.ts WILSON_AUTH_SESSION_EVENT); null when nothing changed for it. */
   session: SessionTransition;
+  /** Whose login the mirror belongs to once `view` shows: what the gate passes to the next check. */
+  mirrorOwner: MirrorOwner;
 }
 
 /**
@@ -213,7 +222,9 @@ export interface SettledAuthCheck {
  *
  * Every login or setup screen means auth is on and this tab has no login, so the offline mirror is wiped first,
  * each time (a wipe that found nothing is cheap, and one another tab could not finish gets another go). So is an
- * app that opens for a different login than the one it showed. An app
+ * app that the server opens for a different login than `mirrorOwner`, the one the mirror was last unlocked for,
+ * whatever screen showed in between (an error page, a re-check). It defaults to the login of a `previous` app.
+ * An unreachable server says nothing about who is logged in, so it neither wipes nor changes the owner. An app
  * that opens after the first check of the page is a session starting in place (the WebMCP bridge resyncs); one on
  * the first check is the page load, which the bridge syncs on its own.
  */
@@ -222,6 +233,7 @@ export function settleAuthCheck(
   previous: AuthGateView,
   storage: TokenStorage | null = browserStorage(),
   offlineLocked = false,
+  mirrorOwner: MirrorOwner = previous.kind === 'app' ? previous.userId : undefined,
 ): SettledAuthCheck {
   if (check.kind === 'status' && check.status.authEnabled && !check.status.user && check.sentToken !== null
     && readAuthToken(storage) === check.sentToken) {
@@ -229,14 +241,17 @@ export function settleAuthCheck(
   }
   const view = authGateView(check, previous, offlineLocked);
   const remount = view.kind === 'app' && (previous.kind !== 'app' || previous.userId !== view.userId);
-  // A different login replacing this tab's (another tab signed in as someone else) must not inherit the old one's copy.
-  const switchedUser = remount && previous.kind === 'app' && previous.userId !== null;
-  const wipe = view.kind === 'login' || view.kind === 'setup' || switchedUser;
+  const serverOpensApp = view.kind === 'app' && check.kind === 'status';
+  // A different login (another tab signed in as someone else, or auth switched off) must not inherit a login's copy.
+  const switchedUser = serverOpensApp && typeof mirrorOwner === 'number' && mirrorOwner !== view.userId;
+  const locks = view.kind === 'login' || view.kind === 'setup';
+  const wipe = locks || switchedUser;
   const wasLocked = previous.kind === 'login' || previous.kind === 'setup';
-  const session: SessionTransition = view.kind === 'login' || view.kind === 'setup'
+  const session: SessionTransition = locks
     ? (wasLocked ? null : 'ended')
     : remount && previous.kind !== 'checking' ? 'started' : null;
-  return { view, remount, wipe, session };
+  const owner: MirrorOwner = locks ? undefined : serverOpensApp ? view.userId : mirrorOwner;
+  return { view, remount, wipe, session, mirrorOwner: owner };
 }
 
 /** A `storage` event that changes the session: the token key itself, or the whole store cleared (key null). */

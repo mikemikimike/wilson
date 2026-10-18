@@ -245,6 +245,7 @@ describe('settleAuthCheck', () => {
       remount: false,
       wipe: false,
       session: null,
+      mirrorOwner: 1,
     });
     expect(settleAuthCheck({ kind: 'network-error' }, login, memoryStorage()).view).toEqual(login);
   });
@@ -271,6 +272,7 @@ describe('settleAuthCheck', () => {
       remount: true,
       wipe: true,
       session: 'started',
+      mirrorOwner: 2,
     });
     // Auth switched off in place: the copy was a login's.
     expect(settleAuthCheck({ kind: 'status', status: status({ authEnabled: false }), sentToken: null }, { kind: 'app', userId: 1 }, memoryStorage()).wipe).toBe(true);
@@ -278,6 +280,38 @@ describe('settleAuthCheck', () => {
     // Auth switched on in place (the copy was no login's), or the first login of the page: nothing to drop.
     expect(settleAuthCheck(asUser(1), { kind: 'app', userId: null }, memoryStorage()).wipe).toBe(false);
     expect(settleAuthCheck(asUser(1), { kind: 'checking' }, memoryStorage()).wipe).toBe(false);
+  });
+
+  test('a user switch wipes even when another screen showed in between: the mirror owner, not the last view, decides', () => {
+    const asUser = (id: number): AuthCheck => ({ kind: 'status', status: status({ user: { id, username: 'u', role: 'admin' } }), sentToken: 't' });
+    // app(user 1) -> an error page -> app(user 2): the screen before is not the app, the copy is still user 1's.
+    const err = settleAuthCheck({ kind: 'http-error', message: 'x' }, { kind: 'app', userId: 1 }, memoryStorage(), false, 1);
+    expect(err).toMatchObject({ view: { kind: 'unavailable' }, wipe: false, mirrorOwner: 1 });
+    const back = settleAuthCheck(asUser(2), err.view, memoryStorage(), false, err.mirrorOwner);
+    expect(back).toMatchObject({ view: { kind: 'app', userId: 2 }, wipe: true, mirrorOwner: 2 });
+    // ...or the page was reloaded meanwhile (the gate starts at 'checking' with the owner it stored).
+    expect(settleAuthCheck(asUser(2), { kind: 'checking' }, memoryStorage(), false, 1).wipe).toBe(true);
+    // The same login after either keeps the copy.
+    expect(settleAuthCheck(asUser(1), { kind: 'unavailable', message: 'x' }, memoryStorage(), false, 1).wipe).toBe(false);
+    expect(settleAuthCheck(asUser(1), { kind: 'checking' }, memoryStorage(), false, 1).wipe).toBe(false);
+    // Auth switched off after an error page: the copy was a login's.
+    const off: AuthCheck = { kind: 'status', status: status({ authEnabled: false }), sentToken: null };
+    expect(settleAuthCheck(off, { kind: 'unavailable', message: 'x' }, memoryStorage(), false, 1)).toMatchObject({ wipe: true, mirrorOwner: null });
+    // A copy made with auth off, or nobody's yet, has no login to protect from the next one.
+    expect(settleAuthCheck(asUser(1), { kind: 'unavailable', message: 'x' }, memoryStorage(), false, null).wipe).toBe(false);
+    expect(settleAuthCheck(asUser(1), { kind: 'checking' }, memoryStorage(), false, undefined).wipe).toBe(false);
+  });
+
+  test('the owner follows what the server said: a login screen forgets it, an unreachable server keeps it', () => {
+    const noLogin: AuthCheck = { kind: 'status', status: status({}), sentToken: null };
+    expect(settleAuthCheck(noLogin, { kind: 'app', userId: 1 }, memoryStorage(), false, 1).mirrorOwner).toBeUndefined();
+    // Offline reload: the app opens with no known login (userId null), and the stored copy is neither wiped nor re-owned.
+    expect(settleAuthCheck({ kind: 'network-error' }, { kind: 'checking' }, memoryStorage(), false, 1)).toMatchObject({
+      view: { kind: 'app', userId: null },
+      wipe: false,
+      mirrorOwner: 1,
+    });
+    expect(settleAuthCheck({ kind: 'http-error', message: 'x' }, { kind: 'checking' }, memoryStorage(), false, 3).mirrorOwner).toBe(3);
   });
 
   test('session transitions for the WebMCP bridge: in-place login starts, losing the app ends, the page load is neither', () => {

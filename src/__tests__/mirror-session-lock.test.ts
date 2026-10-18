@@ -6,6 +6,7 @@ import {
   LEDGER_LOCAL_KEYS,
   LEDGER_SESSION_PREFIXES,
   MIRROR_AUTH_PROFILES_KEY,
+  MIRROR_OWNER_KEY,
   MIRROR_PROFILE_KEY,
   POOL_RELEASE_RETRY_MS,
   clearLedgerStorage,
@@ -15,9 +16,11 @@ import {
   poolDirectoryName,
   profilesToWipe,
   readAuthProfiles,
+  readMirrorOwner,
   readStoredMirrorProfile,
   recordProfileAuth,
   removeMirrorPools,
+  writeMirrorOwner,
   type ListableStorage,
   type PoolRoot,
 } from '../dashboard/ui/src/store/mirror-session.js';
@@ -101,6 +104,28 @@ describe('the "auth is on" flag', () => {
     expect(readAuthProfiles(throwingStorage)).toEqual([]);
     expect(readStoredMirrorProfile(throwingStorage)).toBe(DEFAULT_MIRROR_PROFILE);
     expect(() => recordProfileAuth(throwingStorage, 'p', true)).not.toThrow();
+  });
+});
+
+describe('the mirror owner (whose login it was last unlocked for)', () => {
+  test('a user id, "none" for no login, or nothing; survives a reload as an id only', () => {
+    const storage = memoryStorage();
+    expect(readMirrorOwner(storage)).toBeUndefined();
+    writeMirrorOwner(storage, 7);
+    expect(storage.data.get(MIRROR_OWNER_KEY)).toBe('7');
+    expect(readMirrorOwner(storage)).toBe(7);
+    writeMirrorOwner(storage, null);
+    expect(storage.data.get(MIRROR_OWNER_KEY)).toBe('none');
+    expect(readMirrorOwner(storage)).toBeNull();
+    writeMirrorOwner(storage, undefined);
+    expect(storage.data.has(MIRROR_OWNER_KEY)).toBe(false);
+  });
+
+  test('garbage or blocked storage reads as unknown and never throws', () => {
+    expect(readMirrorOwner(memoryStorage({ [MIRROR_OWNER_KEY]: 'admin' }))).toBeUndefined();
+    expect(readMirrorOwner(memoryStorage({ [MIRROR_OWNER_KEY]: '-1' }))).toBeUndefined();
+    expect(readMirrorOwner(throwingStorage)).toBeUndefined();
+    expect(() => writeMirrorOwner(throwingStorage, 1)).not.toThrow();
   });
 });
 
@@ -318,6 +343,13 @@ describe('wiring (source pins: these modules need a browser worker or React)', (
     expect(suspend).toBeGreaterThan(unlock);
     expect(show).toBeGreaterThan(suspend);
     expect(gate).toContain('offlineLoginRequired(storage, readAuthToken() !== null)');
+    // The owner the check is settled against is remembered by the gate (and across reloads), not read off the last view.
+    expect(gate).toContain('const mirrorOwnerRef = useRef(readMirrorOwner(localStore()));');
+    expect(gate).toMatch(/settleAuthCheck\(\s*check, viewRef\.current, undefined, offlineLocked, mirrorOwnerRef\.current,\s*\)/);
+    const remember = gate.indexOf('mirrorOwnerRef.current = mirrorOwner;');
+    expect(remember).toBeGreaterThan(wipe);
+    expect(remember).toBeLessThan(unlock);
+    expect(gate).toContain('writeMirrorOwner(storage, mirrorOwner);');
     expect(gate).toContain("if (check.kind === 'status') noteAuthStatus(storage, check.status.authEnabled);");
   });
 

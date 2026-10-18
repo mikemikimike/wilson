@@ -17,7 +17,7 @@ import {
 } from '@/lib/authSession';
 import { apiErrorMessage, firstAdminBody, validateFirstAdmin } from '@/lib/firstAdmin';
 import { lockMirror, suspendMirror, unlockMirror } from '@/store/mirror-client';
-import { noteAuthStatus, offlineLoginRequired } from '@/store/mirror-session';
+import { noteAuthStatus, offlineLoginRequired, readMirrorOwner, writeMirrorOwner } from '@/store/mirror-session';
 
 function localStore(): Storage | null {
   try {
@@ -64,6 +64,8 @@ export function AuthGate() {
   const [view, setView] = useState<AuthGateView>({ kind: 'checking' });
   const [generation, setGeneration] = useState(0);
   const viewRef = useRef(view);
+  // Whose login the mirror was last unlocked for, whatever screen shows now (settleAuthCheck wipes on a change).
+  const mirrorOwnerRef = useRef(readMirrorOwner(localStore()));
 
   const recheck = useMemo(
     () =>
@@ -72,11 +74,15 @@ export function AuthGate() {
         const storage = localStore();
         if (check.kind === 'status') noteAuthStatus(storage, check.status.authEnabled);
         const offlineLocked = offlineLoginRequired(storage, readAuthToken() !== null);
-        const { view: next, remount, wipe, session } = settleAuthCheck(check, viewRef.current, undefined, offlineLocked);
+        const { view: next, remount, wipe, session, mirrorOwner } = settleAuthCheck(
+          check, viewRef.current, undefined, offlineLocked, mirrorOwnerRef.current,
+        );
         if (session === 'ended') dispatchAuthSession('ended');
         // Wipe before the login view shows (or before the app opens for another login); unlock before the app
         // mounts and starts its first sync. No other screen reads the mirror, so it stays shut behind them.
         if (wipe) await lockMirror();
+        mirrorOwnerRef.current = mirrorOwner;
+        writeMirrorOwner(storage, mirrorOwner);
         if (next.kind === 'app') unlockMirror();
         else if (!wipe) suspendMirror();
         if (remount) setGeneration((g) => g + 1);

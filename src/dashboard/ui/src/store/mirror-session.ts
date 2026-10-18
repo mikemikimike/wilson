@@ -17,6 +17,8 @@
 export const MIRROR_PROFILE_KEY = 'wilson_mirror_profile';
 /** localStorage: JSON array of the profiles last seen with auth on. Names only. */
 export const MIRROR_AUTH_PROFILES_KEY = 'wilson_mirror_auth_profiles';
+/** localStorage: whose login the mirror was last unlocked for (a user id, or "none" for no login). An id only. */
+export const MIRROR_OWNER_KEY = 'wilson_mirror_owner';
 /** The profile the mirror opens when none was stored. */
 export const DEFAULT_MIRROR_PROFILE = 'default';
 
@@ -60,6 +62,31 @@ export function readAuthProfiles(storage: MirrorStorage | null): string[] {
     return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === 'string') : [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * The login the mirror was last unlocked for (lib/authSession.ts MirrorOwner), kept across reloads so a page that
+ * opens for another login (one made in the legacy dashboard, say) still wipes the old one's copy first. A user id,
+ * null for no login, undefined when unknown or unreadable.
+ */
+export function readMirrorOwner(storage: MirrorStorage | null): number | null | undefined {
+  let raw: string | null | undefined;
+  try {
+    raw = storage?.getItem(MIRROR_OWNER_KEY);
+  } catch {
+    return undefined;
+  }
+  if (raw === 'none') return null;
+  return raw && /^\d+$/.test(raw) ? Number(raw) : undefined;
+}
+
+export function writeMirrorOwner(storage: MirrorStorage | null, owner: number | null | undefined): void {
+  try {
+    if (owner === undefined) storage?.removeItem(MIRROR_OWNER_KEY);
+    else storage?.setItem(MIRROR_OWNER_KEY, owner === null ? 'none' : String(owner));
+  } catch {
+    // Blocked storage: the gate still remembers it for this page.
   }
 }
 
