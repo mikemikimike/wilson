@@ -46,6 +46,7 @@ import { computeNetWorth, NET_WORTH_TREND_FEATURE } from '../tools/net-worth/net
 import { computeForecast } from '../tools/query/forecast.js';
 import { IRS_CATEGORIES } from '../tools/tax/irs-categories.js';
 import { CATEGORIES } from '../tools/categorize/categories.js';
+import { embedTransactionIds } from '../utils/embed-on-write.js';
 import { hasLicense } from '../licensing/license.js';
 import { getCheckoutUrl } from '../licensing/upsell.js';
 import { NotFoundError, PrepareError, RubricChangedError, ToolNotFoundError } from './errors.js';
@@ -1615,6 +1616,10 @@ export function commitMutation(
       }
       const ok = updateTransaction(db, id, updates, expectedRevision ?? undefined);
       if (!ok) return { outcome: 'stale' };
+      // The description is part of the embed text: refresh the stored vector, as the chat edit and the REST edit do,
+      // or semantic search keeps matching the old text (the backfill only fills missing rows). Fire-and-forget: the
+      // commit is synchronous, and embedTransactionIds never throws, so an embedding failure never fails the edit.
+      if (updates.description !== undefined) void embedTransactionIds(db, [id]);
       const row = getTransactionById(db, id);
       return { outcome: 'committed', after: row ? { id: row.id, date: row.date, amount: row.amount, category: row.category } : null };
     }

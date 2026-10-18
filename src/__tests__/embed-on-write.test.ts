@@ -107,6 +107,8 @@ const { initFireflyTool, fireflyImportTool } = await import('../tools/import/fir
 const { initEditTransactionTool, editTransactionTool } = await import('../tools/query/edit-transaction.js');
 const { initDeleteTransactionTool, deleteTransactionTool } = await import('../tools/query/delete-transaction.js');
 const { apiUpdateTransaction } = await import('../dashboard/api.js');
+const { approveWebMcpOperation, callTool } = await import('../mcp/engine.js');
+const { grantTools, testScope } = await import('./mcp-helpers.js');
 
 // Restore the plain deterministic fake when this file finishes — module state
 // is process-wide, so a throwing/recording fake left behind would poison
@@ -599,6 +601,70 @@ describe('embed-on-write: update paths', () => {
 
     expect(fake.calls).toEqual(['Sushi Night']);
     expect(getStoredVec(db, restaurant.id)).toEqual(fakeEmbedText('Sushi Night'));
+  });
+});
+
+describe('embed-on-write: WebMCP update_transaction (#162)', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = createTestDb();
+    seedTestData(db);
+  });
+
+  async function approvedEdit(id: number, args: Record<string, unknown>): Promise<void> {
+    const scope = testScope();
+    const grants = grantTools(db, scope, ['update_transaction']);
+    const out = await callTool(db, scope, grants.update_transaction, 'update_transaction', { id, ...args }, 'imperative');
+    if (!out.ok || out.kind !== 'operation') throw new Error('expected a pending operation');
+    expect(approveWebMcpOperation(db, out.operation.id, 'test').outcome).toBe('committed');
+    // The refresh is fire-and-forget from the synchronous commit: let it finish.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  test('an approved description change refreshes the vector', async () => {
+    const restaurant = db
+      .prepare("SELECT id FROM transactions WHERE description = 'Restaurant' ORDER BY id LIMIT 1")
+      .get() as { id: number };
+    upsertEmbeddings(db, [
+      { sourceType: 'transaction', sourceId: restaurant.id, model: DEFAULT_EMBEDDING_MODEL, vec: fakeEmbedText('Restaurant') },
+    ]);
+    const fake = createFakeEmbedder();
+    setEmbedOnWriteEmbedder(fake.embed);
+
+    await approvedEdit(restaurant.id, { description: 'Taco Tuesday' });
+
+    expect(fake.calls).toEqual(['Taco Tuesday']);
+    expect(getStoredVec(db, restaurant.id)).toEqual(fakeEmbedText('Taco Tuesday'));
+  });
+
+  test('an edit that leaves the description alone does not embed', async () => {
+    const restaurant = db
+      .prepare("SELECT id FROM transactions WHERE description = 'Restaurant' ORDER BY id LIMIT 1")
+      .get() as { id: number };
+    upsertEmbeddings(db, [
+      { sourceType: 'transaction', sourceId: restaurant.id, model: DEFAULT_EMBEDDING_MODEL, vec: fakeEmbedText('Restaurant') },
+    ]);
+    const fake = createFakeEmbedder();
+    setEmbedOnWriteEmbedder(fake.embed);
+
+    await approvedEdit(restaurant.id, { notes: 'team lunch' });
+
+    expect(fake.calls).toHaveLength(0);
+    expect(getStoredVec(db, restaurant.id)).toEqual(fakeEmbedText('Restaurant'));
+  });
+
+  test('a failing embedder never fails the commit', async () => {
+    const restaurant = db
+      .prepare("SELECT id FROM transactions WHERE description = 'Restaurant' ORDER BY id LIMIT 1")
+      .get() as { id: number };
+    setEmbedOnWriteEmbedder(async () => {
+      throw new Error('model missing');
+    });
+
+    await approvedEdit(restaurant.id, { description: 'Still Saved' });
+
+    expect((db.prepare('SELECT description FROM transactions WHERE id = @id').get({ id: restaurant.id }) as { description: string }).description).toBe('Still Saved');
   });
 });
 
