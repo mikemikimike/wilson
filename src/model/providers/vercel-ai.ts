@@ -10,10 +10,13 @@ export class VercelAiAdapter implements ProviderAdapter {
     const llmModel = this.modelFactory(model);
     // AI SDK 7 rejects role:'system' inside messages; system text goes through `instructions`.
     const messages = [{ role: 'user' as const, content: userPrompt }];
+    // callLlm's withRetry owns retries; the SDK's own (2 by default) multiplied them, so an
+    // unreachable model took ~20 s per call to fail.
+    const maxRetries = 0;
 
     // Structured output path
     if (outputSchema) {
-      const result = await generateObject({ model: llmModel, instructions: systemPrompt, messages, schema: outputSchema });
+      const result = await generateObject({ model: llmModel, instructions: systemPrompt, messages, schema: outputSchema, abortSignal: signal, maxRetries });
       return {
         content: JSON.stringify(result.object),
         toolCalls: [],
@@ -39,6 +42,7 @@ export class VercelAiAdapter implements ProviderAdapter {
       messages,
       tools: vercelTools,
       abortSignal: signal,
+      maxRetries,
     });
 
     return {

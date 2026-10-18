@@ -153,6 +153,8 @@ describe('held body: the login dies while the body is in flight', () => {
   }
 
   test('control, POST /api/chat: held with a valid login still reaches the chat handler', async () => {
+    // Only reaching the handler matters here; a real run would wait on whatever model is configured.
+    chatSpy.mockImplementationOnce(async () => ({ answer: 'ok', sessionId: null }));
     const status = await sendHeld(CASES[2], async () => {});
     expect(status).not.toBe(401);
     expect(chatSpy).toHaveBeenCalled();
