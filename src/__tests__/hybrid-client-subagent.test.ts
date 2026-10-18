@@ -105,6 +105,13 @@ function ready(port: FakePort): () => Promise<MirrorPrep> {
   return async () => ({ kind: 'ready', port, expectedProfile: 'default', lastSyncedAt: SYNCED });
 }
 
+/** A turn never waits for the model: wait for the background load it started to settle. */
+async function settled(chat: { getModelStatus(): { state: string } }): Promise<void> {
+  for (let i = 0; i < 500 && chat.getModelStatus().state === 'loading'; i++) {
+    await new Promise((r) => setTimeout(r, 1));
+  }
+}
+
 const answerResult: SubagentRunResult = {
   outcome: { kind: 'answer', text: 'Net profit was $3,000.00.', steps: [{ tool: 'profit_loss', args: { period: 'month' }, ok: true, ms: 12, summary: 'x' }] },
   deviceFault: false,
@@ -142,9 +149,14 @@ describe('hybrid client: subagent branch', () => {
       const backend = fakeBackend(async () => answerResult);
       const { chat } = chatFor(config, backend);
       let prepared = 0;
-      const r = await chat.tryLocal('Give me a P&L for June', undefined, null, {
-        subagent: { priorLocalTurns: [], prepareMirror: async () => (prepared++, { kind: 'unavailable' }) },
-      });
+      const turn = () =>
+        chat.tryLocal('Give me a P&L for June', undefined, null, {
+          subagent: { priorLocalTurns: [], prepareMirror: async () => (prepared++, { kind: 'unavailable' }) },
+        });
+      // The first turn starts the model load and goes to the server; the next is local.
+      expect(await turn()).toEqual({ ok: false });
+      await settled(chat);
+      const r = await turn();
       expect(prepared).toBe(0);
       expect(backend.log).toContain('bundleAnswer');
       expect(backend.log).not.toContain('subagentRun');
@@ -189,6 +201,8 @@ describe('hybrid client: subagent branch', () => {
   test('flag ON but no subagent opts supplied (a caller that predates the feature): bundle mode as before', async () => {
     const backend = fakeBackend(async () => answerResult);
     const { chat } = chatFor(cfg({ enabled: true, maxSteps: 3 }), backend);
+    expect(await chat.tryLocal('Give me a P&L for June')).toEqual({ ok: false });
+    await settled(chat);
     const r = await chat.tryLocal('Give me a P&L for June');
     expect(r).toEqual({ ok: true, answer: 'bundle answer', sessionId: 's9', source: 'local' });
   });
@@ -212,7 +226,10 @@ describe('hybrid client: subagent branch', () => {
     for (const prepare of [async (): Promise<MirrorPrep> => ({ kind: 'unavailable' }), async (): Promise<MirrorPrep> => { throw new Error('boom'); }]) {
       const backend = fakeBackend(async () => answerResult);
       const { chat } = chatFor(cfg({ enabled: true, maxSteps: 3 }), backend);
-      const r = await chat.tryLocal('Give me a P&L for June', undefined, null, { subagent: { priorLocalTurns: [], prepareMirror: prepare } });
+      const turn = () => chat.tryLocal('Give me a P&L for June', undefined, null, { subagent: { priorLocalTurns: [], prepareMirror: prepare } });
+      expect(await turn()).toEqual({ ok: false });
+      await settled(chat);
+      const r = await turn();
       expect(r).toEqual({ ok: true, answer: 'bundle answer', sessionId: 's9', source: 'local' });
       expect(backend.log).not.toContain('subagentRun');
     }
@@ -266,11 +283,15 @@ describe('hybrid client: subagent branch', () => {
   test('bundle-fallback outcome runs today\'s bundle mode', async () => {
     const backend = fakeBackend(async () => ({ outcome: { kind: 'bundle-fallback' }, deviceFault: false }));
     const { chat } = chatFor(cfg({ enabled: true, maxSteps: 3 }), backend);
-    const port = new FakePort();
-    const r = await chat.tryLocal('Give me a P&L for June', undefined, null, { subagent: { priorLocalTurns: [], prepareMirror: ready(port) } });
+    const turn = () => chat.tryLocal('Give me a P&L for June', undefined, null, { subagent: { priorLocalTurns: [], prepareMirror: ready(new FakePort()) } });
+    // Round 4 (R4-0): the template-mode run loads nothing; bundle mode needs the model, so the
+    // first fallback starts the load and hands the turn to the server instead of waiting.
+    expect(await turn()).toEqual({ ok: false });
+    expect(backend.log).toEqual(['probe', 'subagentRun', 'load']);
+    await settled(chat);
+    const r = await turn();
     expect(r).toEqual({ ok: true, answer: 'bundle answer', sessionId: 's9', source: 'local' });
-    // Round 4 (R4-0): the template-mode run loads nothing; bundle mode needs the model and loads it then.
-    expect(backend.log).toEqual(['probe', 'subagentRun', 'load', 'bundleAnswer']);
+    expect(backend.log).toEqual(['probe', 'subagentRun', 'load', 'subagentRun', 'bundleAnswer']);
   });
 
   test('cancelled outcome: {ok:false, reason:"cancelled"}, nothing recorded', async () => {
@@ -328,15 +349,20 @@ describe('hybrid client: subagent branch', () => {
       expect(r.ok).toBe(true);
       expect(backend.log).toEqual(['probe', 'subagentRun']);
       expect(generated).toBe(0);
-      expect(labels).not.toContain('Loading local model…');
+      expect(labels.some((l) => /in-tab model/.test(l))).toBe(false);
+      expect(chat.getModelStatus()).toEqual({ state: 'idle' });
       expect(port.closed).toBeGreaterThanOrEqual(1);
     }
   });
 
-  test('R4-0: model compose still loads the model before the run', async () => {
+  test('R4-0: model compose needs the model before the run, and does not wait for it', async () => {
     const backend = fakeBackend(async () => answerResult);
     const { chat } = chatFor(cfg({ enabled: true, maxSteps: 3, compose: 'model' }), backend);
-    const r = await chat.tryLocal('Give me a P&L for June', undefined, null, { subagent: { priorLocalTurns: [], prepareMirror: ready(new FakePort()) } });
+    const turn = () => chat.tryLocal('Give me a P&L for June', undefined, null, { subagent: { priorLocalTurns: [], prepareMirror: ready(new FakePort()) } });
+    expect(await turn()).toEqual({ ok: false });
+    expect(backend.log).toEqual(['probe', 'load']);
+    await settled(chat);
+    const r = await turn();
     expect(r.ok).toBe(true);
     expect(backend.log).toEqual(['probe', 'load', 'subagentRun']);
     expect(backend.runArgs[0].limits.compose).toBe('model');

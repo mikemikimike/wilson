@@ -40,6 +40,12 @@ export interface ModelBackend {
   probe(): Promise<ProbeResult>;
   /** Load (or reuse) the model. `loadFresh` says whether this call initiated the load. */
   load(onProgress?: ProgressCb): Promise<LoadResult>;
+  /**
+   * Whether a load has succeeded and the model is still held (false again after
+   * a worker crash, timeout or model change). Optional: absent means the client
+   * only tracks its own successful loads.
+   */
+  isLoaded?(): boolean;
   bundleAnswer(query: string, bundleText: string, today: string): Promise<BundleAnswerResult>;
   categorize(opts: WorkerCategorizeOpts): Promise<CategorizeResult>;
   /**
@@ -80,10 +86,20 @@ export function createInThreadBackend(engine: ModelEngine, origin: string): Mode
       throw toWorkerError(err);
     }
   };
+  let loadedRepo: string | null = null;
+  let repo: string | null = null;
   return {
-    setModel: (cfg) => engine.setModel(cfg, origin),
+    setModel: (cfg) => {
+      repo = cfg.repo;
+      engine.setModel(cfg, origin);
+    },
     probe: () => engine.probe(),
-    load: (onProgress) => guard(() => engine.load(onProgress)),
+    load: async (onProgress) => {
+      const result = await guard(() => engine.load(onProgress));
+      loadedRepo = repo;
+      return result;
+    },
+    isLoaded: () => loadedRepo !== null && loadedRepo === repo,
     bundleAnswer: (query, bundleText, today) => guard(() => engine.bundleAnswer(query, bundleText, today)),
     categorize: (opts) => guard(() => engine.categorize(opts)),
     subagentRun: (args, onStep, signal) =>
@@ -143,6 +159,8 @@ export function createWorkerBackend(opts: WorkerBackendOpts): ModelBackend {
   let worker: WorkerLike | null = null;
   let model: WorkerModelConfig | null = null;
   let runCounter = 0;
+  /** The worker that finished a load; a respawned worker starts empty. */
+  let loadedIn: WorkerLike | null = null;
 
   function clearCall(id: number): void {
     const t = timers.get(id);
@@ -168,6 +186,7 @@ export function createWorkerBackend(opts: WorkerBackendOpts): ModelBackend {
   function crash(message: string): void {
     const dead = worker;
     worker = null;
+    loadedIn = null;
     for (const id of [...timers.keys()]) clearCall(id);
     progressCbs.clear();
     stepCbs.clear();
@@ -247,6 +266,7 @@ export function createWorkerBackend(opts: WorkerBackendOpts): ModelBackend {
     setModel(cfg) {
       const changed = !model || model.repo !== cfg.repo || model.catalogDtype !== cfg.catalogDtype;
       model = cfg;
+      if (changed) loadedIn = null;
       if (changed && worker) sendInit(worker);
     },
 
@@ -261,7 +281,14 @@ export function createWorkerBackend(opts: WorkerBackendOpts): ModelBackend {
       return call<ProbeResult>('probe', (id) => ({ t: 'probe', id }));
     },
 
-    load: (onProgress) => call<LoadResult>('load', (id) => ({ t: 'load', id }), onProgress),
+    async load(onProgress) {
+      const result = await call<LoadResult>('load', (id) => ({ t: 'load', id }), onProgress);
+      // The worker call() spawned or reused; a crash rejects the call instead.
+      loadedIn = worker;
+      return result;
+    },
+
+    isLoaded: () => loadedIn !== null && loadedIn === worker,
 
     bundleAnswer(query, bundleText, today) {
       const runId = ++runCounter;

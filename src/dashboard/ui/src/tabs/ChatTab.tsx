@@ -22,6 +22,7 @@ import { buildChatRequest, hasHandoffPayload } from '@/lib/chat-request';
 import { syncMirror } from '@/store/mirror-client';
 import type { PriorLocalTurn } from '@/hybrid/worker-protocol';
 import { deriveChatProvenance, isLocalProvenance, linksRenderAsText, localUnavailableNotice, provenanceBadge } from '@/hybrid/core';
+import { inTabStatusLine } from '@/hybrid/load-progress';
 import type { ChatProvenance, HybridResult, ServerModelInfo } from '@/hybrid/core';
 import { Typeahead, type TypeaheadItem } from '@/components/Typeahead';
 import { ComposerBackdrop, MentionIcon } from '@/components/ComposerBackdrop';
@@ -188,6 +189,8 @@ export function ChatTab() {
   const loadSeq = useRef(0);
   const [importOpen, setImportOpen] = useState(false);
   const hybrid = useHybridChat();
+  // First use downloads the in-tab model in the background; turns go to the server meanwhile.
+  const inTabStatus = inTabStatusLine(hybrid.modelStatus);
   // Turns answered on-device in this chat, so a later server handoff can close the history gap.
   const priorLocalTurnsRef = useRef<PriorLocalTurn[]>([]);
   const { sources, loaded: sourcesLoaded, ensureLoaded } = useMentionSources();
@@ -660,8 +663,9 @@ export function ChatTab() {
 
     // ── Local-first: try the on-device WebGPU path ────────────────────────
     // Every hybrid failure resolves {ok:false} (no WebGPU, model load or
-    // generation failure, tool-call attempt, question outside the bundle) and
-    // falls through to the server agent. The belt-and-braces catch guarantees
+    // generation failure, tool-call attempt, question outside the bundle,
+    // in-tab model still downloading or initialising) and falls through to
+    // the server agent at once: a turn never waits for the model. The belt-and-braces catch guarantees
     // hybrid problems can never reach the Error: bubble below, which is
     // reserved for genuine server-path failures. When the local MODEL itself
     // failed, the reason rides along as a small note under the server answer.
@@ -963,7 +967,7 @@ export function ChatTab() {
             <div className="flex justify-start">
               <div className="bg-surface border border-border rounded-lg px-4 py-2.5 text-sm text-text-muted">
                 {progressLabel ? (
-                  /* First-run model download / warmup progress (Track D). */
+                  /* On-device turn progress; the model download shows in the status line above the composer. */
                   <span>{progressLabel}</span>
                 ) : categorizing ? (
                   <span>{categorizeProgressLabel(categorizeProgress)}</span>
@@ -996,6 +1000,7 @@ export function ChatTab() {
             emptyText={sourcesLoaded ? undefined : 'Loading…'}
             status={status}
           />
+          {inTabStatus && <div className="mb-2 text-xs text-text-muted">{inTabStatus}</div>}
           <div ref={composerRowRef} className="flex gap-2 items-end">
             <div className="relative flex-1 min-w-0 bg-surface rounded-lg">
               <ComposerBackdrop

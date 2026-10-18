@@ -7,6 +7,7 @@ import type {
   WilsonHybridChatGlobal,
   CategorizeSampleResult,
   CategorizeSampleOpts,
+  InTabModelStatus,
 } from '@/hybrid/standalone';
 import {
   fetchActiveMirrorProfile,
@@ -88,6 +89,8 @@ export interface UseHybridChatResult {
    * `status` state can be stale. Updated the moment the chunk load resolves.
    */
   getStatus(): ChunkStatus;
+  /** In-tab model status ('idle' until a turn starts the load; turns use the server until 'ready'). */
+  modelStatus: InTabModelStatus;
 }
 
 export function useHybridChat(): UseHybridChatResult {
@@ -98,6 +101,7 @@ export function useHybridChat(): UseHybridChatResult {
   // The chunk is configured exactly once per loaded instance — init() replaces
   // the internal client, which would drop an already-loaded model.
   const initedRef = useRef<WilsonHybridChatGlobal | null>(null);
+  const [modelStatus, setModelStatus] = useState<InTabModelStatus>({ state: 'idle' });
 
   const ensure = useCallback(async (): Promise<WilsonHybridChatGlobal | null> => {
     const base = getBaseUrl();
@@ -116,11 +120,18 @@ export function useHybridChat(): UseHybridChatResult {
   useEffect(() => {
     installDebugHelper();
     let alive = true;
+    let unsubscribe: (() => void) | undefined;
     void ensure().then((hybrid) => {
-      if (alive) setStatus(hybrid ? 'available' : 'unavailable');
+      if (!alive) return;
+      setStatus(hybrid ? 'available' : 'unavailable');
+      // An older chunk without the status API simply never shows a status line.
+      unsubscribe = hybrid?.onModelStatus?.((next) => {
+        if (alive) setModelStatus(next);
+      });
     });
     return () => {
       alive = false;
+      unsubscribe?.();
     };
   }, [ensure]);
 
@@ -178,5 +189,5 @@ export function useHybridChat(): UseHybridChatResult {
 
   const getStatus = useCallback((): ChunkStatus => statusRef.current, []);
 
-  return { tryLocal, categorizeSample, status, getStatus };
+  return { tryLocal, categorizeSample, status, getStatus, modelStatus };
 }

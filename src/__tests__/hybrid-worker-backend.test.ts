@@ -4,7 +4,12 @@ import {
   DEFAULT_RPC_TIMEOUT_MS,
   type WorkerLike,
 } from '../dashboard/ui/src/hybrid/model-backend.js';
-import { createHybridChat, CAPABILITY_STORAGE_KEY, type LocalChatConfigResponse } from '../dashboard/ui/src/hybrid/client.js';
+import {
+  createHybridChat,
+  CAPABILITY_STORAGE_KEY,
+  type InTabModelStatus,
+  type LocalChatConfigResponse,
+} from '../dashboard/ui/src/hybrid/client.js';
 import { DEFAULT_SUBAGENT_LIMITS, isMainToWorker, type MainToWorker, type WorkerToMain } from '../dashboard/ui/src/hybrid/worker-protocol.js';
 
 /**
@@ -14,6 +19,13 @@ import { DEFAULT_SUBAGENT_LIMITS, isMainToWorker, type MainToWorker, type Worker
 
 const MODEL = { repo: 'onnx-community/Qwen3-0.6B-ONNX', displayName: 'Qwen3 0.6B', catalogDtype: 'q4f16' };
 const ORIGIN = 'http://127.0.0.1:3000';
+
+/** A turn never waits for the model: wait for the background load it started to settle. */
+async function settled(chat: { getModelStatus(): { state: string } }): Promise<void> {
+  for (let i = 0; i < 500 && chat.getModelStatus().state === 'loading'; i++) {
+    await new Promise((r) => setTimeout(r, 1));
+  }
+}
 
 class FakeWorker implements WorkerLike {
   onmessage: ((event: { data: unknown }) => void) | null = null;
@@ -305,6 +317,32 @@ describe('createWorkerBackend: subagentRun (spec section 4.1)', () => {
     backend.setModel(MODEL);
     await expect(backend.subagentRun(baseArgs())).rejects.toMatchObject({ phase: 'protocol' });
   });
+
+  // The client hands chat turns to the server unless the model is loaded NOW;
+  // a respawned worker or a different model starts empty.
+  test('isLoaded: true after a load, false again after a crash or a model change', async () => {
+    const workers: FakeWorker[] = [];
+    const backend = createWorkerBackend({
+      origin: ORIGIN,
+      createWorker: () => {
+        const w = new FakeWorker();
+        workers.push(w);
+        return w;
+      },
+    });
+    backend.setModel(MODEL);
+    expect(backend.isLoaded?.()).toBe(false);
+    await backend.load();
+    expect(backend.isLoaded?.()).toBe(true);
+
+    workers[0].onerror?.(new Event('error'));
+    expect(backend.isLoaded?.()).toBe(false);
+    await backend.load();
+    expect(backend.isLoaded?.()).toBe(true);
+
+    backend.setModel({ ...MODEL, repo: 'onnx-community/gemma-4-E2B-it-ONNX', catalogDtype: 'q4' });
+    expect(backend.isLoaded?.()).toBe(false);
+  });
 });
 
 // ── through the hybrid client, with a fake worker ────────────────────────
@@ -371,7 +409,7 @@ describe('createHybridChat over the worker backend', () => {
       w.handler = (msg, self) => {
         if (msg.t === 'probe') self.reply({ t: 'result', id: msg.id, ok: true, result: 'ready' });
         if (msg.t === 'load') {
-          self.reply({ t: 'progress', id: msg.id, label: 'Loading local model… 50%' });
+          self.reply({ t: 'progress', id: msg.id, label: 'Downloading in-tab model (570 MB, first use only)… 50%' });
           self.reply({ t: 'result', id: msg.id, ok: true, result: { loadMs: 3, loadFresh: true, dtype: 'q4f16' } });
         }
         if (msg.t === 'bundleAnswer') self.reply({ t: 'result', id: msg.id, ok: true, result: { kind: 'answer', text } });
@@ -385,12 +423,18 @@ describe('createHybridChat over the worker backend', () => {
   test('a local answer flows main -> worker -> main, and the bundle is built on the main thread', async () => {
     const api = dashboardFetch();
     const { workers, createWorker } = workerThatAnswers('You spent $0 this week.');
-    const chat = createHybridChat({ baseUrl: '', origin: ORIGIN, fetchImpl: api.fn, createWorker });
-    const progress: string[] = [];
+    const statuses: InTabModelStatus[] = [];
+    const chat = createHybridChat({ baseUrl: '', origin: ORIGIN, fetchImpl: api.fn, createWorker, onModelStatus: (s) => statuses.push(s) });
 
-    const r = await chat.tryLocal('how much did I spend?', (l) => progress.push(l));
+    // The first turn starts the load in the worker and goes to the server; its
+    // progress reaches the status, not the turn.
+    expect(await chat.tryLocal('how much did I spend?')).toEqual({ ok: false });
+    await settled(chat);
+    expect(statuses).toContainEqual({ state: 'loading', label: 'Downloading in-tab model (570 MB, first use only)… 50%' });
+    expect(statuses.at(-1)).toEqual({ state: 'ready' });
+
+    const r = await chat.tryLocal('how much did I spend?');
     expect(r).toEqual({ ok: true, answer: 'You spent $0 this week.', sessionId: 's1', source: 'local' });
-    expect(progress).toContain('Loading local model… 50%');
     expect(api.calls.some((c) => c.includes('/api/transactions'))).toBe(true);
     expect(JSON.parse(storage.getItem(CAPABILITY_STORAGE_KEY)!)).toMatchObject({ verdict: 'ready' });
 
@@ -428,9 +472,17 @@ describe('createHybridChat over the worker backend', () => {
         },
       });
 
+      await chat2.tryLocal('q'); // starts the load
+      await settled(chat2);
+      expect(chat2.getModelStatus()).toEqual({ state: 'ready' });
+
       const r1 = await chat2.tryLocal('q');
       expect(r1.ok).toBe(false);
       expect(JSON.parse(storage.getItem(CAPABILITY_STORAGE_KEY)!).verdict).not.toBe('failed');
+      // The respawned worker starts without the model: the next turn reloads it in the background.
+      expect(chat2.getModelStatus()).toEqual({ state: 'idle' });
+      expect(await chat2.tryLocal('q')).toEqual({ ok: false });
+      await settled(chat2);
 
       const r2 = await chat2.tryLocal('q');
       expect(r2.ok).toBe(true);

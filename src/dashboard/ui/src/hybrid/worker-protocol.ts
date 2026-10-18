@@ -23,6 +23,8 @@ export interface WorkerModelConfig {
   displayName: string;
   /** Catalog-pinned ONNX dtype (e.g. 'q4f16'); null means resolve from the Hub file list. */
   catalogDtype: string | null;
+  /** Catalog first-use download size ('~3.6GB'), shown while the weights download; absent/null when unknown. */
+  downloadSize?: string | null;
 }
 
 /** Speed Showdown single-row categorization (callbacks cannot cross postMessage). */
@@ -237,7 +239,8 @@ function isModelConfig(x: unknown): x is WorkerModelConfig {
     isStr(x.repo) &&
     x.repo.length > 0 &&
     isStr(x.displayName) &&
-    (x.catalogDtype === null || isStr(x.catalogDtype))
+    (x.catalogDtype === null || isStr(x.catalogDtype)) &&
+    (x.downloadSize === undefined || x.downloadSize === null || isStr(x.downloadSize))
   );
 }
 
@@ -353,7 +356,7 @@ export function shouldAbort(myRunId: number, activeRunId: number): boolean {
 
 /**
  * A model worker must run on the page's origin. A `data:` URL worker has an
- * opaque origin ('null'): it cannot use the Cache API (the ~570 MB weights
+ * opaque origin ('null'): it cannot use the Cache API (the ~3.6 GB weights
  * would be re-fetched on every load) and its /assets/ort fetches become
  * cross-origin. On any mismatch the worker answers 'unavailable' and loads
  * nothing.

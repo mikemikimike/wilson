@@ -17,6 +17,12 @@
  * Hard contract for the UIs: every failure path — no WebGPU, config/bundle
  * fetch failure, model load/download failure, generation error, worker crash,
  * tool-call or NEED_MORE_DATA output — resolves {ok:false} (→ server path).
+ * So does a turn that needs the model before it is ready: a chat turn never
+ * waits for the first-use download (~3.6 GB for Gemma 4 E2B) or for
+ * initialisation. It starts the load in the background, resolves {ok:false}
+ * at once so the server answers, and later turns use the model once
+ * getModelStatus() says 'ready'. The Speed Showdown's categorizeSample is the
+ * one caller that still waits, because it times the load.
  * Nothing here ever throws into a UI catch block, so no hybrid-eligible
  * failure can surface as an error bubble. When the local MODEL itself failed,
  * {ok:false} carries a `detail` the UI shows as a small note, and the cause is
@@ -64,6 +70,7 @@ import {
   isValidCut,
   type ToolChoice,
 } from './openjev-route.js';
+import { IN_TAB_PREPARING_LABEL } from './load-progress.js';
 import {
   capabilityKey,
   classifyLoadFailure,
@@ -101,6 +108,8 @@ export interface HybridOpts {
   hubFetch?: DtypeFetch;
   /** Test hook: a ready-made backend. */
   backend?: ModelBackend;
+  /** Called on every in-tab model status change (standalone.ts fans it out to the UIs). */
+  onModelStatus?: (status: InTabModelStatus) => void;
   /**
    * TEST SEAM ONLY: replaces the frozen OPEN_JEV_ROUTE_CUT for the open-jev tiebreak. Production never
    * sets it; `null` (the frozen value when no viable cut exists) disables the tiebreak.
@@ -168,11 +177,28 @@ export interface TryLocalOpts {
 /** Session-storage key for the per-session capability verdict (Track D). */
 export const CAPABILITY_STORAGE_KEY = 'wilson-hybrid-capability';
 
+/**
+ * Where the in-tab model is, for a status line beside the chat:
+ * - idle: no load started yet (nothing has needed the model);
+ * - loading: downloading or initialising; `label` is the progress text
+ *   ("Downloading in-tab model (3.6 GB, first use only)… 42%");
+ * - ready: loaded in the worker, so chat turns can use it;
+ * - failed: the last load failed (`detail` says why); the next turn that
+ *   needs the model retries unless the failure is a capability verdict.
+ * Turns are answered by the server whenever this is not 'ready'.
+ */
+export type InTabModelStatus =
+  | { state: 'idle' }
+  | { state: 'loading'; label: string }
+  | { state: 'ready' }
+  | { state: 'failed'; detail: string | null };
+
 function modelConfigOf(cfg: LocalChatConfigResponse): WorkerModelConfig {
   return {
     repo: cfg.repo,
     displayName: cfg.displayName,
     catalogDtype: isOnnxDtype(cfg.dtype) ? cfg.dtype : null,
+    downloadSize: typeof cfg.downloadSize === 'string' ? cfg.downloadSize : null,
   };
 }
 
@@ -303,6 +329,64 @@ export function createHybridChat(opts: HybridOpts) {
     return 'ready';
   }
 
+  // ── In-tab model status (the non-blocking first use) ──────────────────
+  let modelStatus: InTabModelStatus = { state: 'idle' };
+  /** Backend the last successful load ran on; null = the model is not known to be loaded. */
+  let readyOn: ModelBackend | null = null;
+  let backgroundLoad: Promise<unknown> | null = null;
+
+  function setModelStatus(next: InTabModelStatus): void {
+    modelStatus = next;
+    try {
+      opts.onModelStatus?.(next);
+    } catch {
+      // a listener's problem never reaches the chat path
+    }
+  }
+
+  /** Ready only while the backend that loaded the model still holds it (a crashed worker respawns empty). */
+  function modelReady(): boolean {
+    const backend = getBackend();
+    return readyOn !== null && backend === readyOn && backend.isLoaded?.() !== false;
+  }
+
+  /** The worker lost the model (crash, timeout, device fault): later turns go to the server until it reloads. */
+  function markModelLost(): void {
+    if (readyOn === null) return;
+    readyOn = null;
+    setModelStatus({ state: 'idle' });
+  }
+
+  /**
+   * Start loading the model in the background, once; status updates carry the
+   * progress. Never rejects: loadModel resolves null on any failure.
+   */
+  function startBackgroundLoad(): void {
+    if (backgroundLoad) return;
+    setModelStatus({ state: 'loading', label: IN_TAB_PREPARING_LABEL });
+    backgroundLoad = loadModel((label) => {
+      if (modelStatus.state === 'loading') setModelStatus({ state: 'loading', label });
+    })
+      .catch(() => null)
+      .finally(() => {
+        backgroundLoad = null;
+      });
+  }
+
+  /**
+   * For a turn that needs the model: null when it is ready now. Otherwise
+   * starts (or keeps) the background load and returns the {ok:false} the turn
+   * resolves with, so the server answers instead of the turn waiting. It
+   * carries the previous load's failure when that is why the model is not
+   * ready (the load being retried now).
+   */
+  function notReadyForTurn(): HybridResult | null {
+    if (modelReady()) return null;
+    const lastFailure = modelStatus.state === 'failed' ? modelStatus.detail : null;
+    startBackgroundLoad();
+    return unavailableResult(lastFailure);
+  }
+
   // ── Model load + real-generation proof (layer 3), in the worker ─────────
   /** Reason the last load failed (any failure, not only dtype errors). */
   let lastLoadError: string | null = null;
@@ -319,6 +403,8 @@ export function createHybridChat(opts: HybridOpts) {
       failureDetail = null;
       verdict = 'ready';
       persist();
+      readyOn = backend;
+      setModelStatus({ state: 'ready' });
       return loaded;
     } catch (thrown) {
       const failure = asWorkerError(thrown);
@@ -340,6 +426,8 @@ export function createHybridChat(opts: HybridOpts) {
         failureDetail = lastLoadError;
         persist();
       }
+      readyOn = null;
+      setModelStatus({ state: 'failed', detail: lastLoadError });
       return null;
     }
   }
@@ -379,6 +467,10 @@ export function createHybridChat(opts: HybridOpts) {
     onProgress?: ProgressCb,
     sessionId?: string | null,
   ): Promise<HybridResult> {
+    // Never wait for the model: not ready → the server answers this turn while it loads.
+    const notReady = notReadyForTurn();
+    if (notReady) return notReady;
+
     // ── Pre-fetched context bundle (localhost only, existing endpoints) ──
     // Fetched here, on the main thread: these are authed requests and the
     // worker never holds the token.
@@ -420,15 +512,18 @@ export function createHybridChat(opts: HybridOpts) {
     });
     const bundle = buildBundle(projected, weekly, cfg.bundle);
 
-    // ── Model + generation (in the worker) ──────────────────────────────
-    onProgress?.('Loading local model…');
-    const loaded = await loadModel(onProgress);
-    if (!loaded) return unavailableResult(lastLoadError);
-
+    // ── Generation (in the worker; the model is loaded) ──────────────────
     onProgress?.('Thinking locally…');
     const backend = getBackend();
     if (!backend) return { ok: false };
-    const classified = await backend.bundleAnswer(query, bundle.text, isoDaysAgo(0));
+    let classified;
+    try {
+      classified = await backend.bundleAnswer(query, bundle.text, isoDaysAgo(0));
+    } catch (thrown) {
+      // A crashed or timed-out worker respawns without the model.
+      if (asWorkerError(thrown).phase === 'protocol') markModelLost();
+      throw thrown;
+    }
     if (classified.kind === 'handoff') {
       return { ok: false, reason: classified.reason };
     }
@@ -532,10 +627,10 @@ export function createHybridChat(opts: HybridOpts) {
       }
       // Round 4 (R4-0): template mode writes the answer without the model, so the turn
       // never loads it (no download, no GPU session). Only compose: 'model' needs it.
+      // Never waits: a model that is not ready yet hands the turn to the server.
       if (limits.compose === 'model') {
-        onProgress?.('Loading local model…');
-        const loaded = await loadModel(onProgress);
-        if (!loaded) return unavailableResult(lastLoadError);
+        const notReady = notReadyForTurn();
+        if (notReady) return notReady;
       }
       const backend = getBackend();
       if (!backend) return unavailableResult(lastLoadError);
@@ -561,8 +656,11 @@ export function createHybridChat(opts: HybridOpts) {
       } catch (thrown) {
         // A crashed or timed-out worker (respawned next call). Not a capability failure.
         console.warn('[hybrid-chat] subagent run failed; using the server path:', thrown);
+        markModelLost();
         return handoffResult('error', { priorLocalTurns: sub.priorLocalTurns, mirrorSyncedAt: prep.lastSyncedAt });
       }
+      // The backend restarts the worker after a device fault, dropping the model.
+      if (run.deviceFault) markModelLost();
 
       const outcome = run.outcome;
       switch (outcome.kind) {
@@ -604,7 +702,7 @@ export function createHybridChat(opts: HybridOpts) {
 
       // ── Subagent gate (pure, main thread) ───────────────────────────────
       // Runs before the probe, the model download, the mirror port and the
-      // bundle fetch: a mutation or non-data question never costs a ~570 MB
+      // bundle fetch: a mutation or non-data question never costs a ~3.6 GB
       // first-run download or a GPU session. Only when the server enabled the
       // subagent AND the caller supplied the mirror half.
       const sub = cfg.subagent?.enabled ? opts?.subagent : undefined;
@@ -674,7 +772,7 @@ export function createHybridChat(opts: HybridOpts) {
       if (verdict === 'failed') return failureDetail ? { ...failed('failed'), detail: failureDetail } : failed('failed');
       if (!shouldAttemptLocal(verdict)) return failed('unavailable');
 
-      opts.onProgress?.('Loading local model…');
+      opts.onProgress?.(IN_TAB_PREPARING_LABEL);
       const loadStart = performance.now();
       const loaded = await loadModel(opts.onProgress);
       if (!loaded) return lastLoadError ? { ...failed('failed'), detail: lastLoadError } : failed('failed');
@@ -711,6 +809,7 @@ export function createHybridChat(opts: HybridOpts) {
   function dispose(): void {
     backendInstance?.dispose();
     backendInstance = undefined;
+    markModelLost();
   }
 
   return {
@@ -718,6 +817,8 @@ export function createHybridChat(opts: HybridOpts) {
     loadModel,
     tryLocal,
     categorizeSample,
+    /** Current in-tab model status (HybridOpts.onModelStatus reports each change). */
+    getModelStatus: (): InTabModelStatus => modelStatus,
     dispose,
   };
 }

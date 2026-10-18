@@ -17,6 +17,7 @@ import {
   type LocalVerdict,
 } from './core.js';
 import type { LoadPhase } from './capability.js';
+import { createLoadProgressReporter, IN_TAB_WARMUP_LABEL } from './load-progress.js';
 import { isOnnxDtype, resolveTransformersDtype, type DtypeFetch } from '../../../../model/transformers-dtype.js';
 import type {
   CategorizeResult,
@@ -35,6 +36,10 @@ export interface TransformersModule {
   env: any;
   /** Lets a run stop a generation mid-flight (transformers.js exports it; optional so fakes can omit it). */
   InterruptableStoppingCriteria?: new () => { interrupt(): void };
+  /** Cache inspection (transformers.js 4.x; optional so fakes can omit it). */
+  ModelRegistry?: {
+    is_pipeline_cached?: (task: string, modelId: string, options?: Record<string, unknown>) => Promise<boolean>;
+  };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -87,10 +92,30 @@ async function detectShaderF16(): Promise<boolean | undefined> {
 
 const defaultHubFetch: DtypeFetch = (url, init) => globalThis.fetch(url, init);
 
-interface ProgressEvent {
-  status?: string;
-  progress?: number;
-  file?: string;
+/** Upper bound on the pre-load cache check; past it the load reports as a download. */
+const CACHE_CHECK_TIMEOUT_MS = 3000;
+
+/**
+ * Are all of the pipeline's files in the Cache API? Undefined when it cannot
+ * be told (no ModelRegistry, an error, or too slow): the caller then labels
+ * the load as a download, the only wording that is true on a first use.
+ */
+async function isPipelineCached(tf: TransformersModule, repo: string, dtype: string): Promise<boolean | undefined> {
+  const registry = tf.ModelRegistry;
+  if (typeof registry?.is_pipeline_cached !== 'function') return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      registry.is_pipeline_cached('text-generation', repo, { dtype, device: 'webgpu' }).then((v) => v === true),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), CACHE_CHECK_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    return undefined;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /**
@@ -170,14 +195,6 @@ export function createModelEngine(engineOpts: ModelEngineOpts) {
         }
         env.allowLocalModels = false;
 
-        const progress = (p: ProgressEvent) => {
-          if (p.status === 'progress' && typeof p.progress === 'number') {
-            onProgress?.(`Loading local model… ${Math.round(p.progress)}%`);
-          } else if (p.status === 'initiate') {
-            onProgress?.('Loading local model…');
-          }
-        };
-
         // Shared resolver (same module as the server adapter): the catalog
         // pin from /api/config/local-chat wins without network; only a GPU
         // without shader-f16 (or an uncatalogued repo) consults the Hub file
@@ -190,6 +207,14 @@ export function createModelEngine(engineOpts: ModelEngineOpts) {
         });
         dtypeUsed = dtype;
 
+        // "Downloading" (with the catalog size) unless every file is already
+        // cached: transformers.js reports a cache read and a download alike.
+        const progress = createLoadProgressReporter({
+          cached: await isPipelineCached(loaded, cfg.repo, dtype),
+          downloadSize: cfg.downloadSize,
+          emit: (label) => onProgress?.(label),
+        });
+
         phase = 'load';
         const pipe: AnyPipeline = await pipeline('text-generation', cfg.repo, {
           device: 'webgpu',
@@ -201,7 +226,7 @@ export function createModelEngine(engineOpts: ModelEngineOpts) {
         // that counts. An adapter that passes requestAdapter() but cannot run
         // the model fails here -> capability 'failed' for this config.
         phase = 'warmup';
-        onProgress?.('Warming up local model…');
+        onProgress?.(IN_TAB_WARMUP_LABEL);
         await pipe([{ role: 'user', content: 'Reply with the single word OK.' }], {
           max_new_tokens: 16,
           do_sample: false,

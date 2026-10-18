@@ -100,6 +100,8 @@ describe('hybrid chat init with an origin-prefixing fetch', () => {
     const api = originFetch();
     const backend = answeringBackend();
     const chat = createHybridChat({ ...hybridOptsForOriginFetch(api.fn), backend });
+    // Warm the model first: a turn never waits for it.
+    expect(await chat.loadModel()).not.toBeNull();
     const r = await chat.tryLocal('how much did I spend this week?');
     expect(r).toMatchObject({ ok: true, source: 'local' });
     expect(backend.log).toContain('bundleAnswer');

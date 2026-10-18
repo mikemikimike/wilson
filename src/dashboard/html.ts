@@ -8,6 +8,7 @@
  * function escapes ALL HTML entities before applying markdown transforms.
  */
 import { PROVENANCE_LABELS } from './chat-provenance.js';
+import { IN_TAB_PREPARING_LABEL, IN_TAB_SERVER_MEANWHILE } from './ui/src/hybrid/load-progress.js';
 
 export function getDashboardHtml(port: number): string {
   return `<!DOCTYPE html>
@@ -108,6 +109,7 @@ export function getDashboardHtml(port: number): string {
   .chat-msg .text table { border-collapse:collapse; margin:8px 0; font-size:13px; }
   .chat-msg .text table th,.chat-msg .text table td { border:1px solid #30363d; padding:4px 8px; }
   .chat-msg .text table th { background:#21262d; }
+  .chat-model-status { font-size:12px; color:#8b949e; margin-bottom:6px; }
   .chat-input-row { display:flex; gap:8px; }
   .chat-input-row input { flex:1; background:#21262d; color:#e1e4e8; border:1px solid #30363d; padding:10px 14px; border-radius:6px; font-size:14px; }
   .chat-input-row input:focus { outline:none; border-color:#58a6ff; }
@@ -316,6 +318,7 @@ export function getDashboardHtml(port: number): string {
     </div>
     <div class="chat-main">
       <div class="chat-messages" id="chatMessages"></div>
+      <div class="chat-model-status" id="chatModelStatus" hidden></div>
       <div class="chat-input-row">
         <input type="text" id="chatInput" placeholder="Ask Open Accountant anything..." />
         <button id="chatSend">Send</button>
@@ -473,6 +476,15 @@ export function getDashboardHtml(port: number): string {
     if (hybridInited || !window.WilsonHybridChat) return;
     window.WilsonHybridChat.init({ baseUrl: BASE, fetchImpl: authFetch });
     hybridInited = true;
+    // First use downloads the in-tab model in the background while the server
+    // answers; mirrors inTabStatusLine in ui/src/hybrid/load-progress.ts.
+    if (window.WilsonHybridChat.onModelStatus) {
+      window.WilsonHybridChat.onModelStatus(function(s) {
+        var line = s && s.state === 'loading' ? (s.label || ${JSON.stringify(IN_TAB_PREPARING_LABEL)}) + ${JSON.stringify(IN_TAB_SERVER_MEANWHILE)} : '';
+        var el = document.getElementById('chatModelStatus');
+        if (el) { el.textContent = line; el.hidden = !line; }
+      });
+    }
   }
 
   // ── Auth ─────────────────────────────────────────────────────────────────

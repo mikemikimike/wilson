@@ -197,12 +197,22 @@ function stored() {
   return parsePersistedCapability(storage.getItem(CAPABILITY_STORAGE_KEY));
 }
 
+/** A turn never waits for the model: wait for the background load it started to settle. */
+async function settled(chat: { getModelStatus(): { state: string } }): Promise<void> {
+  for (let i = 0; i < 500 && chat.getModelStatus().state === 'loading'; i++) {
+    await new Promise((r) => setTimeout(r, 1));
+  }
+}
+
 describe('createHybridChat load failures', () => {
   test('a stale unkeyed failed verdict (old fp16 bug) is retried and succeeds', async () => {
     storage.setItem(CAPABILITY_STORAGE_KEY, JSON.stringify({ verdict: 'failed', repo: REPO }));
     const tf = fakeTransformers();
     const chat = createHybridChat({ baseUrl: '', fetchImpl: dashboardFetch(), loadTransformers: tf.loadTransformers });
 
+    // The first turn starts the load and goes to the server; the next one is local.
+    expect(await chat.tryLocal('how much did I spend?')).toEqual({ ok: false });
+    await settled(chat);
     const r = await chat.tryLocal('how much did I spend?');
     expect(r.ok).toBe(true);
     expect(tf.loads).toEqual([{ repo: REPO, dtype: 'q4f16' }]);
@@ -228,6 +238,8 @@ describe('createHybridChat load failures', () => {
     );
     const tf = fakeTransformers();
     const chat = createHybridChat({ baseUrl: '', fetchImpl: dashboardFetch(), loadTransformers: tf.loadTransformers });
+    await chat.tryLocal('q');
+    await settled(chat);
     expect((await chat.tryLocal('q')).ok).toBe(true);
     expect(tf.loads).toHaveLength(1);
   });
@@ -238,14 +250,19 @@ describe('createHybridChat load failures', () => {
       const tf = fakeTransformers({ failWith: new TypeError('Failed to fetch') });
       const chat = createHybridChat({ baseUrl: '', fetchImpl: dashboardFetch(), loadTransformers: tf.loadTransformers });
 
-      const r1 = await chat.tryLocal('q');
-      expect(r1.ok).toBe(false);
-      expect(!r1.ok && r1.detail).toContain('Failed to fetch');
+      // The turn that starts the load does not wait for it to fail.
+      expect(await chat.tryLocal('q')).toEqual({ ok: false });
+      await settled(chat);
+      expect(chat.getModelStatus()).toMatchObject({ state: 'failed' });
       expect(warn).toHaveBeenCalled();
       expect(String(warn.mock.calls[0][0])).toContain('local model load failed');
       expect(stored()?.verdict).not.toBe('failed');
 
-      await chat.tryLocal('q');
+      // The next turn carries the failure as detail and retries in the background.
+      const r2 = await chat.tryLocal('q');
+      expect(r2.ok).toBe(false);
+      expect(!r2.ok && r2.detail).toContain('Failed to fetch');
+      await settled(chat);
       expect(tf.loads).toHaveLength(2);
     } finally {
       warn.mockRestore();
@@ -258,9 +275,10 @@ describe('createHybridChat load failures', () => {
       const tf = fakeTransformers({ failWith: new Error('GPU device lost'), failAt: 'warmup' });
       const chat = createHybridChat({ baseUrl: '', fetchImpl: dashboardFetch(), loadTransformers: tf.loadTransformers });
 
-      const r1 = await chat.tryLocal('q');
-      expect(!r1.ok && r1.detail).toContain('GPU device lost');
+      await chat.tryLocal('q');
+      await settled(chat);
       expect(stored()).toMatchObject({ verdict: 'failed', key: KEY });
+      expect(chat.getModelStatus()).toMatchObject({ state: 'failed' });
 
       const r2 = await chat.tryLocal('q');
       expect(!r2.ok && r2.detail).toContain('GPU device lost');
@@ -288,6 +306,8 @@ describe('createHybridChat load failures', () => {
         hubFetch,
       });
 
+      await chat.tryLocal('q');
+      await settled(chat);
       const r = await chat.tryLocal('q');
       expect(!r.ok && r.detail).toContain('shader-f16');
       expect(tf.loads).toEqual([]);
