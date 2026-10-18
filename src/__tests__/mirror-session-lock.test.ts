@@ -10,6 +10,7 @@ import {
   MIRROR_PROFILE_KEY,
   POOL_RELEASE_RETRY_MS,
   clearLedgerStorage,
+  listMirrorPoolProfiles,
   noteAuthEnabled,
   offlineLoginRequired,
   poolDirectoryName,
@@ -182,6 +183,39 @@ describe('what a wipe removes', () => {
     expect(profilesToWipe(memoryStorage(), null)).toEqual([DEFAULT_MIRROR_PROFILE]);
   });
 
+  test('every pool found on disk goes too: a 0.8/0.9 browser synced profiles it never recorded', async () => {
+    const names = [
+      poolDirectoryName('household'),
+      poolDirectoryName('old-business'),
+      poolDirectoryName('my/profile'),
+      'wilson-mirror-%E0%A4', // not a name the VFS makes (does not decode)
+      'wilson-mirror-a b', // nor this (poolDirectoryName('a b') is wilson-mirror-a%20b)
+      'wilson-mirror-',
+      'unrelated',
+    ];
+    const root: PoolRoot = {
+      async removeEntry() {},
+      async *keys() { yield* names; },
+    };
+    const onDisk = await listMirrorPoolProfiles(root);
+    expect(onDisk).toEqual(['household', 'old-business', 'my/profile']);
+    const storage = memoryStorage({ [MIRROR_PROFILE_KEY]: 'household', [MIRROR_AUTH_PROFILES_KEY]: '[]' });
+    expect(profilesToWipe(storage, 'household', onDisk)).toEqual(['household', 'old-business', 'my/profile']);
+  });
+
+  test('a root that cannot be listed yields what was read; no root or no keys() yields nothing', async () => {
+    const failing: PoolRoot = {
+      async removeEntry() {},
+      async *keys() {
+        yield poolDirectoryName('a');
+        throw new Error('NotAllowedError');
+      },
+    };
+    expect(await listMirrorPoolProfiles(failing)).toEqual(['a']);
+    expect(await listMirrorPoolProfiles(null)).toEqual([]);
+    expect(await listMirrorPoolProfiles({ async removeEntry() {} })).toEqual([]);
+  });
+
   test('the ledger-derived entries outside the pool go; consent and capability flags stay', () => {
     const local = memoryStorage({
       [RECENT_MENTIONS_KEY]: '[{"type":"merchant","label":"Blue Bottle"}]',
@@ -324,6 +358,10 @@ describe('wiring (source pins: these modules need a browser worker or React)', (
   test('a lock bumps the session before its wipe goes to the worker, which closes the pool and deletes it', () => {
     expect(client).toMatch(/export function lockMirror\(\): Promise<void> \{\n {2}locked = true;\n {2}sessionEpoch\+\+;/);
     expect(client).toContain("await rpc('wipe', { profiles }");
+    // The list includes every pool on the OPFS root, read before the wipe goes out.
+    const listing = client.indexOf('profilesToWipe(local, state.profile, await listMirrorPoolProfiles(root))');
+    expect(listing).toBeGreaterThan(-1);
+    expect(listing).toBeLessThan(client.indexOf("await rpc('wipe', { profiles }"));
     expect(client).toContain('clearLedgerStorage(local, sessionStore());');
     expect(worker).toContain("case 'wipe': {");
     expect(worker).toContain('return removeMirrorPools(root,');

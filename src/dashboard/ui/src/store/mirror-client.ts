@@ -20,6 +20,7 @@ import {
   MIRROR_PROFILE_KEY,
   POOL_RELEASE_RETRY_MS,
   clearLedgerStorage,
+  listMirrorPoolProfiles,
   profilesToWipe,
   readStoredMirrorProfile,
   recordProfileAuth,
@@ -404,11 +405,22 @@ export function suspendMirror(): void {
 
 let wiping: Promise<void> | null = null;
 
+/** The OPFS root, or null where there is none (no OPFS, private mode). */
+async function opfsRoot(): Promise<PoolRoot | null> {
+  try {
+    return (await navigator.storage.getDirectory()) as unknown as PoolRoot;
+  } catch {
+    return null;
+  }
+}
+
 async function doWipe(): Promise<void> {
   // A worker still opening its pool is let finish, so it holds the handles it must release.
   if (initPromise) await initPromise.catch(() => undefined);
   const local = localStore();
-  const profiles = profilesToWipe(local, state.profile);
+  const root = await opfsRoot();
+  // Every pool on disk too, not only the profiles this browser recorded (0.8/0.9 recorded none).
+  const profiles = profilesToWipe(local, state.profile, await listMirrorPoolProfiles(root));
   const w = worker;
   let failed = profiles;
   if (w) {
@@ -425,16 +437,12 @@ async function doWipe(): Promise<void> {
   initPromise = null;
   lastFailedInitAt = 0;
   setMirrorState({ available: false, profile: null, seeded: false, lastSyncedAt: null, online: false });
-  if (failed.length > 0) {
-    // No worker in this tab (another tab's owns the pool, or none ever opened), or it could not finish. A worker
-    // terminated just above lets go of its access handles a moment later, so its pools get a short backoff.
-    try {
-      const root = (await navigator.storage.getDirectory()) as unknown as PoolRoot;
-      const result = await removeMirrorPools(root, failed, { retryDelaysMs: w ? POOL_RELEASE_RETRY_MS : [] });
-      if (result.failed.length > 0) console.warn('[mirror] pool still held (another tab wipes its own when it sees the logout):', result.failed.length);
-    } catch {
-      // No OPFS here: there is no pool to remove.
-    }
+  // No worker in this tab (another tab's owns the pool, or none ever opened), or it could not finish. A worker
+  // terminated just above lets go of its access handles a moment later, so its pools get a short backoff. No OPFS
+  // here (no root): there is no pool to remove.
+  if (failed.length > 0 && root) {
+    const result = await removeMirrorPools(root, failed, { retryDelaysMs: w ? POOL_RELEASE_RETRY_MS : [] });
+    if (result.failed.length > 0) console.warn('[mirror] pool still held (another tab wipes its own when it sees the logout):', result.failed.length);
   }
   clearLedgerStorage(local, sessionStore());
 }

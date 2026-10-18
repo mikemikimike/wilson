@@ -12,6 +12,8 @@
  *   2. The worker's 'wipe' closes the pool and removes it itself: { removed: [profile], failed: [] }, OPFS empty.
  *   3. The fallback after terminate(): the pool of a worker terminated a moment ago is removed by
  *      removeMirrorPools with POOL_RELEASE_RETRY_MS (mirror-client.ts doWipe).
+ *   4. listMirrorPoolProfiles reads every pool on the real OPFS root (keys() on a real directory handle), including
+ *      one no longer open, and a wipe of that list leaves none.
  *
  * Touches nothing outside a throwaway Chromium profile (no ~/.openaccountant, no keychain, no server).
  * Exits non-zero on any failed check.
@@ -47,8 +49,8 @@ const workerJs = await bundle(join(storeDir, 'mirror-worker.ts'));
 const pageEntry = join(import.meta.dir, '.mirror-wipe-smoke-page.ts');
 await Bun.write(
   pageEntry,
-  `import { POOL_RELEASE_RETRY_MS, removeMirrorPools } from ${JSON.stringify(join(storeDir, 'mirror-session.ts'))};\n` +
-    `(globalThis as any).smoke = { POOL_RELEASE_RETRY_MS, removeMirrorPools };\n`,
+  `import { POOL_RELEASE_RETRY_MS, listMirrorPoolProfiles, removeMirrorPools } from ${JSON.stringify(join(storeDir, 'mirror-session.ts'))};\n` +
+    `(globalThis as any).smoke = { POOL_RELEASE_RETRY_MS, listMirrorPoolProfiles, removeMirrorPools };\n`,
 );
 let pageJs: string;
 try {
@@ -130,7 +132,16 @@ try {
     const fallback = await smoke.removeMirrorPools(root, ['smoke-b'], { retryDelaysMs: smoke.POOL_RELEASE_RETRY_MS });
     const afterFallback = await list();
 
-    return { opened, afterOpen, heldError, wiped, afterWipe, fallback, afterFallback };
+    // 4: two pools on disk (the first closed when the worker switched profile); the listing finds both.
+    const c = spawn();
+    await c.rpc('init', { profile: 'smoke-c' });
+    await c.rpc('setProfile', { profile: 'smoke d/e' });
+    const listed = (await smoke.listMirrorPoolProfiles(root)).sort();
+    const listedWipe = await c.rpc('wipe', { profiles: listed });
+    const afterListedWipe = await list();
+    c.w.terminate();
+
+    return { opened, afterOpen, heldError, wiped, afterWipe, fallback, afterFallback, listed, listedWipe, afterListedWipe };
   });
 
   check('worker opened the pool', result.afterOpen.includes('wilson-mirror-smoke-a'), result);
@@ -139,6 +150,8 @@ try {
   check('no pool left after the wipe', !result.afterWipe.includes('wilson-mirror-smoke-a'), result.afterWipe);
   check('backoff removes a just-terminated worker\'s pool', JSON.stringify(result.fallback) === JSON.stringify({ removed: ['smoke-b'], failed: [] }), result.fallback);
   check('no pool left after the fallback', result.afterFallback.length === 0, result.afterFallback);
+  check('the OPFS listing finds every pool, open or not', JSON.stringify(result.listed) === JSON.stringify(['smoke d/e', 'smoke-c']), result.listed);
+  check('a wipe of the listed pools leaves none', result.afterListedWipe.length === 0 && result.listedWipe.failed.length === 0, result);
 } finally {
   await browser.close();
   server.stop(true);

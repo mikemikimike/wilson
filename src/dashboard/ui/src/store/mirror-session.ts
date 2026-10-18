@@ -43,9 +43,12 @@ export interface ListableStorage extends MirrorStorage {
   key(index: number): string | null;
 }
 
+/** Prefix of every mirror pool directory in the OPFS root (the same since the mirror shipped). */
+export const POOL_DIRECTORY_PREFIX = 'wilson-mirror-';
+
 /** Per-profile OPFS pool directory (per-profile mirror keying). */
 export function poolDirectoryName(profile: string): string {
-  return `wilson-mirror-${encodeURIComponent(profile)}`;
+  return `${POOL_DIRECTORY_PREFIX}${encodeURIComponent(profile)}`;
 }
 
 export function readStoredMirrorProfile(storage: MirrorStorage | null): string {
@@ -160,11 +163,13 @@ export function offlineLoginRequired(storage: MirrorStorage | null, hasToken: bo
 }
 
 /**
- * The pools a session that just ended could have filled: the open one, the stored one, and every profile flagged
- * with auth on (the token is one per browser, so when it is gone none of them has a login).
+ * The pools a session that just ended could have filled: the open one, the stored one, every profile flagged
+ * with auth on (the token is one per browser, so when it is gone none of them has a login), and every pool found
+ * on disk (`poolProfiles`, listMirrorPoolProfiles): a 0.8/0.9 browser synced each profile it was switched to and
+ * recorded none of them.
  */
-export function profilesToWipe(storage: MirrorStorage | null, openProfile: string | null): string[] {
-  const all = [openProfile, readStoredMirrorProfile(storage), ...readAuthProfiles(storage)];
+export function profilesToWipe(storage: MirrorStorage | null, openProfile: string | null, poolProfiles: readonly string[] = []): string[] {
+  const all = [openProfile, readStoredMirrorProfile(storage), ...readAuthProfiles(storage), ...poolProfiles];
   return [...new Set(all.filter((p): p is string => typeof p === 'string' && p.length > 0))];
 }
 
@@ -190,9 +195,36 @@ export function clearLedgerStorage(local: MirrorStorage | null, session: Listabl
   }
 }
 
-/** The slice of FileSystemDirectoryHandle (the OPFS root) used to delete pools. */
+/** The slice of FileSystemDirectoryHandle (the OPFS root) used to list and delete pools. */
 export interface PoolRoot {
   removeEntry(name: string, options?: { recursive?: boolean }): Promise<void>;
+  /** Entry names; absent where the browser does not implement async iteration of directory handles. */
+  keys?(): AsyncIterable<string>;
+}
+
+/**
+ * The profiles whose pool directories exist in `root`: every `wilson-mirror-*` entry whose name decodes to a profile
+ * poolDirectoryName maps back to it (the names the VFS creates; anything else is not a pool this code made). Never
+ * throws: a root that cannot be listed yields what was read so far.
+ */
+export async function listMirrorPoolProfiles(root: PoolRoot | null): Promise<string[]> {
+  const profiles: string[] = [];
+  if (!root || typeof root.keys !== 'function') return profiles;
+  try {
+    for await (const name of root.keys()) {
+      if (typeof name !== 'string' || !name.startsWith(POOL_DIRECTORY_PREFIX)) continue;
+      let profile: string;
+      try {
+        profile = decodeURIComponent(name.slice(POOL_DIRECTORY_PREFIX.length));
+      } catch {
+        continue;
+      }
+      if (profile && poolDirectoryName(profile) === name) profiles.push(profile);
+    }
+  } catch {
+    // Listing failed part-way: the stored and flagged profiles are still wiped.
+  }
+  return profiles;
 }
 
 /**
