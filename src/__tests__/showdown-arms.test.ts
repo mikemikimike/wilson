@@ -8,6 +8,7 @@ import {
   CLOUD_LIVE_LABEL,
   CLOUD_SIMULATED_LABEL,
   LOCAL_SERVER_LABEL,
+  SHOWDOWN_SERVER_LOCAL_MODEL,
 } from '../demo/showdown.js';
 import { getSampleBySlug } from '../demo/samples.js';
 import { callLlm, type CallLlmOptions, type LlmResult } from '../model/llm.js';
@@ -15,6 +16,7 @@ import { traceStore, type LlmTrace } from '../utils/trace-store.js';
 import { interactionStore } from '../utils/interaction-store.js';
 import { createTestDb } from './helpers.js';
 import { getLocalChatModelConfig } from '../model/local-chat.js';
+import { getModelsForProvider } from '../utils/model.js';
 import type { Database } from '../db/compat-sqlite.js';
 
 /**
@@ -199,8 +201,12 @@ describe('runShowdownCloudArm — simulated mode', () => {
 describe('runShowdownLocalServerArm', () => {
   test('warms separately, then times the recorded decision call', async () => {
     const { impl, calls } = recordingCallLlm({ durationMs: 876 });
+    const warmed: string[] = [];
     const res = await runShowdownLocalServerArm('harborview-dental', {
-      warm: async () => ({ loadMs: 4321, loadedFresh: true }),
+      warm: async (repo) => {
+        warmed.push(repo);
+        return { loadMs: 4321, loadedFresh: true };
+      },
       callLlmImpl: impl,
     });
 
@@ -208,9 +214,10 @@ describe('runShowdownLocalServerArm', () => {
     expect(res.label).toBe(LOCAL_SERVER_LABEL);
     expect(res.loadMs).toBe(4321);
     expect(res.loadFresh).toBe(true);
-    expect(res.model).toBe(getLocalChatModelConfig().repo);
+    expect(warmed).toEqual(['onnx-community/Qwen3-0.6B-ONNX']);
+    expect(res.model).toBe('onnx-community/Qwen3-0.6B-ONNX');
     expect(calls).toHaveLength(1);
-    expect(calls[0].options?.model).toBe(getLocalChatModelConfig().id);
+    expect(calls[0].options?.model).toBe(SHOWDOWN_SERVER_LOCAL_MODEL);
     expect(calls[0].options?.maxTokens).toBe(128);
     expect(calls[0].prompt).toBe(buildShowdownUserPrompt(getSampleBySlug('harborview-dental')));
 
@@ -218,6 +225,15 @@ describe('runShowdownLocalServerArm', () => {
     expect(res.traceId).toBe(recorded.id);
     expect(res.decisionMs).toBe(recorded.durationMs);
     expect(res.decisionMs).toBe(876);
+  });
+
+  // The in-tab model is Gemma 4 E2B (~3.6 GB); the server fallback arm must
+  // not warm that in Node for one categorization.
+  test('runs the small catalogued Qwen3 0.6B, not the in-tab Gemma 4 E2B', () => {
+    expect(SHOWDOWN_SERVER_LOCAL_MODEL).toBe('transformers:onnx-community/Qwen3-0.6B-ONNX');
+    expect(SHOWDOWN_SERVER_LOCAL_MODEL).not.toBe(getLocalChatModelConfig().id);
+    const entry = getModelsForProvider('transformers').find((m) => m.id === SHOWDOWN_SERVER_LOCAL_MODEL);
+    expect(entry?.downloadSize).toBe('~570MB');
   });
 
   test('warm failure degrades honestly with the error message', async () => {
