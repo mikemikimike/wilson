@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  BUNDLE_END_MARKER,
+  CURRENT_MESSAGE_MARKER,
   bundleWindow,
+  dollarFiguresInCents,
   buildBundle,
   buildLocalSystemPrompt,
   computeBundleTotals,
@@ -9,6 +12,7 @@ import {
   COMPUTED_TOTALS_MARKER,
   type BundleTxn,
 } from '../dashboard/ui/src/hybrid/core.js';
+import { categoryLabel, incomeAmount, isSpend } from '../db/spend-rules.js';
 
 /**
  * In-tab (bundle mode) totals. Gemma E2B summed raw rows wrong (Oct 18 seed:
@@ -129,13 +133,14 @@ describe('computeBundleTotals', () => {
     expect(totals.thisMonth.spending).toBe(418.1); // 159.50 + 258.60, no $500 transfer
     expect(totals.thisMonth.moneyIn).toBe(3200);
     expect(totals.thisMonth.moneyInByCategory).toEqual([{ label: 'Income', amount: 3200 }]);
-    // The transfer is still listed as its own category line, so it can be quoted.
-    expect(totals.thisMonth.spendingByCategory).toContainEqual({ label: 'Transfer', amount: 500 });
+    // The transfer is not spending (dashboard rule), but it is still listed on its own line, so it can be quoted.
+    expect(totals.thisMonth.spendingByCategory.map((l) => l.label)).not.toContain('Transfer');
+    expect(totals.thisMonth.transfersOut).toEqual([{ label: 'Transfer', amount: 500 }]);
     for (const l of totals.thisMonth.spendingByCategory) expect(l.amount).toBeGreaterThan(0);
   });
 
   test('categories are ordered by amount, largest first', () => {
-    expect(totals.thisMonth.spendingByCategory.map((l) => l.label)).toEqual(['Transfer', 'Groceries', 'Dining']);
+    expect(totals.thisMonth.spendingByCategory.map((l) => l.label)).toEqual(['Groceries', 'Dining']);
   });
 
   test('sums in cents, so float drift never shows up (0.1 + 0.2)', () => {
@@ -154,6 +159,76 @@ describe('computeBundleTotals', () => {
     expect(totals.reliable).toBe(true);
     expect(totals.fetchedRows).toBe(SEED_ROWS.length);
     expect(computeBundleTotals(txns, window, { limitHit: true }).reliable).toBe(false);
+  });
+});
+
+// ── Regression: the totals follow the DASHBOARD rules (src/db/spend-rules.ts) ──
+
+/**
+ * The dashboard serves /api/transactions and /api/weekly-summary under
+ * DASHBOARD_RULES: card payments and transfers are never spending, category
+ * Income is income at any sign (ABS), and NULL/blank categories are one
+ * Uncategorized bucket. The bundle's totals must match, or Gemma quotes a
+ * figure the Overview tab contradicts and the answer check passes it.
+ */
+describe('computeBundleTotals under the dashboard spend/income rules', () => {
+  const window = bundleWindow(OCT_18);
+  const rows = [
+    { date: '2026-10-05', description: 'PAYROLL (stored negative)', amount: -3000, category: 'Income' },
+    { date: '2026-10-06', description: 'AUTOPAY TO CARD', amount: -1500, category: 'Credit Card Payment' },
+    { date: '2026-10-06', description: 'PAYMENT THANK YOU', amount: 1500, category: 'Payment' },
+    { date: '2026-10-07', description: 'PLAID CARD PAYMENT', amount: -200, category: 'Credit Card' },
+    { date: '2026-10-07', description: 'TO SAVINGS', amount: -100, category: 'Internal Account Transfer' },
+    { date: '2026-10-08', description: 'DINER', amount: -40, category: 'Dining' },
+    { date: '2026-10-09', description: 'BISTRO', amount: -10, category: ' Dining ' },
+    { date: '2026-10-09', description: 'MYSTERY', amount: -12, category: '' },
+    { date: '2026-10-10', description: 'MYSTERY 2', amount: -3, category: null },
+    { date: '2026-10-11', description: 'REFUND', amount: 25, category: 'Shopping' },
+  ];
+  const txns = projectTransactions(rows, { start: window.start, end: window.end, limit: 500 });
+  const t = computeBundleTotals(txns, window, { limitHit: false }).thisMonth;
+
+  test('card payments are not spending, and a negative Income row is money in (not spending)', () => {
+    expect(t.spending).toBe(65); // 40 + 10 + 12 + 3
+    expect(t.moneyIn).toBe(3025); // ABS(-3000) + 25 refund
+    expect(t.spendingByCategory.map((l) => l.label)).not.toContain('Income');
+    expect(t.moneyInByCategory.map((l) => l.label)).not.toContain('Payment');
+    expect(t.transfersOut).toEqual([
+      { label: 'Credit Card Payment', amount: 1500 },
+      { label: 'Credit Card', amount: 200 },
+      { label: 'Internal Account Transfer', amount: 100 },
+    ]);
+    expect(t.transfersIn).toEqual([{ label: 'Payment', amount: 1500 }]);
+  });
+
+  test('pinned against the shared predicates: spending = sum(isSpend), money in = sum(incomeAmount)', () => {
+    const oct = txns.filter((r) => r.date >= window.thisMonth.start);
+    const spendCents = oct.filter(isSpend).reduce((s, r) => s - Math.round(r.amount * 100), 0);
+    const inCents = oct.reduce((s, r) => s + Math.round(incomeAmount(r) * 100), 0);
+    expect(Math.round(t.spending * 100)).toBe(spendCents);
+    expect(Math.round(t.moneyIn * 100)).toBe(inCents);
+    // The category lines add up to the totals they sit under.
+    expect(t.spendingByCategory.reduce((s, l) => s + Math.round(l.amount * 100), 0)).toBe(spendCents);
+    expect(t.moneyInByCategory.reduce((s, l) => s + Math.round(l.amount * 100), 0)).toBe(inCents);
+  });
+
+  test('labels use categoryLabel: trimmed, and NULL / blank are one Uncategorized bucket', () => {
+    expect(t.spendingByCategory).toEqual([
+      { label: 'Dining', amount: 50 },
+      { label: 'Uncategorized', amount: 15 },
+    ]);
+    expect(categoryLabel(' Dining ')).toBe('Dining');
+  });
+
+  test('the bundle renders the dashboard figures, never the legacy ones, and no blank label', () => {
+    const b = buildBundle(txns, null, { limit: 500, maxChars: 6000 }, { window, totals: computeBundleTotals(txns, window, { limitHit: false }) });
+    expect(b.text).toContain('This month (2026-10-01..2026-10-18): total spending $65.00; money in $3,025.00');
+    expect(b.text).toContain('Transfers and card payments out (not spending): Credit Card Payment $1,500.00');
+    expect(b.text).toContain('Transfers and card payments in (not money in): Payment $1,500.00');
+    expect(b.text).not.toContain('$1,552.00');
+    expect(b.text).not.toMatch(/;  \$/); // an empty label renders as "; " followed by a bare figure
+    expect(b.text).toContain('2026-10-09 | MYSTERY | -12.00 | Uncategorized');
+    expect(b.allowedCents).not.toContain(155200);
   });
 });
 
@@ -198,6 +273,56 @@ describe('buildBundle with computed totals', () => {
     expect(b.text).toContain('This month (2026-10-01..2026-10-18): total spending $150.00');
     expect(b.text).toContain('Last month (2026-09-01..2026-09-30): total spending $150.00');
     expect(b.text).toContain('Dining $75.00');
+  });
+
+  test('when the totals alone exceed maxChars, the category lists are capped, never cut mid-line', () => {
+    // 90 Quicken-style subcategories a month: the full totals block is far over 6000 chars.
+    const many: BundleTxn[] = [];
+    for (const m of ['09', '10']) {
+      for (let i = 0; i < 90; i++) {
+        many.push({ date: `2026-${m}-10`, description: 'X', amount: -(i + 1), category: `Household Bills:Category ${i}` });
+      }
+    }
+    const t = computeBundleTotals(many, window, { limitHit: false });
+    const b = buildBundle(many, null, { limit: 500, maxChars: 6000 }, { window, totals: t });
+    expect(b.text.length).toBeLessThanOrEqual(6000);
+    expect(b.text).toContain(BUNDLE_END_MARKER);
+    expect(b.text.endsWith(CURRENT_MESSAGE_MARKER)).toBe(true);
+    // Both months' headline totals survive, with an "other categories" line instead of a cut.
+    expect(b.text).toContain('This month (2026-10-01..2026-10-18): total spending $4,095.00');
+    expect(b.text).toContain('Last month (2026-09-01..2026-09-30): total spending $4,095.00');
+    expect(b.text).toMatch(/\d+ other categories \$[\d,]+\.\d\d/);
+    // allowedCents only holds figures that are actually in the final text.
+    const inText = new Set(dollarFiguresInCents(b.text));
+    for (const c of b.allowedCents) expect(inText.has(c)).toBe(true);
+    // A category line that was folded into "other categories" is not allowed.
+    expect(b.text).not.toContain('Household Bills:Category 0 $1.00');
+    expect(b.allowedCents).not.toContain(100);
+  });
+
+  test('a budget too small for any category line keeps the headlines, then says the totals are unavailable', () => {
+    const many: BundleTxn[] = Array.from({ length: 40 }, (_, i) => ({
+      date: '2026-10-10',
+      description: 'X',
+      amount: -(i + 1),
+      category: `Category ${i}`,
+    }));
+    const t = computeBundleTotals(many, window, { limitHit: false });
+    const headline = buildBundle(many, null, { limit: 500, maxChars: 700 }, { window, totals: t });
+    expect(headline.text.length).toBeLessThanOrEqual(700);
+    expect(headline.text).toContain('total spending $820.00');
+    expect(headline.text).not.toContain('Spending by category');
+    expect(headline.text.endsWith(CURRENT_MESSAGE_MARKER)).toBe(true);
+    expect(headline.allowedCents).toContain(82000);
+
+    const tiny = buildBundle(many, null, { limit: 500, maxChars: 500 }, { window, totals: t });
+    expect(tiny.text.length).toBeLessThanOrEqual(500);
+    expect(tiny.text).toContain('Computed totals: unavailable (too large');
+    expect(tiny.text.endsWith(CURRENT_MESSAGE_MARKER)).toBe(true);
+    // No total is allowed any more; only the rows still shown are.
+    expect(tiny.allowedCents).not.toContain(82000);
+    expect(tiny.allowedCents.length).toBe(tiny.rowCount);
+    for (const c of tiny.allowedCents) expect(tiny.text).toContain(`-${(c / 100).toFixed(2)} |`);
   });
 
   test('unreliable totals are not rendered and say why', () => {

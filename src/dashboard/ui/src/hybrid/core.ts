@@ -15,6 +15,7 @@
 import { CURRENT_MESSAGE_MARKER } from '../../../../utils/history-context.js';
 import { looksLikeBareToolCall } from '../../../../model/tool-call-parse.js';
 import { money } from '../format';
+import { categoryLabel, incomeAmount, isIncome, isSpend } from '../../../../db/spend-rules.js';
 import type { LocalHandoffV1 } from '../../../../dashboard/local-handoff-format.js';
 import type { ChatProvenance } from '../../../../dashboard/chat-provenance.js';
 
@@ -151,14 +152,18 @@ export interface AmountLine {
 
 /** Totals for one calendar month (or month-to-date). */
 export interface PeriodTotals extends DateRange {
-  /** Spending (negative amounts, shown positive), excluding the Transfer and Income categories. */
+  /** Spending under the dashboard SPEND rule (isSpend, src/db/spend-rules.ts), shown positive. */
   spending: number;
-  /** Money in (positive amounts), excluding the Transfer category. */
+  /** Money in under the dashboard INCOME rule (incomeAmount: category Income at any sign, ABS). */
   moneyIn: number;
-  /** Spending per category (every category with a negative amount, Transfer included), largest first. */
+  /** Spending per category label (the isSpend rows; sums to `spending`), largest first. */
   spendingByCategory: AmountLine[];
-  /** Money in per category, largest first. */
+  /** Money in per category label (the income rows; sums to `moneyIn`), largest first. */
   moneyInByCategory: AmountLine[];
+  /** Outflows that are neither spending nor income (transfers, card payments), per label, shown positive. */
+  transfersOut: AmountLine[];
+  /** Inflows that are neither spending nor income (transfers, card payments received), per label. */
+  transfersIn: AmountLine[];
 }
 
 export interface BundleTotals {
@@ -174,10 +179,6 @@ export interface BundleTotals {
   lastMonth: PeriodTotals;
 }
 
-/** Categories that are not spending in total spending (the dashboard's legacy rule, src/db/queries.ts). */
-const NON_SPEND_CATEGORIES: ReadonlySet<string> = new Set(['Transfer', 'Income']);
-const UNCATEGORIZED = 'Uncategorized';
-
 const toCents = (dollars: number): number => Math.round(dollars * 100);
 
 function sortedLines(byLabel: Map<string, number>): AmountLine[] {
@@ -186,22 +187,39 @@ function sortedLines(byLabel: Map<string, number>): AmountLine[] {
     .map(([label, cents]) => ({ label, amount: cents / 100 }));
 }
 
+function addCents(map: Map<string, number>, label: string, cents: number): void {
+  map.set(label, (map.get(label) ?? 0) + cents);
+}
+
+/**
+ * One period under the DASHBOARD rules (src/db/spend-rules.ts, the same
+ * DASHBOARD_RULES the /api/transactions and /api/weekly-summary endpoints and
+ * the Overview tiles use), so a quoted total matches what the dashboard shows:
+ * every row is exactly one of spend (isSpend), income (isIncome, summed as
+ * ABS), or a transfer/card payment (a non-spend label that is not Income).
+ * Labels go through categoryLabel (trimmed; NULL/blank → Uncategorized).
+ */
 function periodTotals(rows: readonly BundleTxn[], range: DateRange): PeriodTotals {
   const spendCents = new Map<string, number>();
   const inCents = new Map<string, number>();
+  const transferOutCents = new Map<string, number>();
+  const transferInCents = new Map<string, number>();
   let spending = 0;
   let moneyIn = 0;
   for (const r of rows) {
     if (r.date < range.start || r.date > range.end) continue;
     const cents = toCents(r.amount);
     if (cents === 0) continue;
-    const label = r.category ?? UNCATEGORIZED;
-    if (cents < 0) {
-      spendCents.set(label, (spendCents.get(label) ?? 0) - cents);
-      if (!NON_SPEND_CATEGORIES.has(label)) spending -= cents;
+    const label = categoryLabel(r.category);
+    if (isSpend(r)) {
+      addCents(spendCents, label, -cents);
+      spending -= cents;
+    } else if (isIncome(r)) {
+      const abs = toCents(incomeAmount(r));
+      addCents(inCents, label, abs);
+      moneyIn += abs;
     } else {
-      inCents.set(label, (inCents.get(label) ?? 0) + cents);
-      if (label !== 'Transfer') moneyIn += cents;
+      addCents(cents < 0 ? transferOutCents : transferInCents, label, Math.abs(cents));
     }
   }
   return {
@@ -211,6 +229,8 @@ function periodTotals(rows: readonly BundleTxn[], range: DateRange): PeriodTotal
     moneyIn: moneyIn / 100,
     spendingByCategory: sortedLines(spendCents),
     moneyInByCategory: sortedLines(inCents),
+    transfersOut: sortedLines(transferOutCents),
+    transfersIn: sortedLines(transferInCents),
   };
 }
 
@@ -237,39 +257,72 @@ export const BUNDLE_START_MARKER = '[Pre-fetched transaction context]';
 export const BUNDLE_END_MARKER = '[End of pre-fetched context]';
 export const COMPUTED_TOTALS_MARKER = 'Computed totals';
 
-function renderLines(lines: readonly AmountLine[]): string {
-  return lines.length ? lines.map((l) => `${l.label} ${money(l.amount)}`).join('; ') : 'none';
+/**
+ * How much of the computed totals to render. 'full' lists every category;
+ * a number caps each category list at that many lines plus one "N other
+ * categories $X" line; 'headline' keeps only each month's total spending and
+ * money in; 'omitted' says the totals did not fit. The size guard steps down
+ * this ladder only when the totals alone are over budget.
+ */
+type TotalsDetail = 'full' | number | 'headline' | 'omitted';
+const TOTALS_LADDER: readonly TotalsDetail[] = ['full', 12, 6, 3, 1, 'headline', 'omitted'];
+
+interface RenderedTotals {
+  lines: string[];
+  /** Every money figure in `lines`, as absolute cents. */
+  cents: number[];
 }
 
-function renderTotals(totals: BundleTotals | null): string[] {
-  if (!totals) return [];
+function renderTotals(totals: BundleTotals | null, detail: TotalsDetail): RenderedTotals {
+  if (!totals) return { lines: [], cents: [] };
   if (!totals.reliable) {
-    return [
-      `${COMPUTED_TOTALS_MARKER}: unavailable (the transaction fetch hit its row limit, so totals could be incomplete). ` +
-        'For any total, reply NEED_MORE_DATA.',
-    ];
+    return {
+      lines: [
+        `${COMPUTED_TOTALS_MARKER}: unavailable (the transaction fetch hit its row limit, so totals could be incomplete). ` +
+          'For any total, reply NEED_MORE_DATA.',
+      ],
+      cents: [],
+    };
   }
-  const period = (name: string, p: PeriodTotals): string[] => [
-    `${name} (${p.start}..${p.end}): total spending ${money(p.spending)}; money in ${money(p.moneyIn)}`,
-    `  Spending by category: ${renderLines(p.spendingByCategory)}`,
-    `  Money in by category: ${renderLines(p.moneyInByCategory)}`,
-  ];
-  return [
+  if (detail === 'omitted') {
+    return {
+      lines: [`${COMPUTED_TOTALS_MARKER}: unavailable (too large for the local context window). For any total, reply NEED_MORE_DATA.`],
+      cents: [],
+    };
+  }
+  const cents: number[] = [];
+  const fig = (dollars: number): string => {
+    cents.push(Math.abs(toCents(dollars)));
+    return money(dollars);
+  };
+  const list = (lines: readonly AmountLine[]): string => {
+    if (!lines.length) return 'none';
+    const cap = typeof detail === 'number' ? detail : lines.length;
+    const shown = lines.slice(0, cap).map((l) => `${l.label} ${fig(l.amount)}`);
+    const rest = lines.slice(cap);
+    if (rest.length) {
+      const restCents = rest.reduce((sum, l) => sum + toCents(l.amount), 0);
+      shown.push(`${rest.length} other categor${rest.length === 1 ? 'y' : 'ies'} ${fig(restCents / 100)}`);
+    }
+    return shown.join('; ');
+  };
+  const period = (name: string, p: PeriodTotals): string[] => {
+    const out = [`${name} (${p.start}..${p.end}): total spending ${fig(p.spending)}; money in ${fig(p.moneyIn)}`];
+    if (detail === 'headline') return out;
+    out.push(`  Spending by category: ${list(p.spendingByCategory)}`);
+    out.push(`  Money in by category: ${list(p.moneyInByCategory)}`);
+    if (p.transfersOut.length) out.push(`  Transfers and card payments out (not spending): ${list(p.transfersOut)}`);
+    if (p.transfersIn.length) out.push(`  Transfers and card payments in (not money in): ${list(p.transfersIn)}`);
+    return out;
+  };
+  const lines = [
     `${COMPUTED_TOTALS_MARKER} (exact, calculated by the app from all ${totals.fetchedRows} fetched transactions; ` +
       'quote these verbatim, never add up rows):',
     ...period('This month', totals.thisMonth),
     ...period('Last month', totals.lastMonth),
   ];
-}
-
-function totalsCents(totals: BundleTotals | null): number[] {
-  if (!totals?.reliable) return [];
-  const out: number[] = [];
-  for (const p of [totals.thisMonth, totals.lastMonth]) {
-    out.push(toCents(p.spending), toCents(p.moneyIn));
-    for (const l of [...p.spendingByCategory, ...p.moneyInByCategory]) out.push(toCents(l.amount));
-  }
-  return out;
+  if (detail === 'headline') lines.push('  (Per-category totals did not fit; for a category total, reply NEED_MORE_DATA.)');
+  return { lines, cents };
 }
 
 /** What buildBundle frames the rows with: the calendar window and the totals computed over every fetched row. */
@@ -281,10 +334,13 @@ export interface BundleContext {
 /**
  * Render the context bundle and size-guard it for a small in-tab model's context window.
  *
- * Framing mirrors the repo's injected-context marker style; the size guard
- * drops the OLDEST transaction rows first and never touches the computed
- * totals, the weekly summary, the framing markers, or the current-message
- * marker. The rendered text never exceeds `params.maxChars`.
+ * Framing mirrors the repo's injected-context marker style. The size guard
+ * drops the OLDEST transaction rows first; only when the computed totals
+ * alone do not fit does it shorten them (capped category lists, then the
+ * headline figures only, then "unavailable"), so the weekly summary, the
+ * framing markers and the current-message marker always survive. The rendered
+ * text never exceeds `params.maxChars`, and allowedCents holds only figures
+ * that are actually in the final text.
  */
 export function buildBundle(
   txns: BundleTxn[],
@@ -293,21 +349,18 @@ export function buildBundle(
   ctx: BundleContext,
 ): ContextBundle {
   const totalRows = txns.length;
-  const kept = [...txns];
-  let truncated = false;
-  const totalsBlock = renderTotals(ctx.totals);
 
-  const render = (): string => {
+  const render = (totalsLines: readonly string[], kept: readonly BundleTxn[]): string => {
     const lines: string[] = [];
     lines.push(BUNDLE_START_MARKER);
     lines.push(
       `Period: ${ctx.window.start}..${ctx.window.end} (1st of last month through today, ` +
         `${kept.length} of ${totalRows} transactions shown)`,
     );
-    if (truncated) {
+    if (kept.length < totalRows) {
       lines.push('[Older transactions were dropped to fit the local context window.]');
     }
-    lines.push(...totalsBlock);
+    lines.push(...totalsLines);
     if (weekly) {
       lines.push(
         `Weekly spending: this week ${money(weekly.thisWeek.total)} (top: ${weekly.thisWeek.topCategory ?? 'none'}), ` +
@@ -317,31 +370,45 @@ export function buildBundle(
     }
     lines.push('Transactions (date | description | amount | category):');
     for (const t of kept) {
-      lines.push(`${t.date} | ${t.description} | ${t.amount.toFixed(2)} | ${t.category ?? 'Uncategorized'}`);
+      lines.push(`${t.date} | ${t.description} | ${t.amount.toFixed(2)} | ${categoryLabel(t.category)}`);
     }
     lines.push(BUNDLE_END_MARKER);
     lines.push(CURRENT_MESSAGE_MARKER);
     return lines.join('\n');
   };
 
-  let text = render();
-  while (text.length > params.maxChars && kept.length > 0) {
-    kept.shift(); // chronological order: front = oldest
-    truncated = true;
-    text = render();
+  // Walk the totals ladder: the first detail level whose totals fit with no
+  // rows wins, then as many rows as fit are kept, dropping the oldest first.
+  let totals = renderTotals(ctx.totals, 'omitted');
+  let kept: BundleTxn[] = [];
+  let text = '';
+  for (const detail of TOTALS_LADDER) {
+    const candidate = renderTotals(ctx.totals, detail);
+    if (render(candidate.lines, []).length > params.maxChars && detail !== 'omitted') continue;
+    totals = candidate;
+    kept = [...txns];
+    text = render(totals.lines, kept);
+    while (text.length > params.maxChars && kept.length > 0) {
+      kept.shift(); // chronological order: front = oldest
+      text = render(totals.lines, kept);
+    }
+    break;
   }
   if (text.length > params.maxChars) {
     // Pathological budget (markers alone exceed it) — enforce the hard cap.
     text = text.slice(0, params.maxChars);
   }
 
-  const allowed = new Set<number>(totalsCents(ctx.totals));
+  // Only figures the app put in the bundle AND that survived into the text.
+  const candidates = new Set<number>(totals.cents);
   if (weekly) {
-    for (const v of [weekly.thisWeek.total, weekly.lastWeek.total, weekly.change.amount]) allowed.add(Math.abs(toCents(v)));
+    for (const v of [weekly.thisWeek.total, weekly.lastWeek.total, weekly.change.amount]) candidates.add(Math.abs(toCents(v)));
   }
-  for (const t of kept) allowed.add(Math.abs(toCents(t.amount)));
+  for (const t of kept) candidates.add(Math.abs(toCents(t.amount)));
+  const inText = new Set(dollarFiguresInCents(text));
+  const allowed = [...candidates].filter((c) => inText.has(c));
 
-  return { text, rowCount: kept.length, totalRows, truncated, allowedCents: [...allowed] };
+  return { text, rowCount: kept.length, totalRows, truncated: kept.length < totalRows, allowedCents: allowed };
 }
 
 // ── Local prompts ───────────────────────────────────────────────────────────
