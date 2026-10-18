@@ -86,6 +86,12 @@ export interface ModelLocality {
    * provider that is not local here, 'Ollama Cloud' / 'Ollama at <host>'.
    */
   displayName: string;
+  /**
+   * Set only for a local runtime pointed at another machine (a non-loopback
+   * OLLAMA_BASE_URL that parses): that machine's host, for wording that says
+   * "another machine" rather than "cloud". Still not local.
+   */
+  remoteHost?: string;
 }
 
 /** Locality of a call to `model` (with or without its provider prefix) on provider `def`. */
@@ -97,7 +103,8 @@ export function providerCallLocality(def: ProviderDef, model: string, env: Env =
   const base = localProviderBaseUrl(def.id, env);
   if (base !== undefined && !isLoopbackUrl(base)) {
     const host = hostOf(base);
-    return { provider: def, local: false, displayName: host ? `${def.displayName} at ${host}` : def.displayName };
+    if (!host) return { provider: def, local: false, displayName: def.displayName };
+    return { provider: def, local: false, displayName: `${def.displayName} at ${host}`, remoteHost: host };
   }
   return { provider: def, local: true, displayName: def.displayName };
 }

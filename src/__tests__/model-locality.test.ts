@@ -93,13 +93,26 @@ describe('modelLocality', () => {
   });
 
   test('OLLAMA_BASE_URL on a LAN IP is not local, and names the host', () => {
-    expect(modelLocality('ollama:qwen3:8b', LAN)).toMatchObject({ local: false, displayName: 'Ollama at 192.168.1.20:11434' });
+    expect(modelLocality('ollama:qwen3:8b', LAN)).toMatchObject({
+      local: false,
+      displayName: 'Ollama at 192.168.1.20:11434',
+      remoteHost: '192.168.1.20:11434',
+    });
+  });
+
+  test('only a local runtime pointed at another machine carries remoteHost; cloud models never do', () => {
+    expect(modelLocality('ollama:qwen3:8b', {}).remoteHost).toBeUndefined();
+    expect(modelLocality('ollama:gpt-oss:120b-cloud', LAN).remoteHost).toBeUndefined(); // ollama.com, not the LAN box
+    expect(modelLocality('claude-sonnet-4-5', LAN).remoteHost).toBeUndefined();
+    expect(modelLocality('gpt-5.2', LAN).remoteHost).toBeUndefined();
+    expect(modelLocality('ollama:qwen3:8b', { OLLAMA_BASE_URL: 'ollama-box:11434' }).remoteHost).toBeUndefined();
   });
 
   test('OLLAMA_BASE_URL on a remote host is not local', () => {
     expect(modelLocality('ollama:qwen3:8b', { OLLAMA_BASE_URL: 'https://gpu.example.com' })).toMatchObject({
       local: false,
       displayName: 'Ollama at gpu.example.com',
+      remoteHost: 'gpu.example.com',
     });
   });
 

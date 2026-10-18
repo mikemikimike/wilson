@@ -1203,6 +1203,8 @@ export function getDashboardHtml(port: number): string {
     if (prov !== 'server-fallback') return PROV_LABELS[prov]||'';
     if (srv && srv.serverModelLocal === true) return PROV_LABELS.serverLocal;
     var who = srv && typeof srv.serverProvider === 'string' && srv.serverProvider.trim() ? srv.serverProvider.trim() : PROV_LABELS.unknownServer;
+    var host = srv && typeof srv.serverHost === 'string' && srv.serverHost.trim() ? srv.serverHost.trim() : '';
+    if (host) return PROV_LABELS.serverOtherMachine.replace('{who}', who).replace('{host}', host);
     return PROV_LABELS.serverCloud.replace('{who}', who);
   }
   function stampProv(msgDiv, prov, srv) {

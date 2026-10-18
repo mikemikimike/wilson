@@ -29,6 +29,11 @@ export interface ServerModelInfo {
   serverModelLocal?: boolean;
   /** Display name of the cloud provider the model routes to (e.g. 'Anthropic'); null/absent when unknown or local. */
   serverProvider?: string | null;
+  /**
+   * Set when the model is a local runtime on another machine (a LAN Ollama, OLLAMA_BASE_URL): that machine's host.
+   * Changes only the wording ("on another machine"); such a reply is still not local.
+   */
+  serverHost?: string | null;
 }
 
 /**
@@ -43,6 +48,8 @@ export const PROVENANCE_LABELS = {
   serverCloud: 'answered by {who} · cloud model',
   serverContinuedLocal: 'continued on your laptop from browser lookups',
   serverContinuedCloud: 'continued by {who} from browser lookups · cloud model',
+  serverOtherMachine: 'answered by {who} on another machine ({host})',
+  serverContinuedOtherMachine: 'continued by {who} on another machine ({host}) from browser lookups',
   unknownServer: 'the server',
 } as const;
 
@@ -51,17 +58,33 @@ function cloudLabel(template: string, info: ServerModelInfo): string {
   return template.replace('{who}', who);
 }
 
+/** The other machine's host, when the reply names one; otherwise the cloud wording applies. */
+function otherMachine(info: ServerModelInfo): string | null {
+  return typeof info.serverHost === 'string' && info.serverHost.trim() ? info.serverHost.trim() : null;
+}
+
+/** Wording for a server model that is not local: another machine when the reply says so, else cloud. */
+function notLocalLabel(cloudTemplate: string, otherTemplate: string, info: ServerModelInfo): string {
+  const host = otherMachine(info);
+  return host ? cloudLabel(otherTemplate, info).replace('{host}', host) : cloudLabel(cloudTemplate, info);
+}
+
 /**
  * Badge text for a response. Browser-local states ignore `info`; the two
  * server-answered states say "on your laptop" only for serverModelLocal ===
- * true. 'unavailable' stays neutral ("server agent"): the hybrid layer was
+ * true, "on another machine (<host>)" for a LAN runtime (serverHost), and
+ * "cloud model" otherwise. 'unavailable' stays neutral ("server agent"): the hybrid layer was
  * absent, and the badge makes no processing-location claim.
  */
 export function provenanceBadge(p: ChatProvenance, info: ServerModelInfo = {}): string {
   const local = info.serverModelLocal === true;
-  if (p === 'server-fallback') return local ? PROVENANCE_LABELS.serverLocal : cloudLabel(PROVENANCE_LABELS.serverCloud, info);
+  if (p === 'server-fallback') {
+    return local ? PROVENANCE_LABELS.serverLocal : notLocalLabel(PROVENANCE_LABELS.serverCloud, PROVENANCE_LABELS.serverOtherMachine, info);
+  }
   if (p === 'server-continued') {
-    return local ? PROVENANCE_LABELS.serverContinuedLocal : cloudLabel(PROVENANCE_LABELS.serverContinuedCloud, info);
+    return local
+      ? PROVENANCE_LABELS.serverContinuedLocal
+      : notLocalLabel(PROVENANCE_LABELS.serverContinuedCloud, PROVENANCE_LABELS.serverContinuedOtherMachine, info);
   }
   return PROVENANCE_LABELS[p];
 }

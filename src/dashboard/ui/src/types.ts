@@ -226,6 +226,8 @@ export interface ChatResponse {
   serverModelLocal?: boolean;
   /** Display name of the cloud provider the server model routes to; null when local or unknown. */
   serverProvider?: string | null;
+  /** Host of the other machine a LAN runtime (Ollama via OLLAMA_BASE_URL) answered on; null otherwise. Still not local. */
+  serverHost?: string | null;
 }
 
 // "@" mention wire format for POST /api/chat (validated + re-resolved from the

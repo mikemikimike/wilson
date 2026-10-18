@@ -122,6 +122,11 @@ const NOT_LOCAL_INFOS: Array<ServerModelInfo | undefined> = [
   { serverModelLocal: 'true' as unknown as boolean },
   { serverModelLocal: 1 as unknown as boolean },
   ...CLOUD_PROVIDER_NAMES.map((name) => ({ serverModelLocal: false, serverProvider: name })),
+  // A LAN Ollama (OLLAMA_BASE_URL): another machine, still not local.
+  { serverModelLocal: false, serverProvider: 'Ollama', serverHost: '192.168.1.20:11434' },
+  { serverModelLocal: false, serverProvider: 'Ollama', serverHost: '   ' },
+  { serverModelLocal: false, serverProvider: null, serverHost: '10.0.0.5:11434' },
+  { serverModelLocal: false, serverHost: 7 as unknown as string },
 ];
 const LOCAL_WORDS = /local|on-device|laptop/i;
 
@@ -143,6 +148,20 @@ describe('provenanceBadge: server wording follows where the server model runs (#
     expect(provenanceBadge('server-fallback')).toBe('answered by the server · cloud model');
     expect(provenanceBadge('server-fallback', { serverModelLocal: 'true' as unknown as boolean })).toBe(
       'answered by the server · cloud model',
+    );
+  });
+
+  test('a LAN runtime (another machine) gets its own wording, not "cloud model" and never local', () => {
+    const lan: ServerModelInfo = { serverModelLocal: false, serverProvider: 'Ollama', serverHost: '192.168.1.20:11434' };
+    expect(provenanceBadge('server-fallback', lan)).toBe('answered by Ollama on another machine (192.168.1.20:11434)');
+    expect(provenanceBadge('server-continued', lan)).toBe('continued by Ollama on another machine (192.168.1.20:11434) from browser lookups');
+    expect(provenanceBadge('server-fallback', lan)).not.toMatch(/cloud/i);
+    // serverModelLocal true wins (a host never makes a local reply sound remote), and a blank host is no host.
+    expect(provenanceBadge('server-fallback', { ...lan, serverModelLocal: true })).toBe('answered on your laptop');
+    expect(provenanceBadge('server-fallback', { ...lan, serverHost: ' ' })).toBe('answered by Ollama · cloud model');
+    // Real cloud models keep "· cloud model".
+    expect(provenanceBadge('server-fallback', { serverModelLocal: false, serverProvider: 'Ollama Cloud', serverHost: null })).toBe(
+      'answered by Ollama Cloud · cloud model',
     );
   });
 

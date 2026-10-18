@@ -55,9 +55,12 @@ const AGENT_TASK_MODELS: readonly OverridableTask[] = ['categorization', 'entity
  * modelLocality: an Ollama cloud model or a non-loopback OLLAMA_BASE_URL is
  * not local); a mismatch, an unreadable profile or anything unknown counts as
  * cloud, so the badge can never claim local processing it cannot vouch for.
- * serverProvider names who the model routes to ('Ollama Cloud', 'Ollama at
- * <host>' for a local provider pointed elsewhere), and is null when the call
- * is local, so a cloud-classified reply never names a local runtime.
+ * serverProvider names who the model routes to ('OpenAI', 'Ollama Cloud'), and
+ * is null when the call is local, so a cloud-classified reply never names a
+ * local runtime. A local runtime pointed at another machine (a LAN
+ * OLLAMA_BASE_URL) is named by its provider ('Ollama') with serverHost set,
+ * so the badge says "on another machine (<host>)" rather than "cloud model";
+ * it is still not local for every privacy decision.
  * Prefers the model applied to the runner (what actually answered: every
  * message re-applies the setting first) over the saved setting.
  *
@@ -66,7 +69,7 @@ const AGENT_TASK_MODELS: readonly OverridableTask[] = ['categorization', 'entity
  * in Settings > Models. Any task model that routes to a cloud provider makes
  * the reply cloud too, named when the chat model itself is not cloud.
  */
-export function serverChatModelInfo(): { serverModelLocal: boolean; serverProvider: string | null } {
+export function serverChatModelInfo(): ServerChatModelInfo {
   return chatModelInfo(() => appliedModel ?? getConfiguredModel());
 }
 
@@ -77,19 +80,35 @@ export function serverChatModelInfo(): { serverModelLocal: boolean; serverProvid
  * GET /api/config/local-chat reports it, and the browser lets this server
  * answer while the in-tab model downloads only when it is local.
  */
-export function nextChatModelInfo(): { serverModelLocal: boolean; serverProvider: string | null } {
+export function nextChatModelInfo(): ServerChatModelInfo {
   return chatModelInfo(() => getConfiguredModel());
 }
 
-function chatModelInfo(model: () => { model: string; provider: string }): { serverModelLocal: boolean; serverProvider: string | null } {
+/** What /api/chat reports about the server agent's model (chat-provenance.ts ServerModelInfo). */
+export interface ServerChatModelInfo {
+  serverModelLocal: boolean;
+  serverProvider: string | null;
+  /**
+   * The other machine's host when what answers off this machine is a local runtime pointed there (a LAN Ollama),
+   * and nothing went to a cloud provider; null otherwise. The reply is still not local.
+   */
+  serverHost: string | null;
+}
+
+function chatModelInfo(model: () => { model: string; provider: string }): ServerChatModelInfo {
   try {
     const cfg = model();
     const routed = modelLocality(cfg.model);
-    const cloudTask = AGENT_TASK_MODELS.map((task) => modelLocality(getTaskModel(task))).find((l) => !l.local);
-    const serverProvider = !routed.local ? routed.displayName : (cloudTask?.displayName ?? null);
-    return { serverModelLocal: isChatProviderLocal(cfg) && !cloudTask, serverProvider };
+    const tasks = AGENT_TASK_MODELS.map((task) => modelLocality(getTaskModel(task)));
+    const cloudTask = tasks.find((l) => !l.local);
+    // Who is named: a cloud provider over another machine (the rows went to the cloud), the chat model first.
+    const offMachine = [routed, ...tasks].filter((l) => !l.local);
+    const cloud = offMachine.find((l) => l.remoteHost === undefined);
+    const other = cloud ? undefined : offMachine[0];
+    const serverProvider = cloud ? cloud.displayName : other ? other.provider.displayName : null;
+    return { serverModelLocal: isChatProviderLocal(cfg) && !cloudTask, serverProvider, serverHost: other?.remoteHost ?? null };
   } catch {
-    return { serverModelLocal: false, serverProvider: null };
+    return { serverModelLocal: false, serverProvider: null, serverHost: null };
   }
 }
 

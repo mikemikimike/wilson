@@ -760,7 +760,7 @@ export function ChatTab() {
             role: 'assistant',
             content: res.answer,
             provenance,
-            serverModel: { serverModelLocal: res.serverModelLocal === true, serverProvider: res.serverProvider ?? null },
+            serverModel: { serverModelLocal: res.serverModelLocal === true, serverProvider: res.serverProvider ?? null, serverHost: res.serverHost ?? null },
             ...(notice ? { notice } : {}),
           },
         ]);

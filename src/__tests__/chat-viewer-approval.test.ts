@@ -13,6 +13,7 @@ import { handleChatMessage, getPendingChatApproval, isChatRunActive, setChatDead
 import { startDashboardServer, stopDashboardServer } from '../dashboard/server.js';
 import { setInitialProfile, closeAll } from '../dashboard/db-manager.js';
 import { createUser, enableAuth } from '../dashboard/auth.js';
+import { provenanceBadge, type ServerModelInfo } from '../dashboard/chat-provenance.js';
 
 /**
  * #156 — with dashboard auth on, a `viewer` must not be able to make the chat
@@ -193,7 +194,7 @@ describe('#167: /api/chat says where the server agent model runs, for the proven
       body: JSON.stringify({ query }),
     });
     expect(res.status).toBe(200);
-    return (await res.json()) as { answer: string; serverModelLocal?: unknown; serverProvider?: unknown };
+    return (await res.json()) as { answer: string; serverModelLocal?: unknown; serverProvider?: unknown; serverHost?: unknown };
   };
 
   beforeEach(async () => {
@@ -320,15 +321,32 @@ describe('#167: /api/chat says where the server agent model runs, for the proven
       const body = await chat('hello');
       expect(body.serverModelLocal).toBe(false);
       expect(body.serverProvider).toBe('Ollama Cloud');
+      expect(body.serverHost).toBeNull();
+      expect(provenanceBadge('server-fallback', body as ServerModelInfo)).toBe('answered by Ollama Cloud · cloud model');
     });
 
-    test('OLLAMA_BASE_URL on a LAN IP is not local, and names the host', async () => {
+    test('OLLAMA_BASE_URL on a LAN IP is not local: another machine, named with its host', async () => {
       process.env.OLLAMA_BASE_URL = 'http://192.168.1.20:11434';
       setSetting('modelId', 'ollama:qwen3:8b');
       setSetting('provider', 'ollama');
       const body = await chat('hello');
       expect(body.serverModelLocal).toBe(false);
-      expect(body.serverProvider).toBe('Ollama at 192.168.1.20:11434');
+      expect(body.serverProvider).toBe('Ollama');
+      expect(body.serverHost).toBe('192.168.1.20:11434');
+      expect(provenanceBadge('server-fallback', body as ServerModelInfo)).toBe('answered by Ollama on another machine (192.168.1.20:11434)');
+      // The browser still treats it as not local while the in-tab model downloads.
+      const cfg = await fetch(base + '/api/config/local-chat', { headers: { Origin: base, 'Sec-Fetch-Site': 'same-origin' } });
+      expect(((await cfg.json()) as { serverModelLocal?: unknown }).serverModelLocal).toBe(false);
+    });
+
+    test('a LAN chat model with a cloud task pin is named as the cloud provider, with cloud wording', async () => {
+      process.env.OLLAMA_BASE_URL = 'http://192.168.1.20:11434';
+      setSetting('modelId', 'ollama:qwen3:8b');
+      setSetting('provider', 'ollama');
+      setSetting('modelOverride.categorization', 'claude-haiku-4-5');
+      const body = await chat('hello');
+      expect(body).toMatchObject({ serverModelLocal: false, serverProvider: 'Anthropic', serverHost: null });
+      expect(provenanceBadge('server-fallback', body as ServerModelInfo)).toBe('answered by Anthropic · cloud model');
     });
 
     test('OLLAMA_BASE_URL on IPv6 loopback stays local', async () => {
