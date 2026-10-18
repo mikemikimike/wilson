@@ -6,8 +6,7 @@ import { parseDbTimestamp } from '@/format';
 import { reloadForProfileSwitch } from '@/hooks/useUrlState';
 import { AgentAccessCenter } from '@/components/agent/AgentAccessCenter';
 import { apiErrorMessage, firstAdminBody, shouldOfferFirstAdmin, validateFirstAdmin } from '@/lib/firstAdmin';
-
-const AUTH_KEY = 'wilson_auth_token';
+import { clearAuthToken, notifySessionChange, writeAuthToken } from '@/lib/authSession';
 
 const MEMORY_TYPES = ['context', 'insight', 'advice'] as const;
 
@@ -189,6 +188,9 @@ function SecuritySection() {
         body: JSON.stringify({ auth_enabled: !authEnabled }),
       });
       refetch();
+      // Turning auth on with no login here (auth was off, so nobody logged in) means this tab must log in now;
+      // turning it off drops the login. Either way the gate re-checks.
+      notifySessionChange();
     } catch (err) {
       setToggleError(apiErrorMessage(err, `Could not ${authEnabled ? 'disable' : 'enable'} authentication.`));
     }
@@ -210,11 +212,12 @@ function SecuritySection() {
         body: JSON.stringify(firstAdminBody(input)),
       });
       // Log in as the new admin (every later request carries this token), then re-read the auth state.
-      if (res.token) localStorage.setItem(AUTH_KEY, res.token);
+      if (res.token) writeAuthToken(res.token);
       setAdminName('');
       setAdminPassword('');
       setAdminConfirm('');
       refetch();
+      notifySessionChange();
     } catch (err) {
       setAdminError(apiErrorMessage(err, 'Could not create the admin account.'));
     } finally {
@@ -259,7 +262,8 @@ function SecuritySection() {
     } catch {
       // silent
     }
-    localStorage.removeItem(AUTH_KEY);
+    // The reload lands on the login view (components/AuthGate.tsx).
+    clearAuthToken();
     window.location.reload();
   }
 

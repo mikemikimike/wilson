@@ -11,6 +11,7 @@
 import MirrorWorkerCtor from './mirror-worker.ts?worker&inline';
 import { SYNC_PULL_LIMIT, collectSyncPayload, subagentEnabledFrom, type SyncApplier } from './sync-engine.js';
 import { isMirrorExcluded } from './mirror-reads.js';
+import { bearerHeader, readAuthToken, reportUnauthorized } from '../lib/authSession.js';
 import type {
   MirrorState,
   MirrorStatus,
@@ -181,11 +182,13 @@ async function ensureReady(): Promise<MirrorState> {
 async function fetchJson<T>(path: string): Promise<T> {
   // Relative in dev, through vite's proxy, so the request is same-origin (see src/api.ts getBaseUrl).
   const baseUrl = import.meta.env.DEV ? '' : window.location.origin;
-  const headers: Record<string, string> = {};
-  const token = localStorage.getItem('wilson_auth_token');
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`${baseUrl}${path}`, { headers });
-  if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+  const token = readAuthToken();
+  const res = await fetch(`${baseUrl}${path}`, { headers: bearerHeader(token) });
+  if (!res.ok) {
+    // Same as api(): a refused login sends the tab to the login view (and the sync stops here).
+    if (res.status === 401) reportUnauthorized(path, token);
+    throw new Error(`API ${res.status}: ${res.statusText}`);
+  }
   return (await res.json()) as T;
 }
 

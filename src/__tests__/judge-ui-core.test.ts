@@ -182,7 +182,9 @@ describe('training export choices', () => {
     const options = read('components/judge/ExportOptions.tsx');
     expect(options).not.toContain('token=');
     expect(options).toContain('authedFetch(exportPath(');
-    expect(read('api.ts')).toMatch(/Authorization/); // authedFetch adds it
+    // authedFetch adds it, through the shared session helper.
+    expect(read('api.ts')).toMatch(/\.\.\.bearerHeader\(token\)/);
+    expect(read('lib/authSession.ts')).toContain('{ Authorization: `Bearer ${token}` }');
     expect(options).toContain('URL.createObjectURL');
     expect(options).toContain('setChoices(DEFAULT_EXPORT_CHOICES)');
     expect(options).toContain('useState<ExportChoices>(DEFAULT_EXPORT_CHOICES)');

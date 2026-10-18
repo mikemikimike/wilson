@@ -12,7 +12,8 @@ import {
   MENTION_EMPTY_LIMITS,
   type MentionCandidate,
 } from '@/hooks/useMentionSources';
-import { api, getBaseUrl } from '@/api';
+import { api, authedFetch, getBaseUrl } from '@/api';
+import { readAuthToken } from '@/lib/authSession';
 import { parseTaxExportArgs } from '@/lib/taxExport';
 import type { BudgetVsActualRow, ChatHistoryRow, ChatResponse, ChatSessionRow } from '@/types';
 import { moneyWhole, parseDbTimestamp } from '@/format';
@@ -577,12 +578,9 @@ export function ChatTab() {
           pushLocal(raw, 'Usage: `/export csv`, `/export xlsx`, or `/export tax [year] [csv|xlsx]`.');
           return;
         }
-        let token: string | null = null;
-        try {
-          token = window.localStorage.getItem('wilson_auth_token');
-        } catch {
-          token = null;
-        }
+        // An <a href> download cannot send a header, so the token rides in the query (the server accepts that
+        // for GET /api/export/* only).
+        const token = readAuthToken();
         const a = document.createElement('a');
         a.href = `${getBaseUrl()}/api/export/${fmt}${token ? `?token=${encodeURIComponent(token)}` : ''}`;
         a.download = `transactions.${fmt}`;
@@ -606,16 +604,8 @@ export function ChatTab() {
       pushLocal(raw, args.error);
       return;
     }
-    let token: string | null = null;
     try {
-      token = window.localStorage.getItem('wilson_auth_token');
-    } catch {
-      token = null;
-    }
-    try {
-      const res = await fetch(`${getBaseUrl()}/api/export/tax?year=${args.year}&format=${args.format}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const res = await authedFetch(`/api/export/tax?year=${args.year}&format=${args.format}`);
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; upgradeUrl?: string };
         const upgrade = res.status === 402 && body.upgradeUrl ? ` [Upgrade to Pro](${body.upgradeUrl})` : '';
