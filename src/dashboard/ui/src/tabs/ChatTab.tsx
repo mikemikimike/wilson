@@ -774,9 +774,10 @@ export function ChatTab() {
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Something went wrong';
+      // No provenance badge on a failed turn: nothing answered it.
       setMessages((prev) => [
         ...prev,
-        { id: newId(), role: 'assistant', content: `Error: ${errMsg}`, provenance, ...(notice ? { notice } : {}) },
+        { id: newId(), role: 'assistant', content: `Error: ${errMsg}`, ...(notice ? { notice } : {}) },
       ]);
     } finally {
       setServerInFlight(false);

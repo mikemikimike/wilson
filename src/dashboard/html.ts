@@ -1244,9 +1244,10 @@ export function getDashboardHtml(port: number): string {
         if (data.sessionId) { activeSessionId = data.sessionId; isLiveSession = true; }
         // Safe: renderMd escapes all HTML entities before applying markdown transforms
         pendingText.innerHTML = renderMd(answer);
-        stampProv(pending, prov, data);
+        // No badge on a failed turn (409 busy, error reply, no answer): nothing answered it.
+        if (res.ok && data.answer) stampProv(pending, prov, data);
         loadSessions();
-      } catch(e) { pendingText.textContent = 'Error: '+e.message; stampProv(pending, prov); }
+      } catch(e) { pendingText.textContent = 'Error: '+e.message; }
     }
     chatSend.disabled = false; chatMessages.scrollTop = chatMessages.scrollHeight;
   }

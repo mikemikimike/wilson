@@ -206,6 +206,22 @@ describe('legacy dashboard badge (src/dashboard/html.ts) agrees with provenanceB
     for (const info of NOT_LOCAL_INFOS) expect(legacy.provLabel('server-fallback', info)).not.toMatch(LOCAL_WORDS);
     expect(legacy.provLabel('server-fallback', null)).toBe('answered by the server · cloud model');
   });
+
+  test('a failed turn (error, 409 busy, no answer) gets no "answered by" badge', () => {
+    const send = html.slice(html.indexOf('async function sendChat'), html.indexOf("chatSend.addEventListener('click'"));
+    expect(send).toContain('if (res.ok && data.answer) stampProv(pending, prov, data);');
+    const catchBlock = send.slice(send.lastIndexOf('} catch(e) {'));
+    expect(catchBlock.slice(0, catchBlock.indexOf('}', 1))).not.toContain('stampProv');
+  });
+});
+
+describe('React ChatTab: a failed turn gets no provenance badge', () => {
+  test('the error message carries no provenance', async () => {
+    const src = await Bun.file(new URL('../dashboard/ui/src/tabs/ChatTab.tsx', import.meta.url)).text();
+    const errorMsg = src.match(/content: `Error: \$\{errMsg\}`[^}]*\}/);
+    expect(errorMsg).not.toBeNull();
+    expect(errorMsg![0]).not.toContain('provenance');
+  });
 });
 
 describe('deriveChatProvenance: browser subagent (spec section 10)', () => {
