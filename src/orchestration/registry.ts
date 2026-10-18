@@ -40,6 +40,7 @@ export function chainToTool(chain: ChainDef): ToolDef {
         // it; without one (headless), mutating calls are denied.
         requestToolApproval: config?.requestToolApproval,
         sessionApprovedTools: config?.sessionApprovedTools,
+        mayWrite: config?.mayWrite,
       });
       return result;
     },
@@ -67,6 +68,7 @@ export function teamToTool(team: TeamDef): ToolDef {
         signal: config?.signal,
         requestToolApproval: config?.requestToolApproval,
         sessionApprovedTools: config?.sessionApprovedTools,
+        mayWrite: config?.mayWrite,
       });
       return result;
     },

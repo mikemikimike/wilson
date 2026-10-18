@@ -35,6 +35,8 @@ export interface OrchestrationApprovalOptions {
   requestToolApproval?: (request: ToolApprovalRequest) => Promise<ApprovalDecision>;
   /** The parent agent's session approvals, honoured and extended like the agent's own. */
   sessionApprovedTools?: Set<string>;
+  /** The parent run's write authority (#165): asked again at every mutating call a step or member makes. */
+  mayWrite?: () => boolean;
 }
 
 export interface ChainRunOptions extends OrchestrationApprovalOptions {

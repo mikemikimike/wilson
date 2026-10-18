@@ -163,11 +163,47 @@ export function getUserCount(db: Database): number {
   return row.count;
 }
 
-/** Thrown by deactivateUser when it would leave the profile with users but no active admin. */
+/** Thrown by deactivateUser / setUserRole when it would leave the profile with users but no active admin. */
 export class LastAdminError extends Error {
-  constructor() {
-    super('Cannot deactivate the last active admin. Promote or create another admin first.');
+  constructor(message = 'Cannot deactivate the last active admin. Promote or create another admin first.') {
+    super(message);
     this.name = 'LastAdminError';
+  }
+}
+
+/** True when an active admin other than `id` exists. */
+function hasOtherActiveAdmin(db: Database, id: number): boolean {
+  return !!db.prepare(
+    "SELECT 1 AS ok FROM dashboard_users WHERE role = 'admin' AND is_active = 1 AND id != @id LIMIT 1"
+  ).get({ id });
+}
+
+/** How a user lost the right to change data: deactivated, or moved to a role that cannot write. */
+export type WriteRevocation = 'deactivated' | 'demoted';
+
+type WriteRevokedListener = (db: Database, userId: number, why: WriteRevocation) => void;
+const writeRevokedListeners = new Set<WriteRevokedListener>();
+
+/**
+ * Run `listener(db, userId, why)` right after `userId` loses write rights in `db`: deactivateUser, or setUserRole
+ * taking an admin to a role that cannot write. The dashboard chat uses it to act on that user's in-flight run at
+ * once (#159, #165), whichever caller made the change. A hook rather than an import, as with onAuthEnabled. A
+ * row changed by any other path (a direct UPDATE) fires nothing; the chat re-checks the owner's current row before
+ * every write its run makes, so that is still honoured, at the run's next write. Returns an unsubscribe function.
+ */
+export function onWriteRevoked(listener: WriteRevokedListener): () => void {
+  writeRevokedListeners.add(listener);
+  return () => { writeRevokedListeners.delete(listener); };
+}
+
+function notifyWriteRevoked(db: Database, userId: number, why: WriteRevocation): void {
+  for (const listener of writeRevokedListeners) {
+    try {
+      listener(db, userId, why);
+    } catch (err) {
+      // The change is already committed; housekeeping must not turn it into an error. Say so and carry on.
+      console.error('[auth] an onWriteRevoked listener failed:', err);
+    }
   }
 }
 
@@ -175,19 +211,17 @@ export class LastAdminError extends Error {
  * Deactivate a user and end their MCP access with them: every WebMCP /
  * HTTP-MCP grant they hold is revoked and every pending operation prepared
  * under one is expired, so an external client holding their bearer token
- * sees no tools and nothing they queued can still be approved.
+ * sees no tools and nothing they queued can still be approved. Their chat
+ * run in flight is cancelled through `onWriteRevoked`.
  *
  * Throws LastAdminError (and changes nothing) when the target is the only
  * active admin; the check and the update share one transaction.
  */
 export function deactivateUser(db: Database, id: number): boolean {
-  return db.transaction(() => {
+  const deactivated = db.transaction(() => {
     const target = getUser(db, id);
-    if (target && target.role === 'admin' && target.is_active) {
-      const others = db.prepare(
-        "SELECT 1 AS ok FROM dashboard_users WHERE role = 'admin' AND is_active = 1 AND id != @id LIMIT 1"
-      ).get({ id });
-      if (!others) throw new LastAdminError();
+    if (target && target.role === 'admin' && target.is_active && !hasOtherActiveAdmin(db, id)) {
+      throw new LastAdminError();
     }
     const result = db.prepare(
       "UPDATE dashboard_users SET is_active = 0, updated_at = datetime('now') WHERE id = @id"
@@ -197,6 +231,34 @@ export function deactivateUser(db: Database, id: number): boolean {
     expirePendingOperationsForUser(db, id, 'user_deactivated');
     return true;
   })();
+  if (deactivated) notifyWriteRevoked(db, id, 'deactivated');
+  return deactivated;
+}
+
+/**
+ * Change a user's role. Returns false when there is no such user. Throws LastAdminError (and changes nothing)
+ * when it would demote the only active admin; the check and the update share one transaction.
+ *
+ * Taking an admin to a role that cannot write fires `onWriteRevoked`, so the chat run they have in flight loses
+ * its writes at once and keeps its reads (#165). Their MCP access needs nothing here: grants, client tokens and
+ * pending operations are all checked against the owner's live role when they are used.
+ */
+export function setUserRole(db: Database, id: number, role: DashboardUser['role']): boolean {
+  let demoted = false;
+  const found = db.transaction(() => {
+    const target = getUser(db, id);
+    if (!target) return false;
+    demoted = canWrite(target.role) && !canWrite(role);
+    if (demoted && target.is_active && !hasOtherActiveAdmin(db, id)) {
+      throw new LastAdminError('Cannot demote the last active admin. Promote or create another admin first.');
+    }
+    db.prepare(
+      "UPDATE dashboard_users SET role = @role, updated_at = datetime('now') WHERE id = @id"
+    ).run({ id, role });
+    return true;
+  })();
+  if (found && demoted) notifyWriteRevoked(db, id, 'demoted');
+  return found;
 }
 
 // ── Sessions ────────────────────────────────────────────────────────────────

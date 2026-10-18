@@ -138,10 +138,14 @@ export const categorizeTool = defineTool({
     const database = getDb();
     const threshold = getCategorizationConfidenceThreshold();
     // A caller that can be cancelled (the dashboard's /categorize: its owner deactivated, or auth switched on
-    // under an anonymous run) passes a signal; the run then stops before writing anything more.
+    // under an anonymous run) passes a signal; the run then stops before writing anything more. A caller whose
+    // write rights can lapse mid-run (a dashboard chat whose owner was demoted, #165) passes mayWrite, asked again
+    // at the same points: once it says no, the run stops the same way.
     const signal = config?.signal;
+    let writeRevoked = false;
     const throwIfAborted = () => {
-      if (signal?.aborted) throw new DOMException('Categorization cancelled', 'AbortError');
+      if (!writeRevoked && config?.mayWrite && !config.mayWrite()) writeRevoked = true;
+      if (signal?.aborted || writeRevoked) throw new DOMException('Categorization cancelled', 'AbortError');
     };
     throwIfAborted();
 
@@ -292,7 +296,7 @@ export const categorizeTool = defineTool({
         consecutiveFailures = 0;
       } catch (err) {
         // A cancel is not a failed batch: stop the run (the caller reports it) instead of counting it.
-        if (signal?.aborted) throw err;
+        if (signal?.aborted || writeRevoked) throw err;
         consecutiveFailures++;
         errors.push(
           `Batch ${Math.floor(i / batchSize) + 1}: ${err instanceof Error ? err.message : String(err)}`

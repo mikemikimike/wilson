@@ -177,8 +177,14 @@ export class AgentRunnerController {
    * Run one query. `options.approvals` overrides the runner's approval policy
    * for this run only — e.g. 'deny' for a dashboard user whose role cannot
    * write (#156): every mutating call is denied at once, no card is raised.
+   * `options.mayWrite` is the run's write authority, asked again at every
+   * write it makes (#165): a dashboard user demoted mid-run keeps the run's
+   * reads, and each write after the demotion is denied.
    */
-  async runQuery(query: string, options: { approvals?: 'ask' | 'deny' } = {}): Promise<RunQueryResult | undefined> {
+  async runQuery(
+    query: string,
+    options: { approvals?: 'ask' | 'deny'; mayWrite?: () => boolean } = {},
+  ): Promise<RunQueryResult | undefined> {
     const approvals = options.approvals ?? this.approvals;
     const controller = new AbortController();
     this.abortController = controller;
@@ -215,6 +221,7 @@ export class AgentRunnerController {
         // before the handler could deny it (#159). It gets its own empty set;
         // denials never add to it, so nothing leaks back either way.
         sessionApprovedTools: approvals === 'deny' ? new Set<string>() : this.sessionApprovedTools,
+        ...(options.mayWrite ? { mayWrite: options.mayWrite } : {}),
       });
       const stream = agent.run(query, this.inMemoryChatHistory);
       for await (const event of stream) {

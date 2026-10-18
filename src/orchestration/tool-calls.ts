@@ -9,6 +9,8 @@ import { logger } from '../utils/logger.js';
 export interface OrchestrationGate {
   requestToolApproval?: ToolApprovalHandler;
   sessionApprovedTools?: Set<string>;
+  /** The parent run's write authority (#165), asked at every inner mutating call. */
+  mayWrite?: () => boolean;
   signal?: AbortSignal;
   model?: string;
 }
@@ -22,12 +24,14 @@ export interface OrchestrationGate {
 export function orchestrationGate(options: {
   requestToolApproval?: ToolApprovalHandler;
   sessionApprovedTools?: Set<string>;
+  mayWrite?: () => boolean;
   signal?: AbortSignal;
   model?: string;
 }): OrchestrationGate {
   return {
     requestToolApproval: serializeApprovals(options.requestToolApproval, options.signal),
     sessionApprovedTools: options.sessionApprovedTools,
+    ...(options.mayWrite ? { mayWrite: options.mayWrite } : {}),
     signal: options.signal,
     model: options.model,
   };
@@ -56,7 +60,7 @@ export async function runOrchestratedToolCall(
   let allowed: boolean;
   try {
     const handler = gate.signal?.aborted ? undefined : gate.requestToolApproval;
-    ({ allowed } = await gateToolCall(tc.name, tool, tc.args, handler, gate.sessionApprovedTools));
+    ({ allowed } = await gateToolCall(tc.name, tool, tc.args, handler, gate.sessionApprovedTools, gate.mayWrite));
   } catch (err) {
     // A handler that fails cannot have approved anything: fail closed.
     logger.warn(`Orchestration approval failed; denying ${tc.name}`, {
@@ -74,6 +78,7 @@ export async function runOrchestratedToolCall(
     ...(gate.model ? { model: gate.model } : {}),
     ...(gate.requestToolApproval ? { requestToolApproval: gate.requestToolApproval } : {}),
     ...(gate.sessionApprovedTools ? { sessionApprovedTools: gate.sessionApprovedTools } : {}),
+    ...(gate.mayWrite ? { mayWrite: gate.mayWrite } : {}),
   };
   try {
     const result = await tool.func(tc.args, config);

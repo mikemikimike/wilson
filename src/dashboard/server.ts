@@ -33,7 +33,7 @@ import { annotateAgentPresent, handleJudgementRoute } from './judgement-routes.j
 import { buildScheduleC, scheduleCToCsv, scheduleCToXlsxBuffer } from '../tools/tax/schedule-c.js';
 import { hasLicense } from '../licensing/license.js';
 import { getCheckoutUrl } from '../licensing/upsell.js';
-import { initChatSession, handleChatMessage, getCategorizeProgress, cancelChatRunForUser, nextChatModelInfo, serverChatModelInfo } from './chat.js';
+import { initChatSession, handleChatMessage, getCategorizeProgress, nextChatModelInfo, serverChatModelInfo } from './chat.js';
 import {
   isAuthEnabled, enableAuth, disableAuth, lanAuthReady, hasActiveAdmin,
   listUsers, getUserCount, deactivateUser, LastAdminError, hashPassword, insertUser, createFirstAdmin,
@@ -597,11 +597,10 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
             }
             throw err;
           }
-          // A deactivated user's WebMCP grants die with the account, not at the grant's TTL.
+          // A deactivated user's WebMCP grants die with the account, not at the grant's TTL. (A chat run they have
+          // in flight, and its pending card, is cancelled by deactivateUser itself: see onWriteRevoked.)
           if (success) {
             revokeGrantsForUser(activeDb, id);
-            // ...and so does a chat run they have in flight (and its pending card).
-            cancelChatRunForUser(activeDb, id);
           }
           return Response.json({ success, id }, { headers });
         }

@@ -23,7 +23,7 @@ import { resolveProvider } from '../providers.js';
 import { isChatProviderLocal } from './local-handoff.js';
 import { modelLocality } from '../model/locality.js';
 import { formatCategorizeSummary, parseCategorizeResult } from '../tools/categorize/summary.js';
-import { canWrite, onAuthEnabled, type DashboardUser } from './auth.js';
+import { canWrite, getUser, onAuthEnabled, onWriteRevoked, type DashboardUser } from './auth.js';
 import { ensureHandoffSecret, setHandoffReplayDb } from '../training/handoff-tag.js';
 
 /** The dashboard user a chat run belongs to (auth on); null when auth is off. */
@@ -202,6 +202,27 @@ let binding: ChatApprovalBinding | null = null;
  */
 let chatRunOwner: ChatUser | null = null;
 
+/**
+ * Whether a run owned by `owner` may still write, asked again at the moment each of its writes would run (#165):
+ * every mutating tool call (whether a card or a session approval would let it through), each approval of its card,
+ * each poll of that card and each "/categorize" batch. It reads the owner's CURRENT row in the chat session's
+ * database, not the role the run started with, so a demotion or deactivation by any path (setUserRole,
+ * deactivateUser, or the row edited directly) is honoured at the run's next write. The owner must still exist, be
+ * active and hold a role that canWrite. Fails closed: a session replaced since the run started, no session to check
+ * the owner against, or a row that cannot be read, means no. An ownerless run (auth off when it started) has no role
+ * to lose; switching auth on ends it (cancelOwnerlessRun).
+ */
+function runMayWrite(db: Database | null, owner: ChatUser | null): boolean {
+  if (!owner) return true;
+  if (!db || db !== chatDb) return false;
+  try {
+    const row = getUser(db, owner.id);
+    return !!row && !!row.is_active && canWrite(row.role);
+  } catch {
+    return false;
+  }
+}
+
 /** Deterministic JSON (object keys sorted at every level). */
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
@@ -278,6 +299,14 @@ export function getPendingChatOperation(
   }
   if (!runner || !current || !requestId) return null;
 
+  // The run's owner can no longer write (demoted or deactivated since the request was raised, by any path): the
+  // request can never be approved, so deny it now instead of leaving it waiting out the chat deadline (#165).
+  if (chatRunOwner && !runMayWrite(chatDb, chatRunOwner)) {
+    retireBinding(db, 'role_changed');
+    runner.respondToApproval('deny', requestId);
+    return null;
+  }
+
   if (!binding) {
     // A chat mutation belongs to the user whose run asked for it. With auth on
     // and no run owner there is nobody to attribute it to, and falling back to
@@ -336,6 +365,9 @@ export type ChatOperationResult =
 const STALE_CARD_ERROR =
   'This approval is no longer pending — the request it was created for was cancelled, answered or replaced. Nothing was changed.';
 
+const WRITE_REVOKED_CARD_ERROR =
+  'This change was not approved: the account whose chat asked for it can no longer make changes. Nothing was changed.';
+
 /**
  * Resolve a chat-originated operation. Unlike a WebMCP/HTTP-MCP operation,
  * this never applies a DB write itself — it unblocks the agent's own
@@ -389,6 +421,12 @@ export function respondToChatOperation(db: Database, operationId: string, decisi
     retireBinding(db, 'request no longer pending');
     return { ok: false, error: STALE_CARD_ERROR };
   }
+  // Approving runs the owner's write: it needs the owner's write rights now, not when the card was raised (#165).
+  if (decision !== 'deny' && !runMayWrite(chatDb, chatRunOwner)) {
+    retireBinding(db, 'role_changed');
+    runner.respondToApproval('deny', b.requestId);
+    return { ok: false, error: WRITE_REVOKED_CARD_ERROR };
+  }
 
   // Unbind before answering: the runner's change listener must not expire
   // the card we are about to resolve.
@@ -428,6 +466,13 @@ let activeChatRun: Promise<void> | null = null;
  * (cancelChatRunForUser), auth being switched on under an ownerless run, and a replaced session.
  */
 let cancelActiveRun: (() => void) | null = null;
+
+/**
+ * Ends the writes of the run `activeChatRun` stands for and keeps its reads, for an owner demoted mid-run (#165):
+ * an agent run's pending approval is denied and its card taken off the queue; a "/categorize", which only writes,
+ * is stopped. Set and cleared with `cancelActiveRun`. Later writes are refused by the run's own runMayWrite check.
+ */
+let revokeActiveRunWrites: (() => void) | null = null;
 
 /** True while a dashboard chat agent run is in progress (diagnostic/test accessor). */
 export function isChatRunActive(): boolean {
@@ -476,6 +521,26 @@ export function cancelChatRunForUser(db: Database, userId: number): boolean {
 }
 
 /**
+ * A user demoted to a role that cannot write (#165) keeps their in-flight run's reads but loses its writes now:
+ * a pending approval is denied (its card leaves the queue) and a "/categorize" is stopped. Every later write the run
+ * tries is refused by runMayWrite, which also covers a role changed directly in the database, where no hook fires.
+ * Returns true when the user's run was in flight; the same per-profile rule as cancelChatRunForUser.
+ */
+export function revokeChatWritesForUser(db: Database, userId: number): boolean {
+  if (db !== chatDb) return false;
+  if (!activeChatRun || !revokeActiveRunWrites || chatRunOwner?.id !== userId) return false;
+  revokeActiveRunWrites();
+  return true;
+}
+
+// deactivateUser and setUserRole call this (a hook, because auth.ts cannot import this module), so no caller of
+// either can forget the run: deactivation cancels it (#159), a demotion strips its writes (#165).
+onWriteRevoked((db, userId, why) => {
+  if (why === 'deactivated') cancelChatRunForUser(db, userId);
+  else revokeChatWritesForUser(db, userId);
+});
+
+/**
  * Dashboard auth was switched on for `db`. A run in flight with no owner (it started while auth was off, so
  * it is anonymous: user null) must not carry on under the new login rules. Nobody owns its approval cards, and
  * a "/categorize" writes without any card, so both are cancelled and their pending card taken off the queue.
@@ -510,6 +575,7 @@ export function initChatSession(db: Database): void {
   agentRunner = null;
   activeChatRun = null;
   cancelActiveRun = null;
+  revokeActiveRunWrites = null;
   chatRunOwner = null;
   previous?.cancelExecution();
   cancelPrevious?.(); // a "/categorize" has no runner: stop it before it writes into the old profile's tools
@@ -591,15 +657,24 @@ export async function handleChatMessage(
       return { answer: CHAT_BUSY_MESSAGE, sessionId: sessionId ?? chatHistory?.getSessionId() ?? null, busy: true };
     }
     const controller = new AbortController();
-    const categorizing = runCategorizeCommand(expansion.limit, controller.signal);
+    const runDb = chatDb;
+    // Asked before each batch writes (#165): an owner who lost write rights stops the run there.
+    const mayWrite = () => {
+      if (runMayWrite(runDb, user)) return true;
+      controller.abort();
+      return false;
+    };
+    const categorizing = runCategorizeCommand(expansion.limit, controller.signal, mayWrite);
     const settled: Promise<void> = categorizing.then(() => {}, () => {}).finally(() => {
       if (activeChatRun !== settled) return; // the session was replaced meanwhile
       activeChatRun = null;
       cancelActiveRun = null;
+      revokeActiveRunWrites = null;
       chatRunOwner = null;
     });
     activeChatRun = settled;
     cancelActiveRun = () => controller.abort();
+    revokeActiveRunWrites = cancelActiveRun; // a "/categorize" only writes
     chatRunOwner = user;
     return { answer: await categorizing, sessionId: sessionId ?? chatHistory?.getSessionId() ?? null };
   }
@@ -632,10 +707,18 @@ export async function handleChatMessage(
   const startTime = Date.now();
 
   const runner = agentRunner;
+  const runDb = chatDb;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   chatRunOwner = user;
   cancelActiveRun = () => runner.cancelExecution();
-  const run = runner.runQuery(query, readOnlyUser ? { approvals: 'deny' } : {});
+  revokeActiveRunWrites = () => {
+    const requestId = runner.pendingApprovalId;
+    retireBinding(chatDb, 'role_changed');
+    if (requestId) runner.respondToApproval('deny', requestId);
+  };
+  // A writer's run re-checks its owner at every write it makes (#165), so rights lost mid-run are honoured.
+  const mayWrite = () => runMayWrite(runDb, user);
+  const run = runner.runQuery(query, readOnlyUser ? { approvals: 'deny' } : { mayWrite });
   const settled: Promise<void> = run.then(
     () => {},
     () => {},
@@ -643,6 +726,7 @@ export async function handleChatMessage(
     if (activeChatRun !== settled) return; // the session was replaced meanwhile
     activeChatRun = null;
     cancelActiveRun = null;
+    revokeActiveRunWrites = null;
     // The owner applies only to the run it started (held until the run settles, which can outlast the
     // request after the deadline); never leave it behind for the next caller.
     chatRunOwner = null;
@@ -680,7 +764,9 @@ export async function handleChatMessage(
         : denied
           ? readOnlyUser
             ? viewerCannotWrite(user!, denied)
-            : `Cancelled — you denied ${denied}.`
+            : user && !mayWrite()
+              ? writeRightsLost(denied)
+              : `Cancelled — you denied ${denied}.`
           : 'No response generated.');
     logger.info(`Dashboard chat response`, { durationMs, answerChars: answer.length });
     return { answer, sessionId: chatHistory.getSessionId() ?? null };
@@ -700,6 +786,12 @@ function viewerCannotWrite(user: ChatUser, what: string): string {
     'Nothing was changed. Ask an admin to do this.';
 }
 
+/** Answer for a write refused because the run's owner lost write rights while it ran (#165). */
+function writeRightsLost(what: string): string {
+  return `Not allowed — your account can no longer make changes (its role changed while this message ran), so ${what} was not run. ` +
+    'Anything changed before that stays as it is. Ask an admin to do this.';
+}
+
 /**
  * A bare "/categorize" on a local model does this many transactions per run:
  * at ~15s per batch of 10, a backlog of hundreds would otherwise keep the chat
@@ -716,8 +808,9 @@ const LOCAL_CATEGORIZE_CHUNK = 50;
 let categorizeProgress: ToolProgress | null = null;
 
 const CATEGORIZE_CANCELLED_MESSAGE =
-  '**Categorization cancelled.** It was stopped before it finished (the account that started it was deactivated, ' +
-  'or dashboard login was switched on while it ran). Rows it had already categorized stay as they are; nothing further was changed.';
+  '**Categorization cancelled.** It was stopped before it finished (the account that started it was deactivated ' +
+  'or can no longer make changes, or dashboard login was switched on while it ran). Rows it had already categorized ' +
+  'stay as they are; nothing further was changed.';
 
 /** Live batch progress of the running /categorize, or null (route + test accessor). */
 export function getCategorizeProgress(): ToolProgress | null {
@@ -731,7 +824,7 @@ export function getCategorizeProgress(): ToolProgress | null {
  * prompt is used instead of the agent's full tool-schema prompt. Failures
  * always come back as an answer.
  */
-async function runCategorizeCommand(limit: number | undefined, signal: AbortSignal): Promise<string> {
+async function runCategorizeCommand(limit: number | undefined, signal: AbortSignal, mayWrite: () => boolean): Promise<string> {
   const startTime = Date.now();
   const local = resolveProvider(getTaskModel('categorization')).id === 'transformers';
   const effectiveLimit = limit ?? (local ? LOCAL_CATEGORIZE_CHUNK : undefined);
@@ -739,7 +832,7 @@ async function runCategorizeCommand(limit: number | undefined, signal: AbortSign
   try {
     const resultJson = await categorizeTool.func(
       { ...(effectiveLimit !== undefined ? { limit: effectiveLimit } : {}), skipPendingReview: true },
-      { onProgress: (p) => { categorizeProgress = p; }, signal },
+      { onProgress: (p) => { categorizeProgress = p; }, signal, mayWrite },
     );
     const data = parseCategorizeResult(resultJson);
     let answer = formatCategorizeSummary(data, { errorDetail: true });

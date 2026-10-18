@@ -289,12 +289,14 @@ export async function handleMcpRoute(req: Request, url: URL, path: string, ctx: 
   });
   /** Every operation this user may see and act on: agent operations, plus the dashboard chat's pending one. */
   const visiblePending = (): McpOperation[] => {
-    const operations: McpOperation[] = getPendingOperations(activeDb).filter((op) => isOperationVisible(op, actor));
+    // The chat card first: polling it retires a chat row that can no longer be approved (expired, superseded, or
+    // its run's owner lost write rights, #165), so the list read next never shows that row.
     const chatOp = getPendingChatOperation(activeDb, {
       profile: getCurrentProfileName(),
       userId: actor.userId,
       role: actor.role,
     });
+    const operations: McpOperation[] = getPendingOperations(activeDb).filter((op) => isOperationVisible(op, actor));
     if (chatOp && chatOp.status === 'pending' && isOperationVisible(chatOp, actor) && !operations.some((op) => op.id === chatOp.id)) {
       operations.push(chatOp);
     }

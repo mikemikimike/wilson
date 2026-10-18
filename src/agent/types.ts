@@ -38,6 +38,11 @@ export interface AgentConfig {
   requestToolApproval?: (request: ToolApprovalRequest) => Promise<ApprovalDecision>;
   /** Shared set of session approval keys (SessionApprovalScope.key; persists across queries) */
   sessionApprovedTools?: Set<string>;
+  /**
+   * The run's write authority, asked again at every write it makes (#165): each mutating tool call at the
+   * approval gate, and inside a tool that writes in batches. Absent = only the approval gate decides.
+   */
+  mayWrite?: () => boolean;
 }
 
 /**

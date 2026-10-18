@@ -67,6 +67,8 @@ describe('cancelChatRunForUser only acts on the chat session database', () => {
     dbB = createTestDb();
     seedTestData(dbB);
     initChatSession(dbA);
+    // The run's owner, user 7 of profile A: its writes re-check this row (#165).
+    dbA.prepare("INSERT INTO dashboard_users (id, username, password_hash, role) VALUES (7, 'owner', 'x', 'admin')").run();
     restaurantId = (dbA.prepare("SELECT id FROM transactions WHERE description = 'Restaurant'").get() as { id: number }).id;
   });
 

@@ -39,6 +39,8 @@ export class AgentToolExecutor {
     private readonly requestToolApproval?: (request: ToolApprovalRequest) => Promise<ApprovalDecision>,
     sessionApprovedTools?: Set<string>,
     private readonly model?: string,
+    /** The run's write authority, asked again at every mutating call and handed to the tool (#165). */
+    private readonly mayWrite?: () => boolean,
   ) {
     this.sessionApprovedTools = sessionApprovedTools ?? new Set();
   }
@@ -104,6 +106,7 @@ export class AgentToolExecutor {
       toolArgs,
       this.requestToolApproval,
       this.sessionApprovedTools,
+      this.mayWrite,
     );
     if (gate.asked && gate.decision) {
       yield { type: 'tool_approval', tool: toolName, args: toolArgs, approved: gate.decision };
@@ -151,6 +154,7 @@ export class AgentToolExecutor {
         // them through this same gate (src/orchestration/tool-calls.ts).
         ...(this.requestToolApproval ? { requestToolApproval: this.requestToolApproval } : {}),
         sessionApprovedTools: this.sessionApprovedTools,
+        ...(this.mayWrite ? { mayWrite: this.mayWrite } : {}),
       };
 
       // Launch tool invocation -- closes the channel when it settles

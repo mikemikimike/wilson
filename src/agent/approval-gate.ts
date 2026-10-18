@@ -27,6 +27,12 @@ export interface ApprovalGateResult {
  * approval unless 'allow-session' already covers it. With no handler the
  * call is denied — fail closed. 'allow-session' is remembered in
  * `sessionApprovedTools` only when the call has a session scope.
+ *
+ * `mayWrite`, when given, is the caller's write authority asked again at this
+ * very call (#165): a dashboard chat whose owner was demoted or deactivated
+ * mid-run. It is asked before a session approval or a card can let the call
+ * through, and once more after the answer, so a write never runs on rights
+ * that lapsed while it waited. No means denied, without asking.
  */
 export async function gateToolCall(
   toolName: string,
@@ -34,12 +40,15 @@ export async function gateToolCall(
   args: Record<string, unknown>,
   requestToolApproval: ToolApprovalHandler | undefined,
   sessionApprovedTools: Set<string> | undefined,
+  mayWrite?: () => boolean,
 ): Promise<ApprovalGateResult> {
   if (!isMutatingCall(tool, args)) return { asked: false, decision: null, allowed: true };
+  if (mayWrite && !mayWrite()) return { asked: false, decision: null, allowed: false };
   const session = sessionApprovalScope(toolName, tool, args);
   if (session && sessionApprovedTools?.has(session.key)) return { asked: false, decision: null, allowed: true };
 
   const decision = (await requestToolApproval?.({ tool: toolName, args, session })) ?? 'deny';
+  if (decision !== 'deny' && mayWrite && !mayWrite()) return { asked: true, decision: 'deny', allowed: false };
   if (decision === 'allow-session' && session) {
     // Only this tool (or tool + action): approving bulk categorize for the
     // session must not also wave through delete_transaction, nor memory_manage

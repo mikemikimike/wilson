@@ -167,6 +167,8 @@ describe('ownerless runs end when auth is enabled; /categorize is a tracked, own
   });
 
   test("an owned /categorize: deactivating its owner stops it; another user's cancel does not", async () => {
+    // The owner must exist: each batch re-checks their row before it writes (#165).
+    db.prepare("INSERT INTO dashboard_users (id, username, password_hash, role) VALUES (7, 'owner', 'x', 'admin')").run();
     const run = handleChatMessage('/categorize', undefined, undefined, { user: { id: 7, role: 'admin' }, db });
     await entered;
 

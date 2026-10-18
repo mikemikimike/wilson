@@ -240,6 +240,8 @@ describe('chat approval expiry', () => {
 
   test('the chat op belongs to the run owner, not to whoever polls the queue', async () => {
     const db = createTestDb();
+    // The owner must exist: a card is raised only while its run's owner can still write (#165).
+    db.prepare("INSERT INTO dashboard_users (id, username, password_hash, role) VALUES (7, 'owner', 'x', 'admin')").run();
     await withChatRun(db, { id: 7, role: 'admin' }, { tool: 'categorize', args: {} }, () => {
       const op = getPendingChatOperation(db, { profile: 'test', userId: 1, role: 'viewer' })!;
       expect(op.user_id).toBe(7);

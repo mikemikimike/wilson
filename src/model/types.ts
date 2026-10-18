@@ -75,6 +75,11 @@ export interface ToolInvokeConfig {
   requestToolApproval?: (request: ToolApprovalRequest) => Promise<ApprovalDecision>;
   /** The parent agent's session approvals (SessionApprovalScope.key), shared with inner calls. */
   sessionApprovedTools?: Set<string>;
+  /**
+   * The caller's write authority, asked again before each write (#165). A tool that writes in batches
+   * (categorize) stops once it says no; inner calls of chains and teams pass it to the approval gate.
+   */
+  mayWrite?: () => boolean;
 }
 
 /**

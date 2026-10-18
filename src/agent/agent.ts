@@ -112,7 +112,7 @@ export class Agent {
     this.registry = registry;
     this.tools = registry.map(t => t.tool);
     this.toolMap = new Map(this.tools.map(t => [t.name, t]));
-    this.toolExecutor = new AgentToolExecutor(this.toolMap, config.signal, config.requestToolApproval, config.sessionApprovedTools, this.model);
+    this.toolExecutor = new AgentToolExecutor(this.toolMap, config.signal, config.requestToolApproval, config.sessionApprovedTools, this.model, config.mayWrite);
     this.systemPrompt = systemPrompt;
     this.signal = config.signal;
     this.localParts = localParts;
