@@ -36,6 +36,7 @@
 import {
   buildBundle,
   bundleWindow,
+  checkAnswerFigures,
   computeBundleTotals,
   projectTransactions,
   shouldAttemptLocal,
@@ -594,6 +595,12 @@ export function createHybridChat(opts: HybridOpts) {
     }
     if (classified.kind === 'handoff') {
       return { ok: false, reason: classified.reason };
+    }
+    // A $ figure the app did not compute (the model added rows itself, or the
+    // totals were unreliable) hands off exactly like NEED_MORE_DATA.
+    const checked = checkAnswerFigures(classified.text, bundle.allowedCents);
+    if (checked.kind === 'handoff') {
+      return { ok: false, reason: checked.reason };
     }
 
     const recordedSessionId = await recordLocal(query, classified.text, sessionId);

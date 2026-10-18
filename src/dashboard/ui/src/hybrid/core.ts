@@ -591,6 +591,50 @@ export function classifyLocalOutput(raw: string): LocalVerdict {
   return { kind: 'answer', text: trimmed };
 }
 
+// ── Answer check (bundle mode) ──────────────────────────────────────────────
+
+/**
+ * A money figure in free text: `$` (optionally signed, optionally followed by a
+ * space) and a number, or a bare number with exactly two decimals that is not a
+ * percent ("came to 215.50"). Thousands commas are allowed. A `k`/`m` suffix is
+ * not read as a multiplier, so "$1.2k" parses as $1.20 and never matches a
+ * total — it hands off, which is the safe direction.
+ */
+const MONEY_IN_TEXT = /(-?\$\s?)?(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(?![\d%])/g;
+
+/** Every money figure in `text`, as absolute cents, in order of appearance. */
+export function dollarFiguresInCents(text: string): number[] {
+  const out: number[] = [];
+  for (const m of String(text ?? '').matchAll(MONEY_IN_TEXT)) {
+    const [, dollarSign, whole, frac] = m;
+    const isMoney = dollarSign !== undefined || (frac !== undefined && frac.length === 3);
+    if (!isMoney) continue;
+    const value = Number(`${whole!.replace(/,/g, '')}${frac ?? ''}`);
+    if (Number.isFinite(value)) out.push(Math.round(Math.abs(value) * 100));
+  }
+  return out;
+}
+
+/** The money figures in `text` that are not in `allowedCents` (absolute cents). */
+export function unverifiedDollarFigures(text: string, allowedCents: Iterable<number>): number[] {
+  const allowed = new Set(allowedCents);
+  return dollarFiguresInCents(text).filter((cents) => !allowed.has(cents));
+}
+
+/**
+ * Bundle mode's answer check. A small in-tab model can still do its own
+ * arithmetic despite the prompt, so every money figure in its answer must match,
+ * to the cent, a figure the app put in the bundle (ContextBundle.allowedCents:
+ * a reliable computed total, a weekly-summary figure, or one shown transaction
+ * amount). Any other figure hands the turn to the server exactly as
+ * NEED_MORE_DATA does ('outside-bundle'). Answers without figures pass.
+ */
+export function checkAnswerFigures(text: string, allowedCents: Iterable<number>): LocalVerdict {
+  return unverifiedDollarFigures(text, allowedCents).length > 0
+    ? { kind: 'handoff', reason: 'outside-bundle' }
+    : { kind: 'answer', text };
+}
+
 // ── Capability decision matrix ──────────────────────────────────────────────
 
 export type HybridCapability = 'unknown' | 'ready' | 'unavailable' | 'failed';

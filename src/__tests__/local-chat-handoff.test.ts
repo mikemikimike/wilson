@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildLocalUserMessage,
+  checkAnswerFigures,
   classifyLocalOutput,
+  dollarFiguresInCents,
   stripThinking,
   NEED_MORE_SENTINEL,
   NEED_MORE_PHRASES,
@@ -237,5 +239,72 @@ describe('real answers that merely mention data/information/need stay answers', 
 describe('buildLocalUserMessage', () => {
   test('ends the user turn with the Qwen3 no-think soft switch', () => {
     expect(buildLocalUserMessage('ctx', 'Top category?').endsWith(`Question: Top category? ${NO_THINK_SWITCH}`)).toBe(true);
+  });
+});
+
+/**
+ * Answer check (bundle mode): a $ figure in a local answer must match, to the
+ * cent, a figure the app put in the bundle (a computed total, a weekly-summary
+ * figure, or one shown transaction amount). Anything else hands off exactly
+ * like NEED_MORE_DATA does: { kind: 'handoff', reason: 'outside-bundle' }.
+ */
+describe('dollarFiguresInCents', () => {
+  test('parses $ figures to absolute cents, normalising commas and missing cents', () => {
+    expect(dollarFiguresInCents('You spent $159.50 on dining and $1,234 on rent.')).toEqual([15950, 123400]);
+    expect(dollarFiguresInCents('Down -$21.55 (or $ 21.5) from last week.')).toEqual([2155, 2150]);
+    expect(dollarFiguresInCents('**$258.60**')).toEqual([25860]);
+  });
+
+  test('a money-shaped bare number (two decimals) counts too; percents, counts and dates do not', () => {
+    expect(dollarFiguresInCents('Dining came to 215.50 this month.')).toEqual([21550]);
+    expect(dollarFiguresInCents('Up 18.25% across 12 purchases since 2026-10-01.')).toEqual([]);
+  });
+
+  test('no figures → empty', () => {
+    expect(dollarFiguresInCents('Dining is your top category.')).toEqual([]);
+  });
+});
+
+describe('checkAnswerFigures', () => {
+  // Oct 18 seed: computed totals dining $159.50, groceries $258.60; one shown row $37.20.
+  const allowed = [15950, 25860, 41810, 3720];
+
+  test('regression: Gemma\'s summed-rows dining answer ($215.50) hands off', () => {
+    expect(checkAnswerFigures('You spent $215.50 on dining this month.', allowed)).toEqual({
+      kind: 'handoff',
+      reason: 'outside-bundle',
+    });
+  });
+
+  test('regression: Gemma\'s groceries answer ($322.30) hands off', () => {
+    expect(checkAnswerFigures('Groceries this month: $322.30.', allowed).kind).toBe('handoff');
+  });
+
+  test('quoting the computed total verbatim is an answer', () => {
+    const text = 'You spent $159.50 on dining this month.';
+    expect(checkAnswerFigures(text, allowed)).toEqual({ kind: 'answer', text });
+  });
+
+  test('matches to the cent after normalising ($159.5 == $159.50; $1,234.00 == 123400)', () => {
+    expect(checkAnswerFigures('Dining: $159.5', allowed).kind).toBe('answer');
+    expect(checkAnswerFigures('Rent: $1,234.00', [123400]).kind).toBe('answer');
+    expect(checkAnswerFigures('Dining: $159.51', allowed).kind).toBe('handoff');
+  });
+
+  test('one wrong figure among right ones hands off', () => {
+    expect(checkAnswerFigures('Dining $159.50, groceries $322.30.', allowed).kind).toBe('handoff');
+  });
+
+  test('a single shown transaction amount is allowed (e.g. "your largest dining charge")', () => {
+    expect(checkAnswerFigures('Your last diner visit was $37.20.', allowed).kind).toBe('answer');
+  });
+
+  test('an answer with no figures passes through unchanged', () => {
+    const text = 'Groceries is your top category this month.';
+    expect(checkAnswerFigures(text, allowed)).toEqual({ kind: 'answer', text });
+  });
+
+  test('with nothing allowed (totals unreliable, no rows) any figure hands off', () => {
+    expect(checkAnswerFigures('You spent $258.60.', []).kind).toBe('handoff');
   });
 });
