@@ -12,8 +12,9 @@ import { mirrorExecuteRead } from '../dashboard/ui/src/store/mirror-tools.js';
  * used to make `spending_summary({})` and `profit_loss({})` throw; the WebMCP
  * work moved both into shared compute helpers (computeSpendingSummary,
  * computeProfitLoss) that default the period, so they now answer for the current
- * period. What still differs: the server leaves `compareWithPrevious` off when it
- * is omitted, while the mirror applies the schema default (on).
+ * period. `compareWithPrevious` used to differ too (the server left it off when
+ * omitted, the mirror applied the schema default, on); computeSpendingSummary now
+ * applies the one shared default (COMPARE_WITH_PREVIOUS_DEFAULT, on) itself (#161).
  */
 
 let fx: ParityFixture;
@@ -30,11 +31,11 @@ afterAll(() => {
 });
 
 describe('known divergence: server schema defaults are not applied', () => {
-  test('server spending_summary({}) answers for the current month, without the previous period', async () => {
+  test('server spending_summary({}) answers for the current month, with the previous period (#161)', async () => {
     const empty = JSON.parse(await (spendingSummaryTool.func as (a: unknown) => Promise<string>)({})).data;
-    const month = JSON.parse(await spendingSummaryTool.func({ period: 'month', compareWithPrevious: false })).data;
+    const month = JSON.parse(await spendingSummaryTool.func({ period: 'month', compareWithPrevious: true })).data;
     expect(empty).toEqual(month);
-    expect(empty.previousPeriod).toBeUndefined();
+    expect(empty.previousPeriod).toBeDefined();
   });
 
   test('server profit_loss({}) answers for the current month', async () => {

@@ -8,7 +8,7 @@ import {
 } from '../mcp/tool-catalog.js';
 import { insertTransactions } from '../db/queries.js';
 import { initTransactionSearchTool } from '../tools/query/transaction-search.js';
-import { initSpendingSummaryTool } from '../tools/query/spending-summary.js';
+import { getPeriodDates, initSpendingSummaryTool, spendingSummaryTool } from '../tools/query/spending-summary.js';
 import { initProfitLossTool } from '../tools/query/profit-loss.js';
 import { initNetWorthTool } from '../tools/net-worth/net-worth.js';
 import { confirmationCardModel } from '../mcp/confirmation-card.js';
@@ -272,6 +272,28 @@ describe('executeRead reads the database it is given, not a module-global one', 
     expect(spend.totalSpending).toBe(-121); // B only: -22 (Beta) + -99
     const pnl = (await executeRead(dbB, 'get_profit_loss', { period: 'year' })) as any;
     expect(pnl.expenses).toBeCloseTo(-121, 5);
+  });
+
+  test('#161: get_spending_summary and chat spending_summary default compareWithPrevious the same way (on)', async () => {
+    const db = createTestDb();
+    // The same period boundaries the summary uses, so the test holds on any day of the month.
+    insertTransactions(db, [
+      { date: getPeriodDates('month', 0).start, description: 'This month', amount: -40, category: 'Dining' },
+      { date: getPeriodDates('month', -1).start, description: 'Last month', amount: -25, category: 'Dining' },
+    ]);
+    initSpendingSummaryTool(db);
+    // No flag on either surface.
+    const webmcp = (await executeRead(db, 'get_spending_summary', { period: 'month' })) as any;
+    const chat = JSON.parse(await (spendingSummaryTool.func as (a: unknown) => Promise<string>)({ period: 'month' })).data;
+    expect(chat.previousPeriod).toBeDefined();
+    expect(webmcp.previousTotal).toBe(chat.previousPeriod.totalSpending);
+    expect(webmcp.previousTotal).toBe(-25);
+    expect(webmcp.items[0]).toMatchObject({ category: 'Dining', total: -40, prev: -25 });
+    // An explicit false still turns it off on both.
+    const off = (await executeRead(db, 'get_spending_summary', { period: 'month', compareWithPrevious: false })) as any;
+    expect(off.previousTotal).toBeUndefined();
+    const chatOff = JSON.parse(await spendingSummaryTool.func({ period: 'month', compareWithPrevious: false })).data;
+    expect(chatOff.previousPeriod).toBeUndefined();
   });
 
   test('forecast and get_tax_summary take the db too', async () => {

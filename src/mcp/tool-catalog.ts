@@ -295,8 +295,8 @@ export const MCP_TOOL_CATALOG: McpToolDef[] = [
   {
     name: 'get_spending_summary',
     description:
-      'Spending by category for the current month, quarter or year, optionally with the previous period for comparison. ' +
-      'Returns compact category rows; pass nextCursor for more categories.',
+      'Spending by category for the current month, quarter or year, with the previous period for comparison unless ' +
+      'compareWithPrevious is false. Returns compact category rows; pass nextCursor for more categories.',
     classification: 'read',
     minRole: 'viewer',
     untrustedOutput: true,
@@ -1028,6 +1028,8 @@ export function executeReadSync(db: Database, toolName: string, args: Record<str
     case 'get_spending_summary': {
       const summary = computeSpendingSummary(db, {
         period: args.period as 'month' | 'quarter' | 'year' | undefined,
+        // Undefined takes the shared default (on), the same as the chat tool. The schema stays `.optional()`: a
+        // `.default()` would change this BOTH tool's schema digest and invalidate every client-token grant for it.
         compareWithPrevious: args.compareWithPrevious as boolean | undefined,
       });
       const prev = new Map((summary.previousPeriod?.categories ?? []).map((c) => [c.category, c.total]));

@@ -156,8 +156,15 @@ function formatSummary(
   return lines.join('\n');
 }
 
+/**
+ * Whether a summary includes the previous period when the caller does not say. One default for every caller (the
+ * chat tool, WebMCP `get_spending_summary`, the local handoff), so the same question gets the same shape everywhere.
+ */
+export const COMPARE_WITH_PREVIOUS_DEFAULT = true;
+
 export interface SpendingSummaryOptions {
   period?: 'month' | 'quarter' | 'year';
+  /** Default `COMPARE_WITH_PREVIOUS_DEFAULT`. */
   compareWithPrevious?: boolean;
   /**
    * "YYYY-MM": report that month instead of the current one (period 'month' only; malformed means current). Not in
@@ -168,7 +175,7 @@ export interface SpendingSummaryOptions {
 
 /**
  * Spending breakdown for a period (and optionally the one before it), read
- * from the database passed in. The chat tool and the WebMCP `spending_summary`
+ * from the database passed in. The chat tool and the WebMCP `get_spending_summary`
  * tool both call this, so neither depends on a module-global connection.
  */
 export function computeSpendingSummary(database: Database, opts: SpendingSummaryOptions = {}) {
@@ -182,7 +189,7 @@ export function computeSpendingSummary(database: Database, opts: SpendingSummary
   // Previous period (if requested)
   let prevRows: SpendingSummaryRow[] | undefined;
   let prevLabel: string | undefined;
-  if (opts.compareWithPrevious) {
+  if (opts.compareWithPrevious ?? COMPARE_WITH_PREVIOUS_DEFAULT) {
     const prev = getPeriodDates(period, offset - 1);
     prevRows = getSpendingSummary(database, prev.start, prev.end);
     prevLabel = prev.label;
@@ -227,7 +234,7 @@ export const spendingSummaryTool = defineTool({
       .describe('Time period for the summary'),
     compareWithPrevious: z
       .boolean()
-      .default(true)
+      .default(COMPARE_WITH_PREVIOUS_DEFAULT)
       .describe('Compare with the previous period'),
   }),
   func: async (args) => {
