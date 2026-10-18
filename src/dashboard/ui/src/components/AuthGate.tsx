@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { dispatchAuthSession } from '@webmcp-session';
 import { App } from '@/App';
 import { api, getBaseUrl } from '@/api';
 import {
@@ -70,13 +71,15 @@ export function AuthGate() {
         const storage = localStore();
         if (check.kind === 'status' && check.status.authEnabled) noteAuthEnabled(storage);
         const offlineLocked = offlineLoginRequired(storage, readAuthToken() !== null);
-        const { view: next, remount, wipe } = settleAuthCheck(check, viewRef.current, undefined, offlineLocked);
+        const { view: next, remount, wipe, session } = settleAuthCheck(check, viewRef.current, undefined, offlineLocked);
+        if (session === 'ended') dispatchAuthSession('ended');
         // Wipe before the login view shows; unlock before the app mounts and starts its first sync.
         if (wipe) await lockMirror();
         else if (next.kind === 'app') unlockMirror();
         if (remount) setGeneration((g) => g + 1);
         viewRef.current = next;
         setView(next);
+        if (session === 'started') dispatchAuthSession('started');
       }),
     [],
   );

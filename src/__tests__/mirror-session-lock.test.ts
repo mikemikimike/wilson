@@ -215,13 +215,15 @@ describe('wiring (source pins: these modules need a browser worker or React)', (
     expect(gate).toContain("if (check.kind === 'status' && check.status.authEnabled) noteAuthEnabled(storage);");
   });
 
-  test('logout clears the token and wipes the mirror before it reloads', () => {
+  test('logout clears the token, tells the bridge and wipes the mirror before it reloads', () => {
     const body = settings.slice(settings.indexOf('async function handleLogout()'));
     const clear = body.indexOf('clearAuthToken();');
+    const tell = body.indexOf("dispatchAuthSession('ended');");
     const wipe = body.indexOf('await lockMirror();');
     const reload = body.indexOf('window.location.reload();');
     expect(clear).toBeGreaterThan(-1);
-    expect(wipe).toBeGreaterThan(clear);
+    expect(tell).toBeGreaterThan(clear);
+    expect(wipe).toBeGreaterThan(tell);
     expect(reload).toBeGreaterThan(wipe);
   });
 });

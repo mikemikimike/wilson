@@ -87,10 +87,12 @@ describe('L3 + L4 wiring in the bridge (source guard)', () => {
     expect(code.match(/grantForCall\((name|tool\.name), grantIdByTool, lastGrantIdByTool\)/g)).toHaveLength(2);
     expect(code.match(/throw staleGrantRefusal\(/g)).toHaveLength(2);
     // Every live grant is remembered (the server decides what a stale one is worth). Only an authorization failure of
-    // the tab itself forgets them: then the tab makes no call at all.
+    // the tab itself, or the end of its login session, forgets them: then the tab makes no call at all.
     expect(code).toContain('lastGrantIdByTool.set(tool.name, tool.grantId);');
     expect(code.match(/lastGrantIdByTool\.clear\(\)/g)).toHaveLength(1);
-    expect(code).toMatch(/if \(!isAuthFailure\(err\)\) return;\s*grantIdByTool\.clear\(\);\s*lastGrantIdByTool\.clear\(\);/);
+    expect(code).toMatch(/async function dropLiveTools\(\): Promise<void> \{\s*grantIdByTool\.clear\(\);\s*lastGrantIdByTool\.clear\(\);/);
+    expect(code.match(/await dropLiveTools\(\)/g)).toHaveLength(2);
+    expect(code).toContain('if (isAuthFailure(err) && session.isCurrent(epoch)) await dropLiveTools();');
     expect(code).not.toContain('lastGrantIdByTool.delete(');
   });
 });

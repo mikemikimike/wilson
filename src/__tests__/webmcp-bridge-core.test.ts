@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import {
-  callServerTool, callServerToolAnswer, createReconcileScheduler, desiredTools, executePageTool, executeServerTool, grantForCall,
-  reconcile, registerLiveTools, liveToolsSignature, revokedToolError, staleGrantRefusal, SESSION_HEADER,
+  callServerTool, callServerToolAnswer, createBridgeSession, createReconcileScheduler, desiredTools, executePageTool, executeServerTool, grantForCall,
+  liveSetFor, reconcile, registerLiveTools, liveToolsSignature, revokedToolError, sessionChangeFromEvent, sessionChangeFromStorage,
+  staleGrantRefusal, SESSION_HEADER,
   type ServerCallDeps, type LiveToolDescriptor, type PageToolRuntime,
 } from '../dashboard/webmcp-bridge-core.js';
+import { WILSON_AUTH_SESSION_EVENT, dispatchAuthSession } from '../dashboard/webmcp-session.js';
 import { ToolCallError } from '../dashboard/webmcp-tool-error.js';
 import { KILL_SWITCH_MESSAGE } from '../mcp/global-state.js';
 import { getPageRegistry } from '../dashboard/webmcp-page-registry.js';
@@ -1182,5 +1184,134 @@ describe('registerLiveTools: a shrinking live set always unregisters', () => {
     expect(killed.deferred).toEqual([]);
     expect(mc.live.size).toBe(0);
     busy = false;
+  });
+});
+
+describe('login session: resync on re-login, unexpose on logout', () => {
+  const AUTH = 'wilson_auth_token';
+
+  /**
+   * The bridge's sync, reduced to what the session decides: read the state and the live set (with the token of the
+   * moment), then expose `liveSetFor` of them unless the session changed while the answer was on its way. `release`
+   * holds the answer back, so a test can end the session mid-sync.
+   */
+  function fakeBridge(server: { killSwitch: boolean; tools: string[]; raceKillSwitch?: boolean }) {
+    let exposed: string[] = ['granted_before'];
+    const log: string[] = [];
+    let hold: Promise<void> | null = null;
+    let release: () => void = () => {};
+    const sync = async () => {
+      const epoch = session.epoch();
+      log.push('sync');
+      // The answer the server gives now: [] under the kill switch (unless a test races it: the list was read just before).
+      const state = { enabled: !server.killSwitch };
+      const tools = server.killSwitch && !server.raceKillSwitch ? [] : [...server.tools];
+      if (hold) await hold;
+      if (!session.isCurrent(epoch)) return;
+      exposed = liveSetFor(tools, state);
+    };
+    const session = createBridgeSession({
+      unexpose: async () => {
+        log.push('unexpose');
+        exposed = [];
+      },
+      resync: sync,
+    });
+    return {
+      session,
+      sync,
+      log,
+      exposed: () => exposed,
+      holdAnswers() {
+        hold = new Promise<void>((r) => { release = () => { hold = null; r(); }; });
+      },
+      release: () => release(),
+    };
+  }
+
+  test('session start (AuthGate signed in without a reload) resyncs at once and re-exposes the live set', async () => {
+    const bridge = fakeBridge({ killSwitch: false, tools: ['list_transactions'] });
+    await bridge.session.change('ended');
+    expect(bridge.exposed()).toEqual([]);
+    await bridge.session.change('started');
+    expect(bridge.log).toEqual(['unexpose', 'unexpose', 'sync']);
+    expect(bridge.exposed()).toEqual(['list_transactions']);
+  });
+
+  test('session end unexposes immediately, without waiting for a sync to come back 401', async () => {
+    const bridge = fakeBridge({ killSwitch: false, tools: ['list_transactions'] });
+    await bridge.session.change('ended');
+    expect(bridge.exposed()).toEqual([]);
+    expect(bridge.log).toEqual(['unexpose']);
+  });
+
+  test('kill switch on: re-login exposes nothing, even from a live-set answer that raced the switch', async () => {
+    const off = fakeBridge({ killSwitch: true, tools: ['list_transactions'] });
+    await off.session.change('started');
+    expect(off.exposed()).toEqual([]);
+    const raced = fakeBridge({ killSwitch: true, tools: ['list_transactions'], raceKillSwitch: true });
+    await raced.session.change('started');
+    expect(raced.exposed()).toEqual([]);
+  });
+
+  test('a sync in flight when the session ends cannot re-expose its (old-token) answer', async () => {
+    const bridge = fakeBridge({ killSwitch: false, tools: ['list_transactions'] });
+    bridge.holdAnswers();
+    const inFlight = bridge.sync();
+    await bridge.session.change('ended');
+    bridge.release();
+    await inFlight;
+    expect(bridge.exposed()).toEqual([]);
+  });
+
+  test("a new login replacing another drops the old login's tools before the resync", async () => {
+    const bridge = fakeBridge({ killSwitch: false, tools: ['new_users_tool'] });
+    bridge.holdAnswers();
+    const restarting = bridge.session.change('started');
+    await Promise.resolve();
+    expect(bridge.exposed()).toEqual([]);
+    bridge.release();
+    await restarting;
+    expect(bridge.exposed()).toEqual(['new_users_tool']);
+  });
+
+  test('liveSetFor: the kill switch read as on empties the set; no state yet leaves the server answer alone', () => {
+    expect(liveSetFor(['a'], { enabled: false })).toEqual([]);
+    expect(liveSetFor(['a'], { enabled: true })).toEqual(['a']);
+    expect(liveSetFor(['a'], null)).toEqual(['a']);
+  });
+
+  test("another tab's login or logout: the token's storage event", () => {
+    expect(sessionChangeFromStorage({ key: AUTH, oldValue: 't1', newValue: null }, AUTH)).toBe('ended');
+    expect(sessionChangeFromStorage({ key: null, oldValue: null, newValue: null }, AUTH)).toBe('ended'); // store cleared
+    expect(sessionChangeFromStorage({ key: AUTH, oldValue: null, newValue: 't2' }, AUTH)).toBe('started');
+    expect(sessionChangeFromStorage({ key: AUTH, oldValue: 't1', newValue: 't2' }, AUTH)).toBe('started');
+    expect(sessionChangeFromStorage({ key: AUTH, oldValue: 't1', newValue: 't1' }, AUTH)).toBeNull();
+    expect(sessionChangeFromStorage({ key: 'wilson_mirror_profile', oldValue: null, newValue: 'x' }, AUTH)).toBeNull();
+  });
+
+  test("this tab's gate: the session event, and nothing else", () => {
+    const target = new EventTarget();
+    const seen: unknown[] = [];
+    target.addEventListener(WILSON_AUTH_SESSION_EVENT, (e) => seen.push(sessionChangeFromEvent(e)));
+    dispatchAuthSession('started', target);
+    dispatchAuthSession('ended', target);
+    expect(seen).toEqual(['started', 'ended']);
+    expect(sessionChangeFromEvent(new CustomEvent(WILSON_AUTH_SESSION_EVENT, { detail: { state: 'other' } }))).toBeNull();
+    expect(sessionChangeFromEvent(null)).toBeNull();
+    expect(() => dispatchAuthSession('ended', undefined)).not.toThrow();
+  });
+
+  test('the bridge listens for both, guards every answer by the session, and filters the live set (source pin)', () => {
+    const bridge = readFileSync(new URL('../dashboard/webmcp-bridge.ts', import.meta.url), 'utf8');
+    expect(bridge).toContain('window.addEventListener(WILSON_AUTH_SESSION_EVENT, (e) => {');
+    expect(bridge).toContain('const change = sessionChangeFromStorage(e, AUTH_KEY);');
+    expect(bridge).toContain('tools = liveSetFor(tools, agentState);');
+    expect(bridge).toContain("if (!session.isCurrent(epoch)) return; // read under a login that has ended since");
+    expect(bridge).toContain('if (session.isCurrent(epoch)) applyOperations(res.operations, options);');
+    // The React gate is the one that announces in-place logins and ends.
+    const gate = readFileSync(new URL('../dashboard/ui/src/components/AuthGate.tsx', import.meta.url), 'utf8');
+    expect(gate).toContain("if (session === 'ended') dispatchAuthSession('ended');");
+    expect(gate).toContain("if (session === 'started') dispatchAuthSession('started');");
   });
 });

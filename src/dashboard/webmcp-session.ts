@@ -19,6 +19,23 @@ export const WILSON_AGENT_STATE_CHANGED_EVENT = 'wilson:agent-state-changed';
 /** BroadcastChannel that carries the same news to the dashboard's other tabs (kill switch and policy changes). */
 export const WILSON_AGENT_CHANNEL = 'wilson-agent-access';
 
+/**
+ * Window event the React login gate fires when this tab's login session starts in place (signed in again without a
+ * reload) or ends (logout, an expired or revoked session). `detail.state` is 'started' or 'ended'. The bridge resyncs
+ * its tools on 'started' and drops them on 'ended'; other tabs learn the same from the token's `storage` event.
+ */
+export const WILSON_AUTH_SESSION_EVENT = 'wilson:auth-session';
+export type AuthSessionState = 'started' | 'ended';
+
+/** Fire WILSON_AUTH_SESSION_EVENT on `target`. Never throws. */
+export function dispatchAuthSession(state: AuthSessionState, target: EventTarget | undefined = globalThis.window): void {
+  try {
+    target?.dispatchEvent(new CustomEvent(WILSON_AUTH_SESSION_EVENT, { detail: { state } }));
+  } catch {
+    // No DOM events here (a test, an old runtime): there is no bridge to tell either.
+  }
+}
+
 /** The slice of `BroadcastChannel` the dashboard uses, so a test can stand in a fake one. */
 export interface AgentChannel {
   postMessage(message: unknown): void;

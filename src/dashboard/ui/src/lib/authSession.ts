@@ -188,6 +188,9 @@ function endedSession(sentToken: string | null, previous: AuthGateView): boolean
   return sentToken !== null || previous.kind === 'app' || (previous.kind === 'login' && previous.sessionEnded);
 }
 
+/** What a settled check means for the login session: one began (the app opens for a login), one ended, or neither. */
+export type SessionTransition = 'started' | 'ended' | null;
+
 /** What applying a status check asks of the gate. */
 export interface SettledAuthCheck {
   view: AuthGateView;
@@ -195,6 +198,8 @@ export interface SettledAuthCheck {
   remount: boolean;
   /** Lock and wipe the offline mirror before showing `view` (store/mirror-client.ts lockMirror). */
   wipe: boolean;
+  /** Tell the WebMCP bridge (webmcp-session.ts WILSON_AUTH_SESSION_EVENT); null when nothing changed for it. */
+  session: SessionTransition;
 }
 
 /**
@@ -206,7 +211,9 @@ export interface SettledAuthCheck {
  * for the old one. A re-check that confirms the same login keeps everything mounted.
  *
  * Every login or setup screen means auth is on and this tab has no login, so the offline mirror is wiped first,
- * each time (a wipe that found nothing is cheap, and one another tab could not finish gets another go).
+ * each time (a wipe that found nothing is cheap, and one another tab could not finish gets another go). An app
+ * that opens after the first check of the page is a session starting in place (the WebMCP bridge resyncs); one on
+ * the first check is the page load, which the bridge syncs on its own.
  */
 export function settleAuthCheck(
   check: AuthCheck,
@@ -221,7 +228,11 @@ export function settleAuthCheck(
   const view = authGateView(check, previous, offlineLocked);
   const remount = view.kind === 'app' && (previous.kind !== 'app' || previous.userId !== view.userId);
   const wipe = view.kind === 'login' || view.kind === 'setup';
-  return { view, remount, wipe };
+  const wasLocked = previous.kind === 'login' || previous.kind === 'setup';
+  const session: SessionTransition = wipe
+    ? (wasLocked ? null : 'ended')
+    : remount && previous.kind !== 'checking' ? 'started' : null;
+  return { view, remount, wipe, session };
 }
 
 /** A `storage` event that changes the session: the token key itself, or the whole store cleared (key null). */

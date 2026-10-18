@@ -703,6 +703,73 @@ export function createReconcileScheduler(options: ReconcileSchedulerOptions): Re
   };
 }
 
+// ── Login session ────────────────────────────────────────────────────────────
+
+/** How the login session changed, as the bridge sees it. 'started' covers a new login replacing an old one. */
+export type BridgeSessionChange = 'started' | 'ended';
+
+/**
+ * A `storage` event from another tab of this origin, read for the session token under `authKey`: removed (logout, a
+ * 401 there, or the whole store cleared, key null) ends this tab's session; a new token starts one.
+ */
+export function sessionChangeFromStorage(
+  event: { key: string | null; oldValue?: string | null; newValue: string | null },
+  authKey: string,
+): BridgeSessionChange | null {
+  if (event.key !== null && event.key !== authKey) return null;
+  if (!event.newValue) return 'ended';
+  return event.newValue === event.oldValue ? null : 'started';
+}
+
+/** The React gate's in-tab session event (`detail.state`), or null for anything else. */
+export function sessionChangeFromEvent(event: unknown): BridgeSessionChange | null {
+  const state = (event as { detail?: { state?: unknown } } | null)?.detail?.state;
+  return state === 'started' || state === 'ended' ? state : null;
+}
+
+export interface BridgeSessionDeps {
+  /** Drop every live tool now: forms lose their tool attributes, imperative tools are unregistered, remembered grants forgotten. */
+  unexpose(): Promise<void>;
+  /** Re-read the agent state and the live set from the server. */
+  resync(): Promise<void>;
+}
+
+export interface BridgeSession {
+  /** The current session's number. A sync records it when it starts. */
+  epoch(): number;
+  /** Whether a sync that started at `epoch` may still apply its answer (no session change since). */
+  isCurrent(epoch: number): boolean;
+  /** Apply a session change. Resolves when the tools match it. */
+  change(change: BridgeSessionChange): Promise<void>;
+}
+
+/**
+ * The bridge's view of the login session. A change first drops what is live (the tools were granted to the old
+ * login), and invalidates any sync still in flight, whose answer was read with the old token. A start then resyncs
+ * from the server at once rather than on the next focus or timer: the server's live set is empty while the kill
+ * switch is on, and `liveSetFor` refuses it locally as well, so signing in again never re-exposes anything then.
+ */
+export function createBridgeSession(deps: BridgeSessionDeps): BridgeSession {
+  let epoch = 0;
+  return {
+    epoch: () => epoch,
+    isCurrent: (e) => e === epoch,
+    async change(change) {
+      epoch++;
+      await deps.unexpose();
+      if (change === 'started') await deps.resync();
+    },
+  };
+}
+
+/**
+ * The live set to expose for a sync's answer. The server already answers [] while agent access is off; a tab that
+ * just read the kill switch as on does not expose a set that raced it.
+ */
+export function liveSetFor<T>(tools: T[], state: { enabled: boolean } | null): T[] {
+  return state && state.enabled === false ? [] : tools;
+}
+
 // ── Page tools ───────────────────────────────────────────────────────────────
 
 /** The most a page tool may hand an agent (the same bound as every other tool's output). */

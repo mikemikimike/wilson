@@ -31,6 +31,7 @@ import {
   WILSON_OPEN_AGENT_PANEL_EVENT,
   WILSON_GRANTS_CHANGED_EVENT,
   WILSON_AGENT_STATE_CHANGED_EVENT,
+  WILSON_AUTH_SESSION_EVENT,
   openAgentChannel,
   type AgentChannel,
 } from './webmcp-session.js';
@@ -38,15 +39,19 @@ import {
   SESSION_HEADER,
   callServerTool,
   callServerToolAnswer,
+  createBridgeSession,
   createOperationLedger,
   createReconcileScheduler,
   endChromeCall,
   executePageTool,
   executeServerTool,
   grantForCall,
+  liveSetFor,
   liveToolsSignature,
   registerLiveTools,
   revokedToolError,
+  sessionChangeFromEvent,
+  sessionChangeFromStorage,
   staleGrantRefusal,
   type AgentCall,
   type ChromeCallEnd,
@@ -187,11 +192,15 @@ let onStateChange: (() => void) | null = null;
 let channel: AgentChannel | null = null;
 
 async function refreshState(): Promise<void> {
+  const epoch = session.epoch();
+  let next: AgentState;
   try {
-    agentState = await api<AgentState>('/api/mcp/state');
+    next = await api<AgentState>('/api/mcp/state');
   } catch {
     return; // keep the last good snapshot; the next sync tries again
   }
+  if (!session.isCurrent(epoch)) return; // read under a login that has ended since
+  agentState = next;
   onStateChange?.();
 }
 
@@ -594,9 +603,10 @@ function applyOperations(all: McpOperation[], options: { cards: boolean }): void
 
 /** One fetch of the pending operations, applied. A failed fetch keeps what is shown. */
 async function refreshPending(options: { cards: boolean }): Promise<void> {
+  const epoch = session.epoch();
   try {
     const res = await api<{ operations: McpOperation[] }>('/api/mcp/operations');
-    applyOperations(res.operations, options);
+    if (session.isCurrent(epoch)) applyOperations(res.operations, options);
   } catch {
     // Keep the last good list; the next poll tries again.
   }
@@ -849,7 +859,17 @@ function isAuthFailure(err: unknown): boolean {
   return err instanceof Error && /^(401|403):/.test(err.message);
 }
 
+/** Forms drop their tool attributes and imperative tools are unregistered; no call goes out under a remembered grant. */
+async function dropLiveTools(): Promise<void> {
+  grantIdByTool.clear();
+  lastGrantIdByTool.clear();
+  liveTools = [];
+  publishLiveSet([]);
+  await scheduler.flush();
+}
+
 async function syncRegisteredTools(): Promise<void> {
+  const epoch = session.epoch();
   let tools: LiveToolDescriptor[];
   try {
     const res = await api<{ tools: LiveToolDescriptor[] }>('/api/mcp/tools');
@@ -859,17 +879,15 @@ async function syncRegisteredTools(): Promise<void> {
     // failure does not: the live set is "granted, policy not Off, access on", and this tab can no longer say so,
     // so forms drop their tool attributes and imperative tools are unregistered until a sync succeeds. Calls do not go
     // out under a remembered grant either: this tab is not authorized to make them.
-    if (!isAuthFailure(err)) return;
-    grantIdByTool.clear();
-    lastGrantIdByTool.clear();
-    liveTools = [];
-    publishLiveSet([]);
-    await scheduler.flush();
+    if (isAuthFailure(err) && session.isCurrent(epoch)) await dropLiveTools();
     return;
   }
+  // An answer read under a login that has ended since is not this session's live set.
+  if (!session.isCurrent(epoch)) return;
 
   // The server already answers [] while agent access is off and leaves out a tool whose policy is Off,
   // so a kill switch or a policy change unregisters everything it covers on this sync.
+  tools = liveSetFor(tools, agentState);
   grantIdByTool.clear();
   for (const tool of tools) {
     grantIdByTool.set(tool.name, tool.grantId);
@@ -1183,6 +1201,31 @@ async function syncAndSchedule(): Promise<void> {
   scheduleConfirmationPoll(); // live-grant status may have changed the cadence
 }
 
+/**
+ * The login session (webmcp-bridge-core.ts createBridgeSession). Ending it drops this tab's tools, cards and agent
+ * state at once instead of waiting for a sync to come back 401; starting it in place (the React gate signed the
+ * person back in without a reload) resyncs at once instead of waiting for a focus change or the timer, which does not
+ * run while nothing is live.
+ */
+const session = createBridgeSession({
+  async unexpose() {
+    clearTimeout(toolSyncTimer);
+    toolSyncTimer = undefined;
+    agentState = null;
+    lastPollHadPending = false;
+    for (const [, handle] of cards) removeCardNode(handle.node);
+    cards.clear();
+    dismissed.clear();
+    onStateChange?.();
+    await dropLiveTools();
+  },
+  async resync() {
+    lateAttempts = 0;
+    kickConfirmationPoller();
+    await syncAndSchedule();
+  },
+});
+
 function init(): void {
   buildPanel();
   kickConfirmationPoller();
@@ -1206,6 +1249,17 @@ function init(): void {
 
   // The kill switch and policies are process-wide: another tab flipping one reaches this tab at once.
   channel = openAgentChannel(() => void syncAndSchedule());
+
+  // The login session: the React gate in this tab says when it starts or ends; another tab's login or logout
+  // arrives as a `storage` event on the token.
+  window.addEventListener(WILSON_AUTH_SESSION_EVENT, (e) => {
+    const change = sessionChangeFromEvent(e);
+    if (change) void session.change(change);
+  });
+  window.addEventListener('storage', (e) => {
+    const change = sessionChangeFromStorage(e, AUTH_KEY);
+    if (change) void session.change(change);
+  });
 
   // A backgrounded tab polls nothing and runs no timer; on return, catch up at once (grants may have changed elsewhere,
   // or an operation may be waiting) instead of on the next timer.

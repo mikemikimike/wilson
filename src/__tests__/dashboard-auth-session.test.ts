@@ -244,6 +244,7 @@ describe('settleAuthCheck', () => {
       view: { kind: 'app', userId: 1 },
       remount: false,
       wipe: false,
+      session: null,
     });
     expect(settleAuthCheck({ kind: 'network-error' }, login, memoryStorage()).view).toEqual(login);
   });
@@ -260,6 +261,22 @@ describe('settleAuthCheck', () => {
     expect(settleAuthCheck(asUser, login, memoryStorage()).wipe).toBe(false);
     expect(settleAuthCheck({ kind: 'network-error' }, { kind: 'checking' }, memoryStorage()).wipe).toBe(false);
     expect(settleAuthCheck({ kind: 'http-error', message: 'x' }, { kind: 'app', userId: 1 }, memoryStorage()).wipe).toBe(false);
+  });
+
+  test('session transitions for the WebMCP bridge: in-place login starts, losing the app ends, the page load is neither', () => {
+    const asUser = (id: number): AuthCheck => ({ kind: 'status', status: status({ user: { id, username: 'u', role: 'admin' } }), sentToken: 't' });
+    const noLogin: AuthCheck = { kind: 'status', status: status({}), sentToken: 'dead' };
+    // AuthGate signs the person back in without a reload.
+    expect(settleAuthCheck(asUser(1), login, memoryStorage()).session).toBe('started');
+    // Another tab signed in as someone else.
+    expect(settleAuthCheck(asUser(2), { kind: 'app', userId: 1 }, memoryStorage()).session).toBe('started');
+    // The same login confirmed again, or the first check of the page (the bridge syncs on its own load).
+    expect(settleAuthCheck(asUser(1), { kind: 'app', userId: 1 }, memoryStorage()).session).toBeNull();
+    expect(settleAuthCheck(asUser(1), { kind: 'checking' }, memoryStorage()).session).toBeNull();
+    // Expired, logged out elsewhere, revoked.
+    expect(settleAuthCheck(noLogin, { kind: 'app', userId: 1 }, memoryStorage()).session).toBe('ended');
+    // Already on the login form: nothing new to tell.
+    expect(settleAuthCheck(noLogin, { kind: 'login', sessionEnded: true }, memoryStorage()).session).toBeNull();
   });
 
   test('a token the status check reports as no login is forgotten, unless another tab replaced it', () => {

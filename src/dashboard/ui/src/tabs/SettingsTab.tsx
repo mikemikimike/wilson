@@ -8,6 +8,7 @@ import { AgentAccessCenter } from '@/components/agent/AgentAccessCenter';
 import { apiErrorMessage, firstAdminBody, shouldOfferFirstAdmin, validateFirstAdmin } from '@/lib/firstAdmin';
 import { clearAuthToken, notifySessionChange, writeAuthToken } from '@/lib/authSession';
 import { lockMirror } from '@/store/mirror-client';
+import { dispatchAuthSession } from '@webmcp-session';
 
 const MEMORY_TYPES = ['context', 'insight', 'advice'] as const;
 
@@ -263,9 +264,10 @@ function SecuritySection() {
     } catch {
       // silent
     }
-    // The reload lands on the login view (components/AuthGate.tsx). Before it, the offline copy of the ledger is
-    // deleted (other tabs delete theirs when they see the token go).
+    // The reload lands on the login view (components/AuthGate.tsx). Before it: this tab's WebMCP tools go now, and
+    // the offline copy of the ledger is deleted (other tabs do both when they see the token go).
     clearAuthToken();
+    dispatchAuthSession('ended');
     await lockMirror();
     window.location.reload();
   }
