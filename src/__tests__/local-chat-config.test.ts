@@ -61,10 +61,21 @@ describe('local chat config', () => {
   test('bundle defaults fit a small in-tab model context window', () => {
     // 6000 chars ≈ ~1500 tokens of transaction context — bounded, and well
     // inside the window a small in-tab model can attend over alongside the rules.
-    expect(LOCAL_CHAT_BUNDLE_DEFAULTS.days).toBeGreaterThan(0);
     expect(LOCAL_CHAT_BUNDLE_DEFAULTS.limit).toBeGreaterThan(0);
     expect(LOCAL_CHAT_BUNDLE_DEFAULTS.maxChars).toBeGreaterThan(0);
     expect(LOCAL_CHAT_BUNDLE_DEFAULTS.maxChars).toBeLessThanOrEqual(6000);
+  });
+
+  test('the bundle window is calendar months, not a rolling day count', () => {
+    // The browser fetches from the 1st of last month through today (bundleWindow
+    // in hybrid/core.ts); a `days` knob would make "this month" ill-posed again.
+    expect('days' in LOCAL_CHAT_BUNDLE_DEFAULTS).toBe(false);
+  });
+
+  test('the fetch limit leaves room for two calendar months of rows, so computed totals are complete', () => {
+    // Totals are summed over every fetched row; hitting the limit marks them
+    // unreliable and dollar-total answers hand off to the server.
+    expect(LOCAL_CHAT_BUNDLE_DEFAULTS.limit).toBeGreaterThanOrEqual(500);
   });
 
   test('config is defensive when fastModel is absent (browser skips local)', () => {
@@ -74,7 +85,7 @@ describe('local chat config', () => {
     // the current enabled state and the fallback defaults shape here.
     const cfg = getLocalChatModelConfig();
     expect(typeof cfg.enabled).toBe('boolean');
-    expect(cfg.bundle.days).toBe(LOCAL_CHAT_BUNDLE_DEFAULTS.days);
+    expect(cfg.bundle.limit).toBe(LOCAL_CHAT_BUNDLE_DEFAULTS.limit);
     if (!getProviderById('transformers')?.fastModel) {
       expect(cfg.enabled).toBe(false);
       expect(cfg.repo).toBe('');

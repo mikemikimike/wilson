@@ -35,7 +35,8 @@
 
 import {
   buildBundle,
-  isoDaysAgo,
+  bundleWindow,
+  computeBundleTotals,
   projectTransactions,
   shouldAttemptLocal,
   type BundleParams,
@@ -119,6 +120,8 @@ export interface HybridOpts {
    * sets it; `null` (the frozen value when no viable cut exists) disables the tiebreak.
    */
   routeCut?: number | null;
+  /** TEST SEAM ONLY: "now" for the bundle's calendar window. Production uses the clock. */
+  now?: () => Date;
 }
 
 /** The pinned open-jev model, as GET /api/config/local-chat ships it (the worker's `init` pins). */
@@ -533,10 +536,11 @@ export function createHybridChat(opts: HybridOpts) {
     // Fetched here, on the main thread: these are authed requests and the
     // worker never holds the token.
     onProgress?.('Fetching your recent transactions…');
-    const start = isoDaysAgo(cfg.bundle.days);
-    const end = isoDaysAgo(0);
+    // This calendar month and last calendar month, local dates: the 1st of
+    // last month through today.
+    const span = bundleWindow(opts.now?.() ?? new Date());
     const [txnRes, weeklyRes] = await Promise.all([
-      fetchImpl(`${base}/api/transactions?start=${start}&end=${end}&limit=${cfg.bundle.limit}`),
+      fetchImpl(`${base}/api/transactions?start=${span.start}&end=${span.end}&limit=${cfg.bundle.limit}`),
       fetchImpl(`${base}/api/weekly-summary`),
     ]);
     if (!txnRes.ok || !weeklyRes.ok) return { ok: false };
@@ -562,13 +566,19 @@ export function createHybridChat(opts: HybridOpts) {
       },
     };
 
-    // Project to the narrow field subset + window/limit, then render with
-    // the size guard for the small in-tab model's context window.
+    // Project to the narrow field subset + window/limit, compute the totals
+    // over every fetched row (a full page means rows may be missing, so the
+    // totals are marked unreliable), then render with the size guard for the
+    // small in-tab model's context window — it drops rows, never totals.
     const projected = projectTransactions(txnRows, {
-      days: cfg.bundle.days,
+      start: span.start,
+      end: span.end,
       limit: cfg.bundle.limit,
     });
-    const bundle = buildBundle(projected, weekly, cfg.bundle);
+    const totals = computeBundleTotals(projected, span, {
+      limitHit: Array.isArray(txnRows) && txnRows.length >= cfg.bundle.limit,
+    });
+    const bundle = buildBundle(projected, weekly, cfg.bundle, { window: span, totals });
 
     // ── Generation (in the worker; the model is loaded) ──────────────────
     onProgress?.('Thinking locally…');
@@ -576,7 +586,7 @@ export function createHybridChat(opts: HybridOpts) {
     if (!backend) return { ok: false };
     let classified;
     try {
-      classified = await backend.bundleAnswer(query, bundle.text, isoDaysAgo(0));
+      classified = await backend.bundleAnswer(query, bundle.text, span.end);
     } catch (thrown) {
       // A crashed or timed-out worker respawns without the model.
       if (asWorkerError(thrown).phase === 'protocol') markModelLost();

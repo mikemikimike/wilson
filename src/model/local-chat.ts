@@ -21,13 +21,20 @@ export const LOCAL_CHAT_PROVIDER_ID = 'transformers';
 
 /**
  * Bounds for the pre-fetched context bundle:
- * - days/limit shape the GET /api/transactions window (start/end/limit).
- * - maxChars is the size guard for a 0.6B-class context window: the rendered
- *   bundle is never allowed to exceed this many characters.
+ * - the window is calendar months, not a day count: the browser fetches from
+ *   the 1st of last month through today (bundleWindow in
+ *   src/dashboard/ui/src/hybrid/core.ts), so "this month" and "last month"
+ *   are well-posed and their totals can be computed in JS.
+ * - limit caps that GET /api/transactions fetch. The computed totals are summed
+ *   over every fetched row, so it is sized for two calendar months of a busy
+ *   household; a full page marks the totals unreliable (dollar-total answers
+ *   then hand off to the server).
+ * - maxChars is the size guard for a small in-tab model's context window: the
+ *   rendered bundle is never allowed to exceed this many characters (rows are
+ *   dropped first; the totals never are).
  */
 export const LOCAL_CHAT_BUNDLE_DEFAULTS = {
-  days: 30,
-  limit: 200,
+  limit: 500,
   maxChars: 6000,
 } as const;
 
@@ -96,7 +103,7 @@ export interface LocalChatModelConfig {
    * file list with the shared resolver (src/model/transformers-dtype.ts).
    */
   dtype: OnnxDtype | null;
-  bundle: { days: number; limit: number; maxChars: number };
+  bundle: { limit: number; maxChars: number };
   subagent: LocalChatSubagentConfig;
 }
 

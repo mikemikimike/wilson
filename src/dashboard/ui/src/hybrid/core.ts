@@ -47,8 +47,9 @@ export interface BundleWeekly {
 }
 
 export interface BundleParams {
-  days: number;
+  /** Row cap for the GET /api/transactions fetch (and for projectTransactions). */
   limit: number;
+  /** Size guard: the rendered bundle never exceeds this many characters. */
   maxChars: number;
 }
 
@@ -57,9 +58,16 @@ export interface ContextBundle {
   rowCount: number;
   totalRows: number;
   truncated: boolean;
+  /**
+   * Every money figure the app itself put in the bundle, as absolute cents:
+   * the computed totals (only when reliable), the weekly-summary figures and
+   * the amounts of the rows actually shown. checkAnswerFigures holds a local
+   * answer's $ figures to this set.
+   */
+  allowedCents: number[];
 }
 
-/** Date `days` before `from` as YYYY-MM-DD (lexicographic-safe). */
+/** Date `days` before `from` as YYYY-MM-DD (lexicographic-safe). UTC calendar date. */
 export function isoDaysAgo(days: number, from: Date = new Date()): string {
   const d = new Date(from);
   d.setDate(d.getDate() - days);
@@ -67,20 +75,61 @@ export function isoDaysAgo(days: number, from: Date = new Date()): string {
 }
 
 /**
+ * The LOCAL calendar date of `d` as YYYY-MM-DD. The bundle window uses local
+ * dates because "this month" means the user's month, and transaction dates are
+ * the bank's local calendar dates; toISOString() would flip to tomorrow in the
+ * evening west of UTC (and to the next month on the last evening of a month).
+ */
+export function localIsoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Inclusive YYYY-MM-DD range. */
+export interface DateRange {
+  start: string;
+  end: string;
+}
+
+/**
+ * What bundle mode fetches and totals: rows from the 1st of LAST month through
+ * today, split into this calendar month (1st..today) and last calendar month
+ * (1st..last day). All local dates.
+ */
+export interface BundleWindow extends DateRange {
+  thisMonth: DateRange;
+  lastMonth: DateRange;
+}
+
+export function bundleWindow(today: Date = new Date()): BundleWindow {
+  const y = today.getFullYear();
+  const m = today.getMonth();
+  // Day-of-month 1 and 0 never overflow (setMonth(m - 1) on the 31st would).
+  const lastMonthStart = localIsoDate(new Date(y, m - 1, 1));
+  const lastMonthEnd = localIsoDate(new Date(y, m, 0));
+  const thisMonthStart = localIsoDate(new Date(y, m, 1));
+  const end = localIsoDate(today);
+  return {
+    start: lastMonthStart,
+    end,
+    thisMonth: { start: thisMonthStart, end },
+    lastMonth: { start: lastMonthStart, end: lastMonthEnd },
+  };
+}
+
+/**
  * Narrow the API's transaction rows to the four fields the local model may
- * see, keep only the most recent `days` days, cap at `limit` rows, and return
- * them oldest-first (chronological) so the size guard can drop from the front
- * (oldest) when over budget.
+ * see, keep only rows inside [start, end] (end optional), cap at `limit` rows,
+ * and return them oldest-first (chronological) so the size guard can drop from
+ * the front (oldest) when over budget.
  *
  * Contract: /api/transactions returns rows newest-first (ORDER BY date DESC).
  */
 export function projectTransactions(
   rows: BundleTxnInput[],
-  params: { days: number; limit: number },
+  params: { start: string; end?: string; limit: number },
 ): BundleTxn[] {
-  const cutoff = isoDaysAgo(params.days);
   const projected = rows
-    .filter((r) => typeof r.date === 'string' && r.date >= cutoff)
+    .filter((r) => typeof r.date === 'string' && r.date >= params.start && (params.end === undefined || r.date <= params.end))
     .slice(0, params.limit)
     .map((r) => ({
       date: r.date,
@@ -92,36 +141,173 @@ export function projectTransactions(
   return projected;
 }
 
+// ── Computed totals ─────────────────────────────────────────────────────────
+
+/** One labelled money figure, in positive dollars. */
+export interface AmountLine {
+  label: string;
+  amount: number;
+}
+
+/** Totals for one calendar month (or month-to-date). */
+export interface PeriodTotals extends DateRange {
+  /** Spending (negative amounts, shown positive), excluding the Transfer and Income categories. */
+  spending: number;
+  /** Money in (positive amounts), excluding the Transfer category. */
+  moneyIn: number;
+  /** Spending per category (every category with a negative amount, Transfer included), largest first. */
+  spendingByCategory: AmountLine[];
+  /** Money in per category, largest first. */
+  moneyInByCategory: AmountLine[];
+}
+
+export interface BundleTotals {
+  /**
+   * False when the transactions fetch came back full (rows === limit), so rows
+   * may be missing and the totals could be short. Unreliable totals are not
+   * rendered and none of their figures count as allowed.
+   */
+  reliable: boolean;
+  /** How many fetched rows the totals were computed over. */
+  fetchedRows: number;
+  thisMonth: PeriodTotals;
+  lastMonth: PeriodTotals;
+}
+
+/** Categories that are not spending in total spending (the dashboard's legacy rule, src/db/queries.ts). */
+const NON_SPEND_CATEGORIES: ReadonlySet<string> = new Set(['Transfer', 'Income']);
+const UNCATEGORIZED = 'Uncategorized';
+
+const toCents = (dollars: number): number => Math.round(dollars * 100);
+
+function sortedLines(byLabel: Map<string, number>): AmountLine[] {
+  return [...byLabel.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([label, cents]) => ({ label, amount: cents / 100 }));
+}
+
+function periodTotals(rows: readonly BundleTxn[], range: DateRange): PeriodTotals {
+  const spendCents = new Map<string, number>();
+  const inCents = new Map<string, number>();
+  let spending = 0;
+  let moneyIn = 0;
+  for (const r of rows) {
+    if (r.date < range.start || r.date > range.end) continue;
+    const cents = toCents(r.amount);
+    if (cents === 0) continue;
+    const label = r.category ?? UNCATEGORIZED;
+    if (cents < 0) {
+      spendCents.set(label, (spendCents.get(label) ?? 0) - cents);
+      if (!NON_SPEND_CATEGORIES.has(label)) spending -= cents;
+    } else {
+      inCents.set(label, (inCents.get(label) ?? 0) + cents);
+      if (label !== 'Transfer') moneyIn += cents;
+    }
+  }
+  return {
+    start: range.start,
+    end: range.end,
+    spending: spending / 100,
+    moneyIn: moneyIn / 100,
+    spendingByCategory: sortedLines(spendCents),
+    moneyInByCategory: sortedLines(inCents),
+  };
+}
+
+/**
+ * Per-category and overall totals for this calendar month and last calendar
+ * month, summed in integer cents over EVERY fetched row (not only the rows the
+ * size guard keeps). A small in-tab model cannot add up rows reliably, so the
+ * app does the arithmetic and the model quotes it.
+ */
+export function computeBundleTotals(
+  rows: readonly BundleTxn[],
+  window: BundleWindow,
+  opts: { limitHit: boolean },
+): BundleTotals {
+  return {
+    reliable: !opts.limitHit,
+    fetchedRows: rows.length,
+    thisMonth: periodTotals(rows, window.thisMonth),
+    lastMonth: periodTotals(rows, window.lastMonth),
+  };
+}
+
 export const BUNDLE_START_MARKER = '[Pre-fetched transaction context]';
 export const BUNDLE_END_MARKER = '[End of pre-fetched context]';
+export const COMPUTED_TOTALS_MARKER = 'Computed totals';
+
+function renderLines(lines: readonly AmountLine[]): string {
+  return lines.length ? lines.map((l) => `${l.label} ${money(l.amount)}`).join('; ') : 'none';
+}
+
+function renderTotals(totals: BundleTotals | null): string[] {
+  if (!totals) return [];
+  if (!totals.reliable) {
+    return [
+      `${COMPUTED_TOTALS_MARKER}: unavailable (the transaction fetch hit its row limit, so totals could be incomplete). ` +
+        'For any total, reply NEED_MORE_DATA.',
+    ];
+  }
+  const period = (name: string, p: PeriodTotals): string[] => [
+    `${name} (${p.start}..${p.end}): total spending ${money(p.spending)}; money in ${money(p.moneyIn)}`,
+    `  Spending by category: ${renderLines(p.spendingByCategory)}`,
+    `  Money in by category: ${renderLines(p.moneyInByCategory)}`,
+  ];
+  return [
+    `${COMPUTED_TOTALS_MARKER} (exact, calculated by the app from all ${totals.fetchedRows} fetched transactions; ` +
+      'quote these verbatim, never add up rows):',
+    ...period('This month', totals.thisMonth),
+    ...period('Last month', totals.lastMonth),
+  ];
+}
+
+function totalsCents(totals: BundleTotals | null): number[] {
+  if (!totals?.reliable) return [];
+  const out: number[] = [];
+  for (const p of [totals.thisMonth, totals.lastMonth]) {
+    out.push(toCents(p.spending), toCents(p.moneyIn));
+    for (const l of [...p.spendingByCategory, ...p.moneyInByCategory]) out.push(toCents(l.amount));
+  }
+  return out;
+}
+
+/** What buildBundle frames the rows with: the calendar window and the totals computed over every fetched row. */
+export interface BundleContext {
+  window: BundleWindow;
+  totals: BundleTotals | null;
+}
 
 /**
  * Render the context bundle and size-guard it for a small in-tab model's context window.
  *
  * Framing mirrors the repo's injected-context marker style; the size guard
- * drops the OLDEST transaction rows first and never touches the weekly
- * summary, the framing markers, or the current-message marker. The rendered
- * text never exceeds `params.maxChars`.
+ * drops the OLDEST transaction rows first and never touches the computed
+ * totals, the weekly summary, the framing markers, or the current-message
+ * marker. The rendered text never exceeds `params.maxChars`.
  */
 export function buildBundle(
   txns: BundleTxn[],
   weekly: BundleWeekly | null,
   params: BundleParams,
+  ctx: BundleContext,
 ): ContextBundle {
   const totalRows = txns.length;
   const kept = [...txns];
   let truncated = false;
+  const totalsBlock = renderTotals(ctx.totals);
 
   const render = (): string => {
     const lines: string[] = [];
     lines.push(BUNDLE_START_MARKER);
     lines.push(
-      `Period: ${isoDaysAgo(params.days)}..${isoDaysAgo(0)} (last ${params.days} days, ` +
+      `Period: ${ctx.window.start}..${ctx.window.end} (1st of last month through today, ` +
         `${kept.length} of ${totalRows} transactions shown)`,
     );
     if (truncated) {
       lines.push('[Older transactions were dropped to fit the local context window.]');
     }
+    lines.push(...totalsBlock);
     if (weekly) {
       lines.push(
         `Weekly spending: this week ${money(weekly.thisWeek.total)} (top: ${weekly.thisWeek.topCategory ?? 'none'}), ` +
@@ -148,7 +334,14 @@ export function buildBundle(
     // Pathological budget (markers alone exceed it) — enforce the hard cap.
     text = text.slice(0, params.maxChars);
   }
-  return { text, rowCount: kept.length, totalRows, truncated };
+
+  const allowed = new Set<number>(totalsCents(ctx.totals));
+  if (weekly) {
+    for (const v of [weekly.thisWeek.total, weekly.lastWeek.total, weekly.change.amount]) allowed.add(Math.abs(toCents(v)));
+  }
+  for (const t of kept) allowed.add(Math.abs(toCents(t.amount)));
+
+  return { text, rowCount: kept.length, totalRows, truncated, allowedCents: [...allowed] };
 }
 
 // ── Local prompts ───────────────────────────────────────────────────────────
@@ -163,7 +356,9 @@ export const LOCAL_SYSTEM_PROMPT_TEMPLATE = `You are Open Accountant's local bro
 The user's message contains a pre-fetched snapshot of their own recent transactions. It is your only data source.
 
 Rules:
-- Answer ONLY from that pre-fetched context. Never invent, estimate, or extrapolate figures that are not derivable from it.
+- Answer ONLY from that pre-fetched context. Never invent, estimate, or extrapolate figures that are not in it.
+- For any total (spending, money in, a category, this month or last month), quote the matching figure under "Computed totals" verbatim. Never add up transaction rows yourself.
+- If the question needs a total that is not listed under "Computed totals", reply with exactly NEED_MORE_DATA and nothing else.
 - Do not attempt tool calls; you have no tools.
 - If the context does not contain what the question needs, reply with exactly NEED_MORE_DATA and nothing else — the app will route the question to the full agent.
 - Keep answers short. Use $ amounts.`;

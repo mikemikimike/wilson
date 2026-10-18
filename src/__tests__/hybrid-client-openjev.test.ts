@@ -41,7 +41,7 @@ type Sub = { enabled: boolean; maxSteps: number; compose?: 'template' | 'model';
 function cfg(subagent: Sub): LocalChatConfigResponse {
   return {
     enabled: true, id: `transformers:${MODEL.repo}`, repo: MODEL.repo, displayName: MODEL.displayName, downloadSize: '~570MB',
-    dtype: 'q4f16', bundle: { days: 30, limit: 200, maxChars: 6000 }, subagent,
+    dtype: 'q4f16', bundle: { limit: 200, maxChars: 6000 }, subagent,
   };
 }
 const ON: Sub = { enabled: true, maxSteps: 3, openJevRouter: true, openJevPins: PINS };

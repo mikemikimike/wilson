@@ -364,7 +364,7 @@ const CFG: LocalChatConfigResponse = {
   displayName: MODEL.displayName,
   downloadSize: '~570MB',
   dtype: 'q4f16',
-  bundle: { days: 30, limit: 200, maxChars: 6000 },
+  bundle: { limit: 200, maxChars: 6000 },
   // The server's chat model is local, so the server answers while the in-tab model loads.
   serverModelLocal: true,
 };
