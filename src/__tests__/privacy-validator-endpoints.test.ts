@@ -1,4 +1,6 @@
-import { describe, expect, test, afterEach, mock, beforeEach } from 'bun:test';
+import { describe, expect, test, afterAll, afterEach, mock, beforeEach } from 'bun:test';
+import * as transformers from '../model/providers/transformers.js';
+import { scopedSpy } from './scoped-spy.js';
 
 // ── Module mocks (must run BEFORE the server module chain is imported) ──────
 // Copied from showdown-endpoints.test.ts: force "no OpenRouter key" so the
@@ -15,18 +17,18 @@ mock.module('../utils/env.js', () => ({
   saveApiKeyForProvider: () => false,
 }));
 
-mock.module('../model/providers/transformers.js', () => ({
-  WEBGPU_MODEL_PATTERNS: ['-ONNX-web', 'LFM2-1.2B-Tool-ONNX', 'Qwen3-0.6B-ONNX'],
-  TransformersAdapter: class {
-    async call(): Promise<never> {
-      throw new Error('mocked transformers adapter (privacy endpoints test)');
-    }
-  },
-  checkWebGpuAvailable: async () => false,
-  warmTransformersPipeline: async () => {
-    throw new Error('WebGPU is not available on this machine (privacy test mock)');
-  },
-}));
+// spied, not mock.module'd: a module mock is process-wide in a plain `bun test`
+// run and would replace the real adapter for every later file.
+const adapterSpy = scopedSpy(transformers.TransformersAdapter.prototype, 'call', async (): Promise<never> => {
+  throw new Error('mocked transformers adapter (privacy endpoints test)');
+});
+const webGpuSpy = scopedSpy(transformers, 'checkWebGpuAvailable', async () => false);
+const warmSpy = scopedSpy(transformers, 'warmTransformersPipeline', async (): Promise<never> => {
+  throw new Error('WebGPU is not available on this machine (privacy test mock)');
+});
+afterAll(() => {
+  for (const s of [adapterSpy, webGpuSpy, warmSpy]) s.restore();
+});
 
 import { createTestDb, ensureTestProfile } from './helpers.js';
 import { startDashboardServer, stopDashboardServer } from '../dashboard/server.js';

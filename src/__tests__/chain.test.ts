@@ -21,8 +21,15 @@ const mockAdapterCall = mock(async (options?: { userPrompt?: string }): Promise<
   return response;
 });
 
+// Capture the real getAdapter so the mock can fall through to it once this file is done:
+// bun shares module mocks across files, and a permanent fake adapter would answer every
+// later file's callLlm (e.g. transformers-structured-output.test.ts).
+const { getAdapter: realGetAdapter } = await import('../model/providers/index.js');
+let useMockAdapter = true;
+
 mock.module('../model/providers/index.js', () => ({
-  getAdapter: mock((): ProviderAdapter => ({ call: mockAdapterCall })),
+  getAdapter: mock((providerId: string): ProviderAdapter =>
+    useMockAdapter ? { call: mockAdapterCall } : realGetAdapter(providerId)),
 }));
 
 // NOTE: Do NOT mock trace-store.js or interaction-store.js here.
@@ -57,6 +64,7 @@ afterAll(() => {
   // populated would make later files (e.g. tool-registry.test.ts) receive
   // this file's leftover fake tools instead of the real registry.
   mockToolsByNames = [];
+  useMockAdapter = false;
 });
 
 function makeResponse(content: string, toolCalls: LlmResponse['toolCalls'] = []): LlmResponse {
