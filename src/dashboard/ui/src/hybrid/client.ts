@@ -365,7 +365,9 @@ export function createHybridChat(opts: HybridOpts) {
     if (backgroundLoad) return;
     setModelStatus({ state: 'loading', label: IN_TAB_PREPARING_LABEL });
     backgroundLoad = loadModel((label) => {
-      if (modelStatus.state === 'loading') setModelStatus({ state: 'loading', label });
+      // Every progress event reaches here (the worker's load timeout restarts on each); the UIs hear only a label
+      // that reads differently (a new whole percent, a new phase), not hundreds of identical re-renders.
+      if (modelStatus.state === 'loading' && modelStatus.label !== label) setModelStatus({ state: 'loading', label });
     })
       .catch(() => null)
       .finally(() => {

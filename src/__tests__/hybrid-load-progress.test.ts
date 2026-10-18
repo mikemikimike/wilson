@@ -321,6 +321,25 @@ describe('client: chat turns go to the server until the in-tab model is ready', 
     expect(held.log).toEqual(['load', 'bundleAnswer']);
   });
 
+  test('progress events that render the same label do not re-publish the status', async () => {
+    const held = heldBackend();
+    const statuses: InTabModelStatus[] = [];
+    const chat = createHybridChat({ baseUrl: '', fetchImpl: dashboardFetch().fn, backend: held.backend, onModelStatus: (s) => statuses.push(s) });
+    await chat.tryLocal('q');
+    const label42 = 'Downloading in-tab model (3.6 GB, first use only)… 42%';
+    // transformers.js fires many byte-level events per whole percent; the reporter forwards each one.
+    for (let i = 0; i < 50; i++) held.progress(label42);
+    held.progress('Downloading in-tab model (3.6 GB, first use only)… 43%');
+    held.progress('Downloading in-tab model (3.6 GB, first use only)… 43%');
+    held.progress(IN_TAB_LOADING_LABEL);
+    expect(statuses.map((s) => (s.state === 'loading' ? s.label : s.state))).toEqual([
+      IN_TAB_PREPARING_LABEL,
+      label42,
+      'Downloading in-tab model (3.6 GB, first use only)… 43%',
+      IN_TAB_LOADING_LABEL,
+    ]);
+  });
+
   test('a failed load never breaks chat: turns stay on the server, the failure rides the next turn, and it retries', async () => {
     const held = heldBackend();
     const chat = createHybridChat({ baseUrl: '', fetchImpl: dashboardFetch().fn, backend: held.backend });
