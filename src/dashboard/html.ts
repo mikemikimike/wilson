@@ -405,7 +405,23 @@ export function getDashboardHtml(port: number): string {
   var currentEndDate = '';
   var currentAccountId = '';
   var currentCategory = '';
-  var authToken = localStorage.getItem('oa_token') || '';
+  // One session key for both dashboards and the WebMCP bridge (see ui/src/lib/authSession.ts). A token this page
+  // stored under its old key 'oa_token' is moved over once (a token already under the shared key wins), then the
+  // old key is removed.
+  var AUTH_KEY = 'wilson_auth_token';
+  var LEGACY_AUTH_KEY = 'oa_token';
+  function readStoredToken() {
+    try {
+      var token = localStorage.getItem(AUTH_KEY);
+      var legacy = localStorage.getItem(LEGACY_AUTH_KEY);
+      if (legacy !== null) {
+        if (legacy && !token) { token = legacy; localStorage.setItem(AUTH_KEY, legacy); }
+        localStorage.removeItem(LEGACY_AUTH_KEY);
+      }
+      return token || '';
+    } catch (e) { return ''; }
+  }
+  var authToken = readStoredToken();
   var currentUser = null;
 
   function computeRange(key) {
@@ -500,7 +516,7 @@ export function getDashboardHtml(port: number): string {
         var data = await res.json();
         if (!res.ok) { errDiv.textContent = data.error||'Login failed'; return; }
         authToken = data.token; currentUser = data.user;
-        localStorage.setItem('oa_token', authToken);
+        localStorage.setItem(AUTH_KEY, authToken);
         if (profileSelect && profileSelect.value) {
           await authFetch(BASE+'/api/profiles/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:profileSelect.value}) });
         }
@@ -552,7 +568,7 @@ export function getDashboardHtml(port: number): string {
         var data = await res.json();
         if (!res.ok) { errDiv.textContent = data.error||'Setup failed'; return; }
         authToken = data.token; currentUser = data.user;
-        localStorage.setItem('oa_token', authToken);
+        localStorage.setItem(AUTH_KEY, authToken);
         authOverlay.classList.add('hidden'); onAuthReady();
       } catch(e) { errDiv.textContent = e.message; }
     });
@@ -590,7 +606,7 @@ export function getDashboardHtml(port: number): string {
 
   document.getElementById('logoutBtn').addEventListener('click', async function() {
     await authFetch(BASE+'/api/auth/logout', {method:'POST'});
-    authToken = ''; currentUser = null; localStorage.removeItem('oa_token'); location.reload();
+    authToken = ''; currentUser = null; localStorage.removeItem(AUTH_KEY); location.reload();
   });
 
   // ── Profiles ────────────────────────────────────────────────────────────
