@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { authedFetch, getBaseUrl } from '@/api';
+import { hybridOptsForOriginFetch } from '@/hybrid/init-opts';
 import type { HybridResult } from '@/hybrid/core';
 import type { PriorLocalTurn } from '@/hybrid/worker-protocol';
 import type {
@@ -102,7 +103,8 @@ export function useHybridChat(): UseHybridChatResult {
     const base = getBaseUrl();
     const hybrid = await loadHybridChunk(base);
     if (hybrid && initedRef.current !== hybrid) {
-      hybrid.init({ baseUrl: base, fetchImpl: authedFetch });
+      // authedFetch already prefixes the origin: baseUrl stays empty (see init-opts.ts).
+      hybrid.init(hybridOptsForOriginFetch(authedFetch));
       initedRef.current = hybrid;
     }
     // Keep the ref accurate the moment any tryLocal resolves, independent of
