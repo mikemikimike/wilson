@@ -413,7 +413,7 @@ describe('against the real server', () => {
     const { db, base } = await withAdmin();
     const owner = db.prepare("SELECT id FROM dashboard_users WHERE username = 'owner'").get() as { id: number };
     await createUser(db, 'viewer', 'viewerpass1', 'viewer');
-    deactivateUser(db, owner.id);
+    db.prepare('UPDATE dashboard_users SET is_active = 0 WHERE id = @id').run({ id: owner.id }); // raw: deactivateUser refuses the last admin
     const token = await login(base, 'viewer', 'viewerpass1');
     expect(authGateView(await check(base, token))).toMatchObject({ kind: 'app' });
 

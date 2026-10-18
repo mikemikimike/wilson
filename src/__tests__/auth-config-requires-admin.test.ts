@@ -3,7 +3,7 @@ import { createTestDb, seedTestData } from './helpers.js';
 import { startDashboardServer, stopDashboardServer } from '../dashboard/server.js';
 import { setInitialProfile, closeAll } from '../dashboard/db-manager.js';
 import * as authModule from '../dashboard/auth.js';
-import { createUser, deactivateUser, isAuthEnabled, getUserCount, enableAuth } from '../dashboard/auth.js';
+import { createUser, isAuthEnabled, getUserCount, enableAuth } from '../dashboard/auth.js';
 import { scopedSpy } from './scoped-spy.js';
 import type { Database } from '../db/compat-sqlite.js';
 
@@ -68,7 +68,8 @@ describe('PATCH /api/auth/config refuses to enable auth without an active admin'
   test('the only admin is deactivated: 409', async () => {
     const { db, base } = await start();
     const admin = await createUser(db, 'admin1', 'password123', 'admin');
-    expect(deactivateUser(db, admin.id)).toBe(true);
+    // Raw update: deactivateUser refuses to remove the last admin, but a legacy profile can be in this state.
+    db.prepare('UPDATE dashboard_users SET is_active = 0 WHERE id = @id').run({ id: admin.id });
     expect((await patchConfig(base, true)).status).toBe(409);
     expect(isAuthEnabled(db)).toBe(false);
   });

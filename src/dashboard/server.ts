@@ -36,7 +36,7 @@ import { getCheckoutUrl } from '../licensing/upsell.js';
 import { initChatSession, handleChatMessage, getCategorizeProgress, cancelChatRunForUser, serverChatModelInfo } from './chat.js';
 import {
   isAuthEnabled, enableAuth, disableAuth, lanAuthReady, hasActiveAdmin,
-  listUsers, getUserCount, deactivateUser, hashPassword, insertUser, createFirstAdmin,
+  listUsers, getUserCount, deactivateUser, LastAdminError, hashPassword, insertUser, createFirstAdmin,
   verifyLogin, validateToken, revokeToken, cleanExpiredSessions, canWrite,
   type DashboardUser,
 } from './auth.js';
@@ -588,7 +588,15 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
           const id = parseInt(userDeleteMatch[1], 10);
-          const success = deactivateUser(activeDb, id);
+          let success: boolean;
+          try {
+            success = deactivateUser(activeDb, id);
+          } catch (err) {
+            if (err instanceof LastAdminError) {
+              return Response.json({ error: err.message, id }, { status: 409, headers });
+            }
+            throw err;
+          }
           // A deactivated user's WebMCP grants die with the account, not at the grant's TTL.
           if (success) {
             revokeGrantsForUser(activeDb, id);

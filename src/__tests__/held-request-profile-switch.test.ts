@@ -198,6 +198,7 @@ describe('held write across a profile switch', () => {
         body: JSON.stringify({ query: 'how much did I spend?', localHandoff: { v: 1 } }),
       });
       await reached;
+      await createUser(dbA, 'a-admin-2', 'passwordA2x', 'admin'); // deactivateUser refuses the last admin
       deactivateUser(dbA, getUserByUsername(dbA, 'a-admin')!.id);
       release();
       expect((await pending).status).toBe(401);

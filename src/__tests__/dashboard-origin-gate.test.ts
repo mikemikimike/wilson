@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createTestDb, seedTestData } from './helpers.js';
 import { startDashboardServer, stopDashboardServer, DASHBOARD_IDLE_TIMEOUT_S } from '../dashboard/server.js';
 import { setInitialProfile, closeAll } from '../dashboard/db-manager.js';
-import { createUser, enableAuth, disableAuth, verifyLogin, lanAuthReady, deactivateUser } from '../dashboard/auth.js';
+import { createUser, enableAuth, disableAuth, verifyLogin, lanAuthReady } from '../dashboard/auth.js';
 import {
   allowedOrigins,
   canonicalOrigin,
@@ -378,7 +378,7 @@ describe('bind address and the LAN rule (T03)', () => {
     const { server, db: sdb, token } = await start({ hostname: '0.0.0.0', auth: true });
     const url = `http://127.0.0.1:${server.port}`;
     expect((await fetch(`${url}/api/summary`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(200);
-    deactivateUser(sdb, 1);
+    sdb.prepare('UPDATE dashboard_users SET is_active = 0 WHERE id = 1').run(); // raw: deactivateUser refuses the last admin
     sdb.prepare('DELETE FROM dashboard_users').run(); // zero users: the window /api/auth/setup is public in
     for (const path of ['/api/summary', '/']) {
       const res = await fetch(url + path);

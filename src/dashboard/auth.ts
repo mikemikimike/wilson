@@ -163,14 +163,32 @@ export function getUserCount(db: Database): number {
   return row.count;
 }
 
+/** Thrown by deactivateUser when it would leave the profile with users but no active admin. */
+export class LastAdminError extends Error {
+  constructor() {
+    super('Cannot deactivate the last active admin. Promote or create another admin first.');
+    this.name = 'LastAdminError';
+  }
+}
+
 /**
  * Deactivate a user and end their MCP access with them: every WebMCP /
  * HTTP-MCP grant they hold is revoked and every pending operation prepared
  * under one is expired, so an external client holding their bearer token
  * sees no tools and nothing they queued can still be approved.
+ *
+ * Throws LastAdminError (and changes nothing) when the target is the only
+ * active admin; the check and the update share one transaction.
  */
 export function deactivateUser(db: Database, id: number): boolean {
   return db.transaction(() => {
+    const target = getUser(db, id);
+    if (target && target.role === 'admin' && target.is_active) {
+      const others = db.prepare(
+        "SELECT 1 AS ok FROM dashboard_users WHERE role = 'admin' AND is_active = 1 AND id != @id LIMIT 1"
+      ).get({ id });
+      if (!others) throw new LastAdminError();
+    }
     const result = db.prepare(
       "UPDATE dashboard_users SET is_active = 0, updated_at = datetime('now') WHERE id = @id"
     ).run({ id });
@@ -215,13 +233,16 @@ export async function verifyLogin(
   return { token, user };
 }
 
+// expires_at is stored as ISO ('T' separator) while datetime('now') uses a space, so a text
+// comparison keeps a session valid for the rest of the UTC day. Compare via julianday() on
+// both sides with an ISO `now`, as src/mcp/store.ts does.
 export function validateToken(db: Database, token: string): DashboardUser | null {
   const row = db.prepare(`
     SELECT u.id, u.username, u.role, u.is_active, u.created_at, u.updated_at
     FROM dashboard_sessions s
     JOIN dashboard_users u ON u.id = s.user_id
-    WHERE s.token = @token AND s.expires_at > datetime('now') AND u.is_active = 1
-  `).get({ token }) as DashboardUser | undefined;
+    WHERE s.token = @token AND julianday(s.expires_at) > julianday(@now) AND u.is_active = 1
+  `).get({ token, now: new Date().toISOString() }) as DashboardUser | undefined;
   return row ?? null;
 }
 
@@ -231,7 +252,7 @@ export function revokeToken(db: Database, token: string): void {
 
 export function cleanExpiredSessions(db: Database): number {
   const result = db.prepare(
-    "DELETE FROM dashboard_sessions WHERE expires_at <= datetime('now')"
-  ).run();
+    'DELETE FROM dashboard_sessions WHERE julianday(expires_at) <= julianday(@now)'
+  ).run({ now: new Date().toISOString() });
   return (result as { changes: number }).changes;
 }

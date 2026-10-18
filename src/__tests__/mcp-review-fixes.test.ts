@@ -89,6 +89,7 @@ describe('live caller checks (grant row is not the source of truth)', () => {
   test('over /mcp: a deactivated user\'s client token is refused (401)', async () => {
     const { db, base } = await startServer();
     const user = await makeUser(db, 'mcpuser', 'admin');
+    await makeUser(db, 'other', 'admin');
     const { token } = mintTestToken(db, ['search_transactions'], { userId: user.id });
     const listTools = () =>
       fetch(base + '/mcp', {
@@ -105,6 +106,7 @@ describe('live caller checks (grant row is not the source of truth)', () => {
   test('DELETE /api/auth/users/:id revokes the user\'s grants', async () => {
     const { db, base } = await startServer();
     const user = await makeUser(db, 'victim', 'admin');
+    await makeUser(db, 'other', 'admin');
     const scope = testScope({ userId: user.id, role: 'admin' });
     grantTools(db, scope, ['search_transactions']);
     expect(count(db, 'mcp_grants', 'revoked_at IS NULL')).toBe(1);
