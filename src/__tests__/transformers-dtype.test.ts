@@ -510,15 +510,22 @@ function downloadSizeBytes(size: string | undefined): number | null {
  * Why a WebGPU entry cannot load in ORT-web, or null. A pinned ONNX file with
  * no external-data shard in the recorded Hub file list is one protobuf, and
  * one over WEBGPU_SINGLE_FILE_ONNX_MAX_BYTES fails session creation (#154).
+ * Multi-session exports (Gemma 4) are checked per text session the same way.
+ * The fixture has no byte counts, so the entry's whole downloadSize stands in
+ * as the upper bound on any one file.
  */
 function webgpuSingleFileProblem(entry: Model, siblings: string[]): string | null {
   if (entry.device !== 'webgpu' || !entry.dtype) return null;
   const file = onnxFileForDtype(entry.dtype);
-  if (!siblings.includes(file)) return null; // multi-session export: per-session files, all sharded
-  if (siblings.some((f) => f.startsWith(`${file}_data`))) return null;
+  const suffix = file.replace(/^onnx\/model/, '');
+  const files = siblings.includes(file)
+    ? [file]
+    : [`onnx/embed_tokens${suffix}`, `onnx/decoder_model_merged${suffix}`].filter((f) => siblings.includes(f));
+  const unsharded = files.filter((f) => !siblings.some((s) => s.startsWith(`${f}_data`)));
+  if (unsharded.length === 0) return null;
   const bytes = downloadSizeBytes(entry.downloadSize);
-  if (bytes === null) return `${file} is a single file but downloadSize ${JSON.stringify(entry.downloadSize)} does not parse`;
-  if (bytes > WEBGPU_SINGLE_FILE_ONNX_MAX_BYTES) return `${file} is a single ${entry.downloadSize} file`;
+  if (bytes === null) return `${unsharded[0]} is a single file but downloadSize ${JSON.stringify(entry.downloadSize)} does not parse`;
+  if (bytes > WEBGPU_SINGLE_FILE_ONNX_MAX_BYTES) return `${unsharded[0]} is a single ${entry.downloadSize} file`;
   return null;
 }
 
@@ -538,6 +545,16 @@ describe('WebGPU single-file ONNX size cap (#154)', () => {
     expect(webgpuSingleFileProblem(sharded, ['onnx/model_q4f16.onnx', 'onnx/model_q4f16.onnx_data'])).toBeNull();
     const cpu: Model = { id: 'x', displayName: 'x', device: 'cpu', dtype: 'q4', downloadSize: '~9GB' };
     expect(webgpuSingleFileProblem(cpu, ['onnx/model_q4.onnx'])).toBeNull();
+  });
+
+  test('multi-session exports are checked per text session, not skipped', () => {
+    const gemma = getTransformersCatalogEntry('transformers:onnx-community/gemma-4-E2B-it-ONNX')!;
+    expect(webgpuSingleFileProblem(gemma, REPOS['onnx-community/gemma-4-E2B-it-ONNX'].siblings)).toBeNull();
+    const big: Model = { id: 'x', displayName: 'x', device: 'webgpu', dtype: 'q4', downloadSize: '~3.6GB' };
+    const unshardedDecoder = ['onnx/embed_tokens_q4.onnx', 'onnx/embed_tokens_q4.onnx_data', 'onnx/decoder_model_merged_q4.onnx'];
+    expect(webgpuSingleFileProblem(big, unshardedDecoder)).toContain('onnx/decoder_model_merged_q4.onnx is a single ~3.6GB file');
+    const small: Model = { ...big, downloadSize: '~600MB' };
+    expect(webgpuSingleFileProblem(small, unshardedDecoder)).toBeNull();
   });
 
   test('Qwen3 1.7B is not offered as a WebGPU model', () => {
