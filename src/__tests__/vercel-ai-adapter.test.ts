@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
+import { z } from 'zod';
 import { VercelAiAdapter } from '../model/providers/vercel-ai.js';
 
 describe('VercelAiAdapter', () => {
@@ -19,6 +20,30 @@ describe('VercelAiAdapter', () => {
     const adapter = new VercelAiAdapter(() => model);
     const res = await adapter.call({ model: 'm', systemPrompt: 'SYS-PROMPT', userPrompt: 'hello' } as never);
     expect(res.content).toBe('ok');
+    expect(JSON.stringify(seen)).toContain('SYS-PROMPT');
+  });
+
+  test('structured-output path also sends the system prompt via instructions', async () => {
+    let seen: unknown;
+    const model = new MockLanguageModelV3({
+      doGenerate: async (opts: unknown) => {
+        seen = opts;
+        return {
+          content: [{ type: 'text', text: '{"a":1}' }],
+          finishReason: { unified: 'stop', raw: 'stop' },
+          usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
+          warnings: [],
+        } as never;
+      },
+    });
+    const adapter = new VercelAiAdapter(() => model);
+    const res = await adapter.call({
+      model: 'm',
+      systemPrompt: 'SYS-PROMPT',
+      userPrompt: 'hello',
+      outputSchema: z.object({ a: z.number() }),
+    } as never);
+    expect(JSON.parse(res.content)).toEqual({ a: 1 });
     expect(JSON.stringify(seen)).toContain('SYS-PROMPT');
   });
 });
