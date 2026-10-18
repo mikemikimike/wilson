@@ -7,7 +7,7 @@
  * local database data — not user-supplied or external content. The renderMd()
  * function escapes ALL HTML entities before applying markdown transforms.
  */
-import { PROVENANCE_LABELS } from './ui/src/hybrid/provenance.js';
+import { PROVENANCE_LABELS } from './chat-provenance.js';
 
 export function getDashboardHtml(port: number): string {
   return `<!DOCTYPE html>
@@ -1157,7 +1157,7 @@ export function getDashboardHtml(port: number): string {
     chatMessages.appendChild(div); chatMessages.scrollTop = chatMessages.scrollHeight; return div;
   }
   // Provenance badge — mirrors deriveChatProvenance and provenanceBadge in
-  // src/dashboard/ui/src/hybrid/ (matrix pinned by
+  // src/dashboard/ui/src/hybrid/core.ts and chat-provenance.ts (matrix pinned by
   // src/__tests__/local-chat-provenance.test.ts). Inline copy because this
   // page cannot import ES modules and the hybrid chunk 404s in exactly the
   // state ('unavailable') this badge must render. The strings themselves are

@@ -1,13 +1,13 @@
 /**
  * Per-response chat provenance badges: the exact strings BOTH dashboards show
  * under an answer. Import-free on purpose: the React ChatTab imports it (via
- * core.ts), and the legacy dashboard (src/dashboard/html.ts) embeds
+ * ui/src/hybrid/core.ts), and the legacy dashboard (html.ts) embeds
  * PROVENANCE_LABELS into its inline script at render time, so the wording has
  * one source. Pinned by src/__tests__/local-chat-provenance.test.ts.
  *
  * Privacy rule (#167): a badge for a server-answered state may claim local
  * processing ("on your laptop") only when /api/chat reported the server
- * agent's model as local. False, absent or unknown gets cloud wording, never
+ * agent's model as local (serverChatModelInfo in chat.ts). False, absent or unknown gets cloud wording, never
  * local wording: understating where ledger rows went is the failure to avoid.
  */
 
@@ -25,7 +25,7 @@ export type ChatProvenance =
 
 /** Where the server agent's chat model runs, as POST /api/chat reports it. */
 export interface ServerModelInfo {
-  /** True only when the server agent's model runs on this machine. Absent = unknown = cloud. */
+  /** True only when the server agent's chat model and every task model its tools call run on this machine. Absent = unknown = cloud. */
   serverModelLocal?: boolean;
   /** Display name of the cloud provider the model routes to (e.g. 'Anthropic'); null/absent when unknown or local. */
   serverProvider?: string | null;

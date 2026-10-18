@@ -16,7 +16,7 @@ import { CURRENT_MESSAGE_MARKER } from '../../../../utils/history-context.js';
 import { looksLikeBareToolCall } from '../../../../model/tool-call-parse.js';
 import { money } from '../format';
 import type { LocalHandoffV1 } from '../../../../dashboard/local-handoff-format.js';
-import type { ChatProvenance } from './provenance';
+import type { ChatProvenance } from '../../../../dashboard/chat-provenance.js';
 
 export { CURRENT_MESSAGE_MARKER };
 
@@ -415,8 +415,8 @@ export function shouldAttemptLocal(state: HybridCapability): boolean {
 
 // The provenance type and its badge strings live in ./provenance (import-free,
 // shared with the legacy dashboard); re-exported here for existing importers.
-export { PROVENANCE_BADGES, PROVENANCE_LABELS, provenanceBadge } from './provenance';
-export type { ChatProvenance, ServerModelInfo } from './provenance';
+export { PROVENANCE_BADGES, PROVENANCE_LABELS, provenanceBadge } from '../../../../dashboard/chat-provenance.js';
+export type { ChatProvenance, ServerModelInfo } from '../../../../dashboard/chat-provenance.js';
 
 /** True when the answer was composed on-device (bundle or subagent), whatever its text says. */
 export function isLocalProvenance(p: ChatProvenance | undefined): boolean {
