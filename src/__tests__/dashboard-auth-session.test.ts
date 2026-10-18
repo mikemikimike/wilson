@@ -263,6 +263,23 @@ describe('settleAuthCheck', () => {
     expect(settleAuthCheck({ kind: 'http-error', message: 'x' }, { kind: 'app', userId: 1 }, memoryStorage()).wipe).toBe(false);
   });
 
+  test("an app that opens for a different login wipes the old login's copy first; the same login keeps it", () => {
+    const asUser = (id: number): AuthCheck => ({ kind: 'status', status: status({ user: { id, username: 'u', role: 'admin' } }), sentToken: 't' });
+    // Another tab signed in as someone else while this one showed the app.
+    expect(settleAuthCheck(asUser(2), { kind: 'app', userId: 1 }, memoryStorage())).toEqual({
+      view: { kind: 'app', userId: 2 },
+      remount: true,
+      wipe: true,
+      session: 'started',
+    });
+    // Auth switched off in place: the copy was a login's.
+    expect(settleAuthCheck({ kind: 'status', status: status({ authEnabled: false }), sentToken: null }, { kind: 'app', userId: 1 }, memoryStorage()).wipe).toBe(true);
+    expect(settleAuthCheck(asUser(1), { kind: 'app', userId: 1 }, memoryStorage()).wipe).toBe(false);
+    // Auth switched on in place (the copy was no login's), or the first login of the page: nothing to drop.
+    expect(settleAuthCheck(asUser(1), { kind: 'app', userId: null }, memoryStorage()).wipe).toBe(false);
+    expect(settleAuthCheck(asUser(1), { kind: 'checking' }, memoryStorage()).wipe).toBe(false);
+  });
+
   test('session transitions for the WebMCP bridge: in-place login starts, losing the app ends, the page load is neither', () => {
     const asUser = (id: number): AuthCheck => ({ kind: 'status', status: status({ user: { id, username: 'u', role: 'admin' } }), sentToken: 't' });
     const noLogin: AuthCheck = { kind: 'status', status: status({}), sentToken: 'dead' };

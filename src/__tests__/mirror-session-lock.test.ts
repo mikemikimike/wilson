@@ -7,8 +7,10 @@ import {
   LEDGER_SESSION_PREFIXES,
   MIRROR_AUTH_PROFILES_KEY,
   MIRROR_PROFILE_KEY,
+  POOL_RELEASE_RETRY_MS,
   clearLedgerStorage,
   noteAuthEnabled,
+  noteAuthStatus,
   offlineLoginRequired,
   poolDirectoryName,
   profilesToWipe,
@@ -62,7 +64,24 @@ describe('the "auth is on" flag', () => {
     recordProfileAuth(storage, 'household', false);
     expect(readAuthProfiles(storage)).toEqual(['business']);
     recordProfileAuth(storage, 'business', false);
-    expect(storage.data.has(MIRROR_AUTH_PROFILES_KEY)).toBe(false);
+    // Emptied, not removed: the list's absence means "never asked" (see the upgrade case below).
+    expect(storage.data.get(MIRROR_AUTH_PROFILES_KEY)).toBe('[]');
+    const fresh = memoryStorage();
+    recordProfileAuth(fresh, 'household', false);
+    expect(fresh.data.get(MIRROR_AUTH_PROFILES_KEY)).toBe('[]');
+  });
+
+  test('every status check that reaches the server writes the list; only "on" flags a profile', () => {
+    const off = memoryStorage({ [MIRROR_PROFILE_KEY]: 'household' });
+    noteAuthStatus(off, false);
+    expect(off.data.get(MIRROR_AUTH_PROFILES_KEY)).toBe('[]');
+    // "Off" says nothing about which profile, so it never clears a flag a sync pull set.
+    const flagged = memoryStorage({ [MIRROR_PROFILE_KEY]: 'household', [MIRROR_AUTH_PROFILES_KEY]: '["household"]' });
+    noteAuthStatus(flagged, false);
+    expect(readAuthProfiles(flagged)).toEqual(['household']);
+    noteAuthStatus(off, true);
+    expect(readAuthProfiles(off)).toEqual(['household']);
+    expect(() => noteAuthStatus(throwingStorage, false)).not.toThrow();
   });
 
   test('the gate flags the stored mirror profile (or the default one) when the status check says auth is on', () => {
@@ -97,9 +116,22 @@ describe('offlineLoginRequired', () => {
   });
 
   test("profiles without auth keep today's offline behaviour", () => {
-    expect(offlineLoginRequired(memoryStorage({ [MIRROR_PROFILE_KEY]: 'household' }), false)).toBe(false);
+    expect(offlineLoginRequired(memoryStorage({ [MIRROR_PROFILE_KEY]: 'household', [MIRROR_AUTH_PROFILES_KEY]: '[]' }), false)).toBe(false);
     expect(offlineLoginRequired(memoryStorage({ [MIRROR_PROFILE_KEY]: 'other', [MIRROR_AUTH_PROFILES_KEY]: '["household"]' }), false)).toBe(false);
+    // A fresh browser has no mirror to protect.
     expect(offlineLoginRequired(memoryStorage(), false)).toBe(false);
+    expect(offlineLoginRequired(throwingStorage, false)).toBe(false);
+  });
+
+  test('a mirror synced before the flags existed stays shut until a check reaches the server', () => {
+    const upgraded = memoryStorage({ [MIRROR_PROFILE_KEY]: 'household' });
+    expect(offlineLoginRequired(upgraded, false)).toBe(true);
+    expect(offlineLoginRequired(upgraded, true)).toBe(false);
+    noteAuthStatus(upgraded, false);
+    expect(offlineLoginRequired(upgraded, false)).toBe(false);
+    const upgradedAuth = memoryStorage({ [MIRROR_PROFILE_KEY]: 'household' });
+    noteAuthStatus(upgradedAuth, true);
+    expect(offlineLoginRequired(upgradedAuth, false)).toBe(true);
   });
 });
 
@@ -165,6 +197,53 @@ describe('removeMirrorPools', () => {
     expect(await removeMirrorPools(root, ['a', 'b'])).toEqual({ removed: ['b'], failed: ['a'] });
   });
 
+  // The tab's own worker was just terminated: Chromium releases its access handles a moment later, so for a while
+  // the directory still answers NoModificationAllowedError.
+  function releasingRoot(name: string, heldFor: number): PoolRoot & { attempts: number; gone: boolean } {
+    const root = {
+      attempts: 0,
+      gone: false,
+      async removeEntry(entry: string) {
+        if (entry !== name) throw Object.assign(new Error('missing'), { name: 'NotFoundError' });
+        root.attempts++;
+        if (root.attempts <= heldFor) throw Object.assign(new Error('held'), { name: 'NoModificationAllowedError' });
+        root.gone = true;
+      },
+    };
+    return root;
+  }
+
+  test('with a backoff, a pool still being released is retried until it goes', async () => {
+    const root = releasingRoot(poolDirectoryName('household'), 3);
+    const waits: number[] = [];
+    const result = await removeMirrorPools(root, ['household'], {
+      retryDelaysMs: POOL_RELEASE_RETRY_MS,
+      sleep: async (ms) => { waits.push(ms); },
+    });
+    expect(result).toEqual({ removed: ['household'], failed: [] });
+    expect(root.gone).toBe(true);
+    expect(waits).toEqual([50, 100, 200]);
+  });
+
+  test('the backoff is bounded: a pool held past it is reported', async () => {
+    const root = releasingRoot(poolDirectoryName('household'), 99);
+    const waits: number[] = [];
+    const result = await removeMirrorPools(root, ['household'], { retryDelaysMs: [1, 2], sleep: async (ms) => { waits.push(ms); } });
+    expect(result).toEqual({ removed: [], failed: ['household'] });
+    expect(root.attempts).toBe(3);
+    expect(waits).toEqual([1, 2]);
+  });
+
+  test('without a backoff (another tab holds the pool), and for other errors, there is one try', async () => {
+    const held = releasingRoot(poolDirectoryName('a'), 1);
+    expect(await removeMirrorPools(held, ['a'], { sleep: async () => { throw new Error('no wait expected'); } })).toEqual({ removed: [], failed: ['a'] });
+    expect(held.attempts).toBe(1);
+    let calls = 0;
+    const broken: PoolRoot = { async removeEntry() { calls++; throw Object.assign(new Error('x'), { name: 'SecurityError' }); } };
+    expect(await removeMirrorPools(broken, ['a'], { retryDelaysMs: [1, 1], sleep: async () => {} })).toEqual({ removed: [], failed: ['a'] });
+    expect(calls).toBe(1);
+  });
+
   test('pool names are the ones the VFS opens (unchanged from before the move)', () => {
     expect(poolDirectoryName('default')).toBe('wilson-mirror-default');
     expect(poolDirectoryName('my/profile')).toBe('wilson-mirror-my%2Fprofile');
@@ -178,6 +257,7 @@ describe('wiring (source pins: these modules need a browser worker or React)', (
   const worker = read('store/mirror-worker.ts');
   const gate = read('components/AuthGate.tsx');
   const settings = read('tabs/SettingsTab.tsx');
+  const adapter = read('store/wa-sqlite-adapter.ts');
 
   test('the mirror starts locked: nothing opens, syncs or serves before the gate unlocks it', () => {
     expect(client).toContain('let locked = true;');
@@ -192,6 +272,11 @@ describe('wiring (source pins: these modules need a browser worker or React)', (
     const apply = client.indexOf('await rpcSyncTarget()(payload);');
     expect(flag).toBeGreaterThan(-1);
     expect(apply).toBeGreaterThan(flag);
+    // Asked before and after the pull, so a profile switch mid-pull cannot flag the new profile "off".
+    const after = client.indexOf('const authEnabled = authBefore || (await authEnabledNow());');
+    expect(client.indexOf('const authBefore = await authEnabledNow();')).toBeGreaterThan(-1);
+    expect(after).toBeGreaterThan(client.indexOf('await collectSyncPayload(syncFetcher'));
+    expect(flag).toBeGreaterThan(after);
     expect(client).toContain('if (!current()) return;\n    await rpcSyncTarget()(payload);');
     expect(client).toContain("if (!current()) return;\n      const opened = (await rpc('setProfile'");
   });
@@ -202,17 +287,43 @@ describe('wiring (source pins: these modules need a browser worker or React)', (
     expect(client).toContain('clearLedgerStorage(local, sessionStore());');
     expect(worker).toContain("case 'wipe': {");
     expect(worker).toContain('return removeMirrorPools(root,');
+    // After terminating its own worker, the tab retries the pools that worker was still letting go of.
+    const terminate = client.indexOf('w.terminate();');
+    const fallback = client.indexOf('removeMirrorPools(root, failed, { retryDelaysMs: w ? POOL_RELEASE_RETRY_MS : [] })');
+    expect(terminate).toBeGreaterThan(-1);
+    expect(fallback).toBeGreaterThan(terminate);
   });
 
-  test('the gate wipes before a login screen and unlocks before the app', () => {
+  test("the worker's wipe can delete the pool: closing the handle releases the VFS access handles", () => {
+    // AccessHandlePoolVFS keeps a sync access handle on every pool file until vfs.close(); closing the SQLite
+    // connection only flushes, and removeEntry fails with NoModificationAllowedError while any handle is open.
+    const close = adapter.slice(adapter.lastIndexOf('async close(): Promise<void> {'));
+    expect(close).toMatch(/try \{\n\s+await binding\.close\(\);\n\s+\} finally \{[\s\S]*?await vfs\.close\(\);/);
+    // A pool that fails to open part-way releases its handles too.
+    expect(adapter).toMatch(/\} catch \(err\) \{\n\s+if \(opened !== undefined\) await sqlite3\.close\(opened\)[^\n]*\n\s+await vfs\.close\(\)/);
+    // The worker closes the handle (not just the binding) before removing the directory.
+    const wipe = worker.slice(worker.indexOf("case 'wipe': {"));
+    expect(wipe.indexOf('await handle.close();')).toBeGreaterThan(-1);
+    expect(wipe.indexOf('await handle.close();')).toBeLessThan(wipe.indexOf('removeMirrorPools(root,'));
+  });
+
+  test('the gate wipes before a login screen, unlocks before the app and suspends behind any other screen', () => {
     const wipe = gate.indexOf('if (wipe) await lockMirror();');
-    const unlock = gate.indexOf("else if (next.kind === 'app') unlockMirror();");
+    const unlock = gate.indexOf("if (next.kind === 'app') unlockMirror();");
+    const suspend = gate.indexOf('else if (!wipe) suspendMirror();');
     const show = gate.indexOf('setView(next);');
     expect(wipe).toBeGreaterThan(-1);
+    // Not an else: a user switch wipes and then unlocks for the new login.
     expect(unlock).toBeGreaterThan(wipe);
-    expect(show).toBeGreaterThan(unlock);
+    expect(suspend).toBeGreaterThan(unlock);
+    expect(show).toBeGreaterThan(suspend);
     expect(gate).toContain('offlineLoginRequired(storage, readAuthToken() !== null)');
-    expect(gate).toContain("if (check.kind === 'status' && check.status.authEnabled) noteAuthEnabled(storage);");
+    expect(gate).toContain("if (check.kind === 'status') noteAuthStatus(storage, check.status.authEnabled);");
+  });
+
+  test('suspending stops syncs and reads without a wipe; unlocking reopens', () => {
+    const body = client.slice(client.indexOf('export function suspendMirror(): void {'));
+    expect(body).toMatch(/^export function suspendMirror\(\): void \{\n {2}if \(locked\) return;\n {2}locked = true;\n {2}sessionEpoch\+\+;\n\}/);
   });
 
   test('logout clears the token, tells the bridge and wipes the mirror before it reloads', () => {

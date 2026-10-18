@@ -70,13 +70,48 @@ export function readAuthProfiles(storage: MirrorStorage | null): string[] {
 export function recordProfileAuth(storage: MirrorStorage | null, profile: string, authEnabled: boolean): void {
   const current = readAuthProfiles(storage);
   const has = current.includes(profile);
-  if (has === authEnabled) return;
+  if (has === authEnabled && flagsWritten(storage)) return;
   const next = authEnabled ? [...current, profile] : current.filter((p) => p !== profile);
   try {
-    if (next.length === 0) storage?.removeItem(MIRROR_AUTH_PROFILES_KEY);
-    else storage?.setItem(MIRROR_AUTH_PROFILES_KEY, JSON.stringify(next));
+    // An empty list is still written: its absence means "never asked" (offlineLoginRequired).
+    storage?.setItem(MIRROR_AUTH_PROFILES_KEY, JSON.stringify(next));
   } catch {
     // Blocked storage: nothing was persisted either, so there is no mirror to lock.
+  }
+}
+
+/** Whether this browser has recorded any auth answer yet (the list, even empty, is written). False when unreadable. */
+function flagsWritten(storage: MirrorStorage | null): boolean {
+  try {
+    return storage?.getItem(MIRROR_AUTH_PROFILES_KEY) != null;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether a mirror profile was ever stored (written after each successful sync pull, before and since the flags). */
+function mirrorProfileStored(storage: MirrorStorage | null): boolean {
+  try {
+    return storage?.getItem(MIRROR_PROFILE_KEY) != null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The login check reached the server. With auth on, the stored mirror profile is flagged (noteAuthEnabled). Either
+ * way the flag list now exists, so a mirror kept from before the flags existed stops reading as "never asked".
+ */
+export function noteAuthStatus(storage: MirrorStorage | null, authEnabled: boolean): void {
+  if (authEnabled) {
+    noteAuthEnabled(storage);
+    return;
+  }
+  if (flagsWritten(storage)) return;
+  try {
+    storage?.setItem(MIRROR_AUTH_PROFILES_KEY, '[]');
+  } catch {
+    // Blocked storage: nothing was persisted either.
   }
 }
 
@@ -89,9 +124,18 @@ export function noteAuthEnabled(storage: MirrorStorage | null): void {
   recordProfileAuth(storage, readStoredMirrorProfile(storage), true);
 }
 
-/** Offline, with no login: may the app serve the stored profile's mirror? Not when that profile has auth on. */
+/**
+ * Offline, with no login: must the login form show instead of the stored profile's mirror? Yes when that profile has
+ * auth on, and when a mirror was synced before this browser ever recorded an auth answer (a pool kept from before
+ * the flags existed may belong to an auth profile; the first check that reaches the server settles it). A fresh
+ * browser with no mirror, and profiles known to be without auth, keep today's offline behaviour.
+ *
+ * A stored token is taken as a login: offline, a revoked or expired token cannot be told from a valid one, and the
+ * first check that reaches the server ends that session (and wipes the mirror) if it is dead.
+ */
 export function offlineLoginRequired(storage: MirrorStorage | null, hasToken: boolean): boolean {
   if (hasToken) return false;
+  if (!flagsWritten(storage)) return mirrorProfileStored(storage);
   return readAuthProfiles(storage).includes(readStoredMirrorProfile(storage));
 }
 
@@ -132,20 +176,50 @@ export interface PoolRoot {
 }
 
 /**
+ * Backoff for a pool this tab's own worker held until it was just terminated: termination releases the worker's
+ * access handles asynchronously, so for a moment the directory still reads as held.
+ */
+export const POOL_RELEASE_RETRY_MS = [50, 100, 200, 400] as const;
+
+export interface RemovePoolsOptions {
+  /** Waits before each retry of a held pool (NoModificationAllowedError). None by default: another tab's hold lasts. */
+  retryDelaysMs?: readonly number[];
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
  * Delete each profile's pool directory. A pool that does not exist counts as removed; one still held open (another
  * tab's mirror worker owns its access handles) fails and is reported, and that tab wipes it itself when it sees the
- * session end. Never throws.
+ * session end. With `retryDelaysMs`, a held pool is tried again after each delay first. Never throws.
  */
-export async function removeMirrorPools(root: PoolRoot, profiles: string[]): Promise<{ removed: string[]; failed: string[] }> {
+export async function removeMirrorPools(
+  root: PoolRoot,
+  profiles: string[],
+  { retryDelaysMs = [], sleep = defaultSleep }: RemovePoolsOptions = {},
+): Promise<{ removed: string[]; failed: string[] }> {
   const removed: string[] = [];
   const failed: string[] = [];
   for (const profile of profiles) {
-    try {
-      await root.removeEntry(poolDirectoryName(profile), { recursive: true });
-      removed.push(profile);
-    } catch (err) {
-      if ((err as { name?: unknown } | null)?.name === 'NotFoundError') removed.push(profile);
-      else failed.push(profile);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await root.removeEntry(poolDirectoryName(profile), { recursive: true });
+        removed.push(profile);
+        break;
+      } catch (err) {
+        const name = (err as { name?: unknown } | null)?.name;
+        if (name === 'NotFoundError') {
+          removed.push(profile);
+          break;
+        }
+        if (name === 'NoModificationAllowedError' && attempt < retryDelaysMs.length) {
+          await sleep(retryDelaysMs[attempt]!);
+          continue;
+        }
+        failed.push(profile);
+        break;
+      }
     }
   }
   return { removed, failed };

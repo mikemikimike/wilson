@@ -164,7 +164,8 @@ export type AuthGateView =
  * - The server answered with an error (e.g. the LAN rule's 503 for a profile with no auth): say so, with its words.
  * - The server is unreachable and `offlineLocked` (the offline copy is a profile with auth on, and there is no
  *   stored login; store/mirror-session.ts offlineLoginRequired): the login form, marked offline. The mirror is
- *   never served without a login.
+ *   never served without a login. A stored token counts as one by design: offline, a revoked or expired token
+ *   cannot be told from a valid one, and the first check that reaches the server ends that session.
  * - Otherwise unreachable on the first check: the app, which serves what the offline mirror holds, as before
  *   this gate existed. On a re-check the screen stays as it was: a network blip must neither rebuild the app nor
  *   open it from the login form.
@@ -211,7 +212,8 @@ export interface SettledAuthCheck {
  * for the old one. A re-check that confirms the same login keeps everything mounted.
  *
  * Every login or setup screen means auth is on and this tab has no login, so the offline mirror is wiped first,
- * each time (a wipe that found nothing is cheap, and one another tab could not finish gets another go). An app
+ * each time (a wipe that found nothing is cheap, and one another tab could not finish gets another go). So is an
+ * app that opens for a different login than the one it showed. An app
  * that opens after the first check of the page is a session starting in place (the WebMCP bridge resyncs); one on
  * the first check is the page load, which the bridge syncs on its own.
  */
@@ -227,9 +229,11 @@ export function settleAuthCheck(
   }
   const view = authGateView(check, previous, offlineLocked);
   const remount = view.kind === 'app' && (previous.kind !== 'app' || previous.userId !== view.userId);
-  const wipe = view.kind === 'login' || view.kind === 'setup';
+  // A different login replacing this tab's (another tab signed in as someone else) must not inherit the old one's copy.
+  const switchedUser = remount && previous.kind === 'app' && previous.userId !== null;
+  const wipe = view.kind === 'login' || view.kind === 'setup' || switchedUser;
   const wasLocked = previous.kind === 'login' || previous.kind === 'setup';
-  const session: SessionTransition = wipe
+  const session: SessionTransition = view.kind === 'login' || view.kind === 'setup'
     ? (wasLocked ? null : 'ended')
     : remount && previous.kind !== 'checking' ? 'started' : null;
   return { view, remount, wipe, session };

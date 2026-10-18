@@ -58,23 +58,35 @@ export async function createWaSqliteHandle(profile: string, wasmBase64: string):
   const emModule = await SQLiteESMFactory({ wasmBinary: base64ToBytes(wasmBase64) });
   const sqlite3 = SQLite.Factory(emModule);
 
+  // The VFS holds a FileSystemSyncAccessHandle on every pool file (capacity
+  // slots included) until vfs.close(); closing the SQLite connection only
+  // flushes. Until then the pool directory cannot be removed (a wipe) or
+  // reopened, so every path out of here releases it.
   const vfs = new AccessHandlePoolVFS(poolDirectoryName(profile));
-  await vfs.isReady;
-  await vfs.addCapacity(EXTRA_POOL_CAPACITY);
-  sqlite3.vfs_register(vfs as unknown as Parameters<typeof sqlite3.vfs_register>[0], false);
+  let opened: number | undefined;
+  try {
+    await vfs.isReady;
+    await vfs.addCapacity(EXTRA_POOL_CAPACITY);
+    sqlite3.vfs_register(vfs as unknown as Parameters<typeof sqlite3.vfs_register>[0], false);
 
-  const db = await sqlite3.open_v2(
-    MIRROR_DB_PATH,
-    SQLite.SQLITE_OPEN_READWRITE | SQLite.SQLITE_OPEN_CREATE,
-    vfs.name
-  );
+    opened = await sqlite3.open_v2(
+      MIRROR_DB_PATH,
+      SQLite.SQLITE_OPEN_READWRITE | SQLite.SQLITE_OPEN_CREATE,
+      vfs.name
+    );
 
-  // Single connection on the pool → these are free wins (wa-sqlite VFS docs).
-  // foreign_keys is intentionally OFF: the mirror carries only the
-  // transactions/entities DDL, whose account references point at parent tables
-  // the mirror does not hold — enforcing FKs would break every linked insert.
-  await sqlite3.exec(db, 'PRAGMA locking_mode = exclusive;');
-  await sqlite3.exec(db, 'PRAGMA journal_mode = WAL;');
+    // Single connection on the pool → these are free wins (wa-sqlite VFS docs).
+    // foreign_keys is intentionally OFF: the mirror carries only the
+    // transactions/entities DDL, whose account references point at parent tables
+    // the mirror does not hold — enforcing FKs would break every linked insert.
+    await sqlite3.exec(opened, 'PRAGMA locking_mode = exclusive;');
+    await sqlite3.exec(opened, 'PRAGMA journal_mode = WAL;');
+  } catch (err) {
+    if (opened !== undefined) await sqlite3.close(opened).catch(() => undefined);
+    await vfs.close().catch(() => undefined);
+    throw err;
+  }
+  const db: number = opened;
 
   // Cache of compiled statements, keyed by SQL text. wa-sqlite's prepare is
   // async, so the promise is cached and statement calls await it. SQL is
@@ -199,8 +211,12 @@ export async function createWaSqliteHandle(profile: string, wasmBase64: string):
   return {
     binding,
     async close(): Promise<void> {
-      await binding.close();
-      await vfs.close();
+      try {
+        await binding.close();
+      } finally {
+        // Even when the connection will not close cleanly: the handles must go.
+        await vfs.close();
+      }
     },
   };
 }

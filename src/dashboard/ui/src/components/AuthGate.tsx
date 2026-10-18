@@ -16,8 +16,8 @@ import {
   type AuthStatusResponse,
 } from '@/lib/authSession';
 import { apiErrorMessage, firstAdminBody, validateFirstAdmin } from '@/lib/firstAdmin';
-import { lockMirror, unlockMirror } from '@/store/mirror-client';
-import { noteAuthEnabled, offlineLoginRequired } from '@/store/mirror-session';
+import { lockMirror, suspendMirror, unlockMirror } from '@/store/mirror-client';
+import { noteAuthStatus, offlineLoginRequired } from '@/store/mirror-session';
 
 function localStore(): Storage | null {
   try {
@@ -57,7 +57,8 @@ async function checkAuth(): Promise<AuthCheck> {
  * for a new login, so nothing loaded for the old session survives.
  *
  * The offline mirror follows the same decision: it is unlocked only for the app, and wiped before every login or
- * setup screen. Offline, a profile with auth on and no stored login gets the login form, never the mirror.
+ * setup screen and before the app opens for a different login. Offline, a profile with auth on and no stored login
+ * gets the login form, never the mirror.
  */
 export function AuthGate() {
   const [view, setView] = useState<AuthGateView>({ kind: 'checking' });
@@ -69,13 +70,15 @@ export function AuthGate() {
       coalesced(async () => {
         const check = await checkAuth();
         const storage = localStore();
-        if (check.kind === 'status' && check.status.authEnabled) noteAuthEnabled(storage);
+        if (check.kind === 'status') noteAuthStatus(storage, check.status.authEnabled);
         const offlineLocked = offlineLoginRequired(storage, readAuthToken() !== null);
         const { view: next, remount, wipe, session } = settleAuthCheck(check, viewRef.current, undefined, offlineLocked);
         if (session === 'ended') dispatchAuthSession('ended');
-        // Wipe before the login view shows; unlock before the app mounts and starts its first sync.
+        // Wipe before the login view shows (or before the app opens for another login); unlock before the app
+        // mounts and starts its first sync. No other screen reads the mirror, so it stays shut behind them.
         if (wipe) await lockMirror();
-        else if (next.kind === 'app') unlockMirror();
+        if (next.kind === 'app') unlockMirror();
+        else if (!wipe) suspendMirror();
         if (remount) setGeneration((g) => g + 1);
         viewRef.current = next;
         setView(next);

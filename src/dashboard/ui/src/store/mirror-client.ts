@@ -18,6 +18,7 @@ import { isMirrorExcluded } from './mirror-reads.js';
 import { bearerHeader, readAuthToken, reportUnauthorized } from '../lib/authSession.js';
 import {
   MIRROR_PROFILE_KEY,
+  POOL_RELEASE_RETRY_MS,
   clearLedgerStorage,
   profilesToWipe,
   readStoredMirrorProfile,
@@ -297,10 +298,13 @@ async function doSync(): Promise<void> {
     // mirror stays intact and keeps serving its last good set.
     // Balances are pulled only while the browser subagent is enabled, and a failing
     // v4 fetch is isolated inside collectSyncPayload (the rest still syncs).
-    const authEnabled = await authEnabledNow();
+    const authBefore = await authEnabledNow();
     const netWorth = await subagentEnabled();
     const payload = await collectSyncPayload(syncFetcher, { netWorth });
     const profile = payload.profile;
+    // Asked again after the pull: the status route names no profile, so a server that switched its active profile
+    // mid-pull could otherwise flag the new profile with the old one's answer. Either "on" counts.
+    const authEnabled = authBefore || (await authEnabledNow());
     if (!current()) return;
     // The flag that locks this profile offline goes down before its rows do.
     recordProfileAuth(localStore(), profile, authEnabled);
@@ -387,6 +391,17 @@ export function unlockMirror(): void {
   locked = false;
 }
 
+/**
+ * The gate shows a screen other than the app or a login one (the server answered with an error): nothing reads the
+ * mirror there, so it stops syncing and serving without being wiped. The session has not ended; unlockMirror()
+ * reopens it when the app comes back.
+ */
+export function suspendMirror(): void {
+  if (locked) return;
+  locked = true;
+  sessionEpoch++;
+}
+
 let wiping: Promise<void> | null = null;
 
 async function doWipe(): Promise<void> {
@@ -411,11 +426,12 @@ async function doWipe(): Promise<void> {
   lastFailedInitAt = 0;
   setMirrorState({ available: false, profile: null, seeded: false, lastSyncedAt: null, online: false });
   if (failed.length > 0) {
-    // No worker in this tab (another tab's owns the pool, or none ever opened), or it could not finish.
+    // No worker in this tab (another tab's owns the pool, or none ever opened), or it could not finish. A worker
+    // terminated just above lets go of its access handles a moment later, so its pools get a short backoff.
     try {
       const root = (await navigator.storage.getDirectory()) as unknown as PoolRoot;
-      const result = await removeMirrorPools(root, failed);
-      if (result.failed.length > 0) console.warn('[mirror] pool still held by another tab; it wipes it when it sees the logout:', result.failed.length);
+      const result = await removeMirrorPools(root, failed, { retryDelaysMs: w ? POOL_RELEASE_RETRY_MS : [] });
+      if (result.failed.length > 0) console.warn('[mirror] pool still held (another tab wipes its own when it sees the logout):', result.failed.length);
     } catch {
       // No OPFS here: there is no pool to remove.
     }
