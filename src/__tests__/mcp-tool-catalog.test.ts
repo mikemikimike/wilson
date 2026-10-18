@@ -16,7 +16,7 @@ import { TAB_IDS } from '../dashboard/webmcp-session.js';
 
 /** Every tool the catalog is allowed to contain. A phase that adds a tool appends it here. */
 const EXPECTED_TOOL_NAMES = [
-  'categorize_transaction', 'update_transaction', 'list_transactions', 'get_cash_forecast', 'get_operation_result', 'get_net_worth',
+  'categorize_transaction', 'update_transaction', 'fill_transaction_filters', 'get_cash_forecast', 'get_operation_result', 'get_net_worth',
   'get_profit_loss', 'resolve_review_item', 'set_budget', 'fill_forecast_inputs', 'get_spending_summary', 'set_tax_flag', 'get_tax_summary',
   'search_transactions', 'update_goal',
   // P3: imperative journeys (tab-scoped navigation and context).
@@ -26,7 +26,7 @@ const EXPECTED_TOOL_NAMES = [
 ];
 
 /** P2 and P4a: the forms the page exposes. Every other tool is registered imperatively by the bridge. */
-const DECLARATIVE_TOOL_NAMES = ['list_transactions', 'propose_judgment', 'resolve_review_item', 'set_budget', 'fill_forecast_inputs', 'update_goal'];
+const DECLARATIVE_TOOL_NAMES = ['fill_transaction_filters', 'propose_judgment', 'resolve_review_item', 'set_budget', 'fill_forecast_inputs', 'update_goal'];
 
 /** P3: the page tools the bridge registers imperatively. They need the page, so they are never offered on /mcp. */
 const PAGE_TOOL_NAMES = ['get_page_context', 'open_tab', 'open_interaction', 'open_review_item', 'open_transaction'];
@@ -138,7 +138,7 @@ describe('P2 catalog fields: surface, exposure, autosubmit, uiEffect', () => {
       // A form that changes or proposes anything is submitted by the agent and answered by a human card: no autosubmit.
       if (def.classification === 'mutating' || def.classification === 'proposal') expect(def.autosubmit === true, def.name).toBe(false);
     }
-    expect(MCP_TOOL_CATALOG.filter((d) => d.autosubmit === true).map((d) => d.name).sort()).toEqual(['fill_forecast_inputs', 'list_transactions']);
+    expect(MCP_TOOL_CATALOG.filter((d) => d.autosubmit === true).map((d) => d.name).sort()).toEqual(['fill_forecast_inputs', 'fill_transaction_filters']);
   });
 
   test('autosubmit is declarative-only: an imperative tool has nothing to submit', () => {
@@ -162,7 +162,7 @@ describe('P2 catalog fields: surface, exposure, autosubmit, uiEffect', () => {
   test('classify() knows the page class', () => {
     expect(classify('fill_forecast_inputs')).toBe('page');
     expect(classify('resolve_review_item')).toBe('mutating');
-    expect(classify('list_transactions')).toBe('read');
+    expect(classify('fill_transaction_filters')).toBe('page');
   });
 
   test('TOOL_LABELS covers every mutating tool (the card never falls back to the raw tool name)', () => {
@@ -225,11 +225,22 @@ describe('P2 catalog fields: surface, exposure, autosubmit, uiEffect', () => {
     }
   });
 
-  test('list_transactions output is within the 1,500 character budget', async () => {
+  test('fill_transaction_filters page data is within the 1,500 character budget', () => {
     const db = createTestDb();
     insertTransactions(db, Array.from({ length: 80 }, (_, i) => ({ date: '2026-09-01', description: `Merchant ${i} ${'y'.repeat(150)}`, amount: -(i + 1), category: 'Dining' })));
-    const data = await executeRead(db, 'list_transactions', { search: 'merchant', limit: 25 });
+    const data = catalogModule.getToolDef('fill_transaction_filters')!.pageData!(db, { search: 'merchant', limit: 25 });
     expect(JSON.stringify(data).length).toBeLessThanOrEqual(1500);
+  });
+
+  test('#163: fill_transaction_filters is a page tool that says it changes the screen, so it is not advertised read-only', () => {
+    const def = catalogModule.getToolDef('fill_transaction_filters')!;
+    expect(def).toMatchObject({ classification: 'page', uiEffect: true, exposure: 'declarative', autosubmit: true, defaultPolicy: 'allow' });
+    expect(toolAnnotations('fill_transaction_filters')).toEqual({ readOnlyHint: false, consequentialHint: false, untrustedContentHint: true });
+    // It is not a read any more: executeRead refuses it, its rows come from pageData.
+    expect(() => catalogModule.executeReadSync(createTestDb(), 'fill_transaction_filters', {})).toThrow();
+    // Its read budget is still a page of rows, not the one row a page tool usually reserves.
+    expect(catalogModule.readEstimate(def, {}).rows).toBe(10);
+    expect(catalogModule.readEstimate(def, { limit: 7 }).rows).toBe(7);
   });
 });
 

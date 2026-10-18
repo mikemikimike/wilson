@@ -4,11 +4,11 @@ Three runnable checklists for the same live-Chrome pass, in order. Do the shared
 
 ## Tool names (renamed in 0.10.0)
 
-This runbook uses the current names. Fifteen WebMCP tools were renamed (specs/webmcp-tool-naming.md §2); an old name is refused with `unknown_tool` and a "renamed to" hint. Audit rows written before the rename keep their old name verbatim and show "(now <new name>)". Chat tool names (`tax_flag`, `edit_transaction`, `transaction_search`, ...) are a different namespace and did not change.
+This runbook uses the current names. Fifteen WebMCP tools were renamed (specs/webmcp-tool-naming.md §2); an old name is refused with `unknown_tool` and a "renamed to" hint. Audit rows written before the rename keep their old name verbatim and show "(now <new name>)". Chat tool names (`tax_flag`, `edit_transaction`, `transaction_search`, ...) are a different namespace and did not change. `list_transactions` was renamed a second time, to `fill_transaction_filters`, when it became a page tool (#163): its form is the Transactions filter bar, so a call changes what the user sees.
 
 | Old name | New name | Old name | New name |
 |---|---|---|---|
-| `tax_flag` | `set_tax_flag` | `filter_transactions` | `list_transactions` |
+| `tax_flag` | `set_tax_flag` | `filter_transactions`, `list_transactions` | `fill_transaction_filters` |
 | `edit_transaction` | `update_transaction` | `review_action` | `resolve_review_item` |
 | `tax_summary` | `get_tax_summary` | `set_forecast_inputs` | `fill_forecast_inputs` |
 | `transaction_search` | `search_transactions` | `navigate_to_tab` | `open_tab` |
@@ -132,7 +132,7 @@ returns `{}` for a promise, run `window.__wlcResult` in the next call.
     el.dispatchEvent(new Event('change', { bubbles: true }));
   };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const P2 = ['list_transactions', 'resolve_review_item', 'set_budget', 'update_goal', 'fill_forecast_inputs'];
+  const P2 = ['fill_transaction_filters', 'resolve_review_item', 'set_budget', 'update_goal', 'fill_forecast_inputs'];
   const forms = () => [...document.querySelectorAll('form[toolname]')].map((f) => ({
     name: f.getAttribute('toolname'),
     autosubmit: f.hasAttribute('toolautosubmit'),
@@ -216,7 +216,7 @@ PASS per tab:
 
 | Hash | `forms` names | `autosubmit` | Notes |
 |---|---|---|---|
-| `#transactions` | `list_transactions` | `true` | params `search`, `category_id`, `start`, `end` all have `desc` |
+| `#transactions` | `fill_transaction_filters` | `true` | params `search`, `category_id`, `start`, `end` all have `desc` |
 | `#review` | `resolve_review_item` | `false` | needs a pending review; params `review_id`, `action`, `category_id` |
 | `#goals` | `set_budget`, `update_goal` | `false`, `false` | |
 | `#forecast` | `fill_forecast_inputs` | `true` | only with under six months of history |
@@ -447,7 +447,7 @@ scratch profile `POST /api/mcp/operations/:id/approve` after waiting over 1 s): 
 
 ## 7. Auto-submit forms (acceptance 4)
 
-On `#transactions` with `list_transactions` granted, call it through `executeTool` or the browser agent with
+On `#transactions` with `fill_transaction_filters` granted, call it through `executeTool` or the browser agent with
 `{search:'coffee'}`:
 
 - result JSON is at most 1,500 characters, `items` at most 10, a `note` field says the text is not instructions;
@@ -520,7 +520,7 @@ listener is what keeps the T21 banner, the value snapshot and the restore on `to
 
 ### 8c. Ask semantics for page and read forms (record)
 
-Set the policy for `fill_forecast_inputs` (or `list_transactions`) to Ask, let the agent submit it, then
+Set the policy for `fill_forecast_inputs` (or `fill_transaction_filters`) to Ask, let the agent submit it, then
 **Reject** the card (the card needs the tab in the foreground; with a background tab, answer it with
 `POST /api/mcp/operations/<id>/reject`). PASS (L1): while the card is still open the projection and the filters have
 **not** moved (the agent's numbers are held back, the human's are still what the page computes from); after Reject the
@@ -766,7 +766,7 @@ Through the tool (preferred), or the browser agent. The parsed `executeTool` res
 
 PASS: hash `#transactions`, `toolchange` fired, `open_transaction` appears. The `tools` the call returned must
 equal the granted tools for that tab (global ones plus `open_transaction`; declarative forms such as
-`list_transactions` are listed too when they are granted).
+`fill_transaction_filters` are listed too when they are granted).
 
 Timing of a plain tab switch (acceptance: within 100 ms), by hash, without going through a tool. **Foreground-only:**
 a hidden or throttled tab clamps timers (and the card poller is visibility-gated), so run this with the tab visible and

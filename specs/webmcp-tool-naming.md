@@ -516,9 +516,9 @@ Order matters: **S2 must land before or together with S3, and the `initDatabase`
 - **D5. Internal "judgement" spellings** (`/api/judgements`, file and component names, UI copy). Recommend a separate mechanical PR after 0.10.0. Agents never see these. Only tool names and descriptions change here.
 - **D6. Lifetime of the fix-up and the read fallback.** Recommend keeping both through 0.11.x and removing the fix-up in 0.12.0. Keep `RETIRED_TOOL_NAMES` permanently: it powers N11 (no reuse), the audit display and the hint.
 - **D7. Issues surfaced but out of scope** (file separately):
-  - The `get_spending_summary` `compareWithPrevious` default differs from chat (`spending-summary.ts:236` vs `computeSpendingSummary:185`).
-  - The `update_transaction` commit may not re-embed a changed description (seen in a read of the code, not confirmed).
-  - `list_transactions` changes the visible tab filter but is advertised `readOnlyHint: true` (no `uiEffect`).
+  - The `get_spending_summary` `compareWithPrevious` default differs from chat (`spending-summary.ts:236` vs `computeSpendingSummary:185`). Fixed by #161: `computeSpendingSummary` applies one shared default (on).
+  - The `update_transaction` commit may not re-embed a changed description (seen in a read of the code, not confirmed). Fixed by #162: the commit re-embeds a changed description.
+  - `list_transactions` changes the visible tab filter but is advertised `readOnlyHint: true` (no `uiEffect`). Fixed by #163: it is now the page tool `fill_transaction_filters` (`uiEffect: true`; its rows come back as page data). Both `filter_transactions` and `list_transactions` are retired names of it, so the fix-up and the policy read fallback carry either one over; the test `webmcp-tool-naming.test.ts` lists the reclassification and checks that no declarative tool is a read.
   - The `cash-flow-forecast` SKILL.md names `forecast`, which is not a chat tool.
 
 ---

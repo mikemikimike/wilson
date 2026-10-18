@@ -25,7 +25,9 @@ export const RETIRED_TOOL_NAMES: Readonly<Record<string, RetiredToolName>> = Obj
   profit_loss: { name: 'get_profit_loss', retiredIn: '0.10.0', shipped: true },
   net_worth: { name: 'get_net_worth', retiredIn: '0.10.0', shipped: true },
   forecast: { name: 'get_cash_forecast', retiredIn: '0.10.0', shipped: true },
-  filter_transactions: { name: 'list_transactions', retiredIn: '0.10.0', shipped: false },
+  filter_transactions: { name: 'fill_transaction_filters', retiredIn: '0.10.0', shipped: false },
+  // A second rename of the same tool, with a reclassification from read to page (#163): both old names map to it.
+  list_transactions: { name: 'fill_transaction_filters', retiredIn: '0.10.0', shipped: false },
   review_action: { name: 'resolve_review_item', retiredIn: '0.10.0', shipped: false },
   set_forecast_inputs: { name: 'fill_forecast_inputs', retiredIn: '0.10.0', shipped: false },
   navigate_to_tab: { name: 'open_tab', retiredIn: '0.10.0', shipped: false },

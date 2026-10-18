@@ -136,6 +136,41 @@ describe('I2 policy equivalence: never default-allow', () => {
     expect(getConfiguredPolicy(db, null, 'get_profit_loss')).toBe('off');
   });
 
+  test('#163 a tool renamed twice: either old name\'s policy carries over, the stricter wins, and both mirrors follow', () => {
+    const db = createTestDb();
+    // A user's Off from an older build (filter_transactions) and Allow from a newer one (list_transactions).
+    putPolicy(db, 0, 'filter_transactions', 'off');
+    putPolicy(db, 0, 'list_transactions', 'allow');
+    // Before the fix-up runs, the read fallback already holds the Off.
+    expect(getConfiguredPolicy(db, null, 'fill_transaction_filters')).toBe('off');
+    quiet(() => applyToolRenames(db));
+    expect(rawPolicy(db, 0, 'fill_transaction_filters')).toBe('off');
+    expect(rawPolicy(db, 0, 'filter_transactions')).toBe('off');
+    expect(rawPolicy(db, 0, 'list_transactions')).toBe('off');
+    // A later choice under the current name is written to both mirrors, so a build on either old name sees it.
+    expect(setPolicy(db, admin, 'fill_transaction_filters', 'ask')).toMatchObject({ ok: true });
+    expect(['filter_transactions', 'list_transactions', 'fill_transaction_filters'].map((t) => rawPolicy(db, 0, t))).toEqual(['ask', 'ask', 'ask']);
+    expect(getEffectivePolicy(db, null, 'fill_transaction_filters')).toBe('ask');
+  });
+
+  test('#163 a list_transactions grant and pending read-ask carry over to fill_transaction_filters and still work', async () => {
+    const db = createTestDb();
+    seedTestData(db);
+    const scope = testScope();
+    setPolicy(db, admin, 'fill_transaction_filters', 'ask');
+    const grants = grantTools(db, scope, ['fill_transaction_filters']);
+    const out = await callTool(db, scope, grants.fill_transaction_filters, 'fill_transaction_filters', { search: 'grocery' }, 'declarative');
+    if (!out.ok || out.kind !== 'operation') throw new Error('expected a pending operation');
+    // Put both rows back under the name the previous build used, as a database from that build has them.
+    db.prepare("UPDATE mcp_grants SET tool_name = 'list_transactions' WHERE id = @id").run({ id: grants.fill_transaction_filters });
+    db.prepare("UPDATE mcp_operations SET tool_name = 'list_transactions' WHERE id = @id").run({ id: out.operation.id });
+    expect(quiet(() => applyToolRenames(db))).toMatchObject({ grants: 1, operations: 1 });
+    expect(approveWebMcpOperation(db, out.operation.id, 'test').outcome).toBe('committed');
+    expect(JSON.parse(getOperation(db, out.operation.id)!.outcome_json!).items[0].desc).toContain('Grocery');
+    const again = await callTool(db, scope, grants.fill_transaction_filters, 'fill_transaction_filters', { search: 'grocery' }, 'declarative');
+    expect(again).toMatchObject({ ok: true, kind: 'operation' });
+  });
+
   test('a policy row for any other name is ignored', () => {
     const db = createTestDb();
     putPolicy(db, 0, 'get_net_worth', 'off');

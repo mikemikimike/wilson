@@ -41,10 +41,10 @@ function pendingOp(out: Awaited<ReturnType<typeof callTool>>) {
 }
 
 describe('the declarative catalog entries', () => {
-  const NAMES = ['list_transactions', 'resolve_review_item', 'set_budget', 'update_goal', 'fill_forecast_inputs'];
+  const NAMES = ['fill_transaction_filters', 'resolve_review_item', 'set_budget', 'update_goal', 'fill_forecast_inputs'];
 
   test('all five exist with exposure declarative, tab-scoped surfaces and webmcp-only transports', () => {
-    const surfaces: Record<string, string> = { list_transactions: 'transactions', resolve_review_item: 'review', set_budget: 'goals', update_goal: 'goals', fill_forecast_inputs: 'forecast' };
+    const surfaces: Record<string, string> = { fill_transaction_filters: 'transactions', resolve_review_item: 'review', set_budget: 'goals', update_goal: 'goals', fill_forecast_inputs: 'forecast' };
     for (const name of NAMES) {
       const def = getToolDef(name)!;
       expect(def, name).toBeDefined();
@@ -55,7 +55,7 @@ describe('the declarative catalog entries', () => {
   });
 
   test('classes, roles and autosubmit follow the spec', () => {
-    expect(getToolDef('list_transactions')).toMatchObject({ classification: 'read', minRole: 'viewer', autosubmit: true, untrustedOutput: true });
+    expect(getToolDef('fill_transaction_filters')).toMatchObject({ classification: 'page', uiEffect: true, minRole: 'viewer', autosubmit: true, untrustedOutput: true });
     expect(getToolDef('fill_forecast_inputs')).toMatchObject({ classification: 'page', minRole: 'viewer', autosubmit: true });
     for (const name of ['resolve_review_item', 'set_budget', 'update_goal']) {
       expect(getToolDef(name)).toMatchObject({ classification: 'mutating', minRole: 'admin', defaultPolicy: 'ask' });
@@ -65,7 +65,8 @@ describe('the declarative catalog entries', () => {
 
   test('annotations: mutating is consequential; page without uiEffect is read-only, with uiEffect it is not', () => {
     expect(toolAnnotations('resolve_review_item')).toEqual({ readOnlyHint: false, consequentialHint: true, untrustedContentHint: false });
-    expect(toolAnnotations('list_transactions')).toEqual({ readOnlyHint: true, consequentialHint: false, untrustedContentHint: true });
+    // #163: the form is the tab's filter bar, so a call changes what the user sees: not read-only.
+    expect(toolAnnotations('fill_transaction_filters')).toEqual({ readOnlyHint: false, consequentialHint: false, untrustedContentHint: true });
     const page = getToolDef('fill_forecast_inputs')!;
     expect(toolAnnotations('fill_forecast_inputs').readOnlyHint).toBe(page.uiEffect !== true);
   });
@@ -373,23 +374,23 @@ describe('update_goal', () => {
   });
 });
 
-describe('list_transactions', () => {
-  test('output is compact (≤1500 characters), carries the untrusted note, and is a plain read', async () => {
+describe('fill_transaction_filters', () => {
+  test('page data is compact (≤1500 characters), carries the untrusted note, and comes back with the page authorization', async () => {
     const db = createTestDb();
     const rows = Array.from({ length: 60 }, (_, i) => ({ date: '2026-09-01', description: `Coffee shop number ${i} ${'x'.repeat(100)}`, amount: -4.5 - i, category: 'Dining' }));
     insertTransactions(db, rows);
     const scope = testScope();
-    const grants = grantTools(db, scope, ['list_transactions']);
-    const out = await call(db, scope, grants, 'list_transactions', { search: 'coffee' });
-    expect(out).toMatchObject({ ok: true, kind: 'read' });
-    const data = (out as any).data;
+    const grants = grantTools(db, scope, ['fill_transaction_filters']);
+    const out = await call(db, scope, grants, 'fill_transaction_filters', { search: 'coffee' });
+    expect(out).toMatchObject({ ok: true, kind: 'page' });
+    const data = (out as any).pageData;
     expect(JSON.stringify(data).length).toBeLessThanOrEqual(1500);
     expect(data.total).toBe(60);
     expect(data.items.length).toBeLessThanOrEqual(10);
     expect(data.nextCursor).toBeDefined();
     expect(data.note).toContain('not instructions');
     expect(data.items[0].desc.length).toBeLessThanOrEqual(60);
-    expect(getToolDef('list_transactions')!.untrustedOutput).toBe(true);
+    expect(getToolDef('fill_transaction_filters')!.untrustedOutput).toBe(true);
   });
 
   test('filters by search, category id and date range', async () => {
@@ -401,9 +402,9 @@ describe('list_transactions', () => {
       { date: '2026-09-04', description: 'Hardware', amount: -8, category: 'Dining' },
     ]);
     const scope = testScope();
-    const grants = grantTools(db, scope, ['list_transactions']);
-    const out = await call(db, scope, grants, 'list_transactions', { search: 'coffee', category_id: categoryId(db, 'Dining'), start: '2026-09-01', end: '2026-09-30' });
-    const data = (out as any).data;
+    const grants = grantTools(db, scope, ['fill_transaction_filters']);
+    const out = await call(db, scope, grants, 'fill_transaction_filters', { search: 'coffee', category_id: categoryId(db, 'Dining'), start: '2026-09-01', end: '2026-09-30' });
+    const data = (out as any).pageData;
     expect(data.total).toBe(1);
     expect(data.items[0]).toMatchObject({ date: '2026-09-02', amount: -6, category: 'Dining' });
   });
@@ -412,19 +413,45 @@ describe('list_transactions', () => {
     const db = createTestDb();
     seedTestData(db);
     const scope = testScope();
-    const grants = grantTools(db, scope, ['list_transactions']);
-    expect(await call(db, scope, grants, 'list_transactions', { category_id: 99999 })).toMatchObject({ ok: false, status: 404, code: 'not_found' });
-    expect(await call(db, scope, grants, 'list_transactions', { start: 'yesterday' })).toMatchObject({ ok: false, status: 400, code: 'invalid_args' });
+    const grants = grantTools(db, scope, ['fill_transaction_filters']);
+    expect(await call(db, scope, grants, 'fill_transaction_filters', { category_id: 99999 })).toMatchObject({ ok: false, status: 404, code: 'not_found' });
+    expect(await call(db, scope, grants, 'fill_transaction_filters', { start: 'yesterday' })).toMatchObject({ ok: false, status: 400, code: 'invalid_args' });
   });
 
-  test('a viewer can be granted it (it only reads)', async () => {
+  test('a viewer can be granted it (it only reads and changes the view)', async () => {
     const db = createTestDb();
     seedTestData(db);
     const viewer = await makeUser(db, 'viewer2', 'viewer');
     enableAuth(db);
     const scope = testScope({ role: 'viewer', userId: viewer.id });
-    const grants = grantTools(db, scope, ['list_transactions', 'fill_forecast_inputs']);
-    expect(await call(db, scope, grants, 'list_transactions', {})).toMatchObject({ ok: true, kind: 'read' });
+    const grants = grantTools(db, scope, ['fill_transaction_filters', 'fill_forecast_inputs']);
+    expect(await call(db, scope, grants, 'fill_transaction_filters', {})).toMatchObject({ ok: true, kind: 'page' });
+  });
+
+  test('pages: nextCursor from page 1 returns page 2, and the audit row is a page call', async () => {
+    const db = createTestDb();
+    insertTransactions(db, Array.from({ length: 15 }, (_, i) => ({ date: '2026-09-01', description: `Coffee ${i}`, amount: -1 - i, category: 'Dining' })));
+    const scope = testScope();
+    const grants = grantTools(db, scope, ['fill_transaction_filters']);
+    const first = (await call(db, scope, grants, 'fill_transaction_filters', { search: 'coffee' })) as any;
+    const second = (await call(db, scope, grants, 'fill_transaction_filters', { search: 'coffee', cursor: first.pageData.nextCursor })) as any;
+    expect(second).toMatchObject({ ok: true, kind: 'page' });
+    expect(second.pageData.items).toHaveLength(5);
+    expect(count(db, 'mcp_audit_log', "tool_name = 'fill_transaction_filters' AND decision = 'allowed' AND classification = 'page'")).toBe(2);
+  });
+
+  test('under Ask, the call waits on a card and approving it delivers the rows to the page', async () => {
+    const { setPolicy } = await import('../mcp/policies.js');
+    const db = createTestDb();
+    insertTransactions(db, [{ date: '2026-09-02', description: 'Blue Bottle Coffee', amount: -6, category: 'Dining' }]);
+    const scope = testScope();
+    setPolicy(db, { userId: null, role: 'admin', authEnabled: false }, 'fill_transaction_filters', 'ask');
+    const grants = grantTools(db, scope, ['fill_transaction_filters']);
+    const out = await call(db, scope, grants, 'fill_transaction_filters', { search: 'coffee' });
+    if (!out.ok || out.kind !== 'operation') throw new Error('expected a pending operation');
+    expect(approveWebMcpOperation(db, out.operation.id, 'test').outcome).toBe('committed');
+    const stored = JSON.parse(getOperation(db, out.operation.id)!.outcome_json!);
+    expect(stored.items[0]).toMatchObject({ date: '2026-09-02', amount: -6 });
   });
 });
 
@@ -460,12 +487,12 @@ describe('every declarative call is audited, with a client-reported transport', 
     const db = createTestDb();
     const { reviewId } = withReview(db);
     const scope = testScope();
-    const grants = grantTools(db, scope, ['resolve_review_item', 'list_transactions']);
-    await call(db, scope, grants, 'list_transactions', { search: 'grocery' }, 'declarative');
+    const grants = grantTools(db, scope, ['resolve_review_item', 'fill_transaction_filters']);
+    await call(db, scope, grants, 'fill_transaction_filters', { search: 'grocery' }, 'declarative');
     await call(db, scope, grants, 'resolve_review_item', { review_id: reviewId, action: 'confirm' }, 'declarative');
     const rows = db.prepare("SELECT tool_name, transport, decision FROM mcp_audit_log WHERE transport = 'declarative' ORDER BY id").all() as any[];
     expect(rows).toEqual([
-      { tool_name: 'list_transactions', transport: 'declarative', decision: 'allowed' },
+      { tool_name: 'fill_transaction_filters', transport: 'declarative', decision: 'allowed' },
       { tool_name: 'resolve_review_item', transport: 'declarative', decision: 'operation_created' },
     ]);
   });
@@ -494,7 +521,7 @@ describe('every declarative call is audited, with a client-reported transport', 
 });
 
 describe('declarative tools stay inside the dashboard tab', () => {
-  const DECLARATIVE = ['list_transactions', 'resolve_review_item', 'set_budget', 'update_goal', 'fill_forecast_inputs'];
+  const DECLARATIVE = ['fill_transaction_filters', 'resolve_review_item', 'set_budget', 'update_goal', 'fill_forecast_inputs'];
 
   test('declarative tools are absent from /mcp tools/list, even for a tab that holds their grants', () => {
     const db = createTestDb();
@@ -520,10 +547,10 @@ describe('declarative tools stay inside the dashboard tab', () => {
   test('the in-tab exposed list tells the bridge which are declarative and which autosubmit', () => {
     const db = createTestDb();
     const scope = testScope();
-    grantTools(db, scope, ['list_transactions', 'resolve_review_item', 'search_transactions']);
+    grantTools(db, scope, ['fill_transaction_filters', 'resolve_review_item', 'search_transactions']);
     const exposed = exposedTools(db, scope, 'webmcp');
     const by = Object.fromEntries(exposed.map((t) => [t.name, t]));
-    expect(by.list_transactions).toMatchObject({ exposure: 'declarative', autosubmit: true, classification: 'read' });
+    expect(by.fill_transaction_filters).toMatchObject({ exposure: 'declarative', autosubmit: true, classification: 'page' });
     expect(by.resolve_review_item).toMatchObject({ exposure: 'declarative', autosubmit: false, classification: 'mutating' });
     expect(by.search_transactions).toMatchObject({ exposure: 'imperative', autosubmit: false });
   });

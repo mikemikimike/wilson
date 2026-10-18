@@ -101,12 +101,12 @@ describe('handleDeclarativeSubmit', () => {
       let applied = 0;
       handleDeclarativeSubmit({
         nativeEvent: ev,
-        classification: 'read',
+        classification: 'page',
         agentTouched: false,
         getArgs: () => ({}),
         callServerTool: async () => approved,
         afterServer: async () => { applied += 1; return 'ok'; },
-        toolName: 'list_transactions',
+        toolName: 'fill_transaction_filters',
       });
       expect(await responded()).toBe('ok');
       expect(applied).toBe(1);
@@ -247,7 +247,7 @@ describe('nextAgentTouched', () => {
     expect(nextAgentTouched(false, { type: 'toolactivated', toolName: 'update_goal' }, 'set_budget')).toBe(false);
     expect(nextAgentTouched(true, { type: 'toolcancel', toolName: 'update_goal' }, 'set_budget')).toBe(true);
     // A read or page form is never agent-touched by an anonymous event (only mutating forms fail closed).
-    expect(nextAgentTouched(false, { type: 'toolactivated' }, 'list_transactions')).toBe(false);
+    expect(nextAgentTouched(false, { type: 'toolactivated' }, 'fill_transaction_filters')).toBe(false);
   });
 
   test('fail closed: a toolactivated with no recognizable toolName touches every mutating form', () => {
@@ -310,7 +310,7 @@ describe('AgentTouchTracker, anonymous activation', () => {
   });
 
   test('a read form tracker ignores it', () => {
-    const t = new AgentTouchTracker('list_transactions');
+    const t = new AgentTouchTracker('fill_transaction_filters');
     t.apply({ type: 'toolactivated' });
     expect(t.touched).toBe(false);
   });
@@ -360,7 +360,7 @@ describe('prefilled (an agent page tool chose what a mutating form acts on, T21)
   });
 
   test('a read form is never touched by it', () => {
-    const t = new AgentTouchTracker('list_transactions');
+    const t = new AgentTouchTracker('fill_transaction_filters');
     t.apply({ type: 'prefilled' });
     expect(t.touched).toBe(false);
   });

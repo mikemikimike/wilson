@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { MCP_TOOL_CATALOG, jsonSchemaFor, readEstimate, schemaDigest, type McpToolDef } from '../mcp/tool-catalog.js';
+import { MCP_TOOL_CATALOG, jsonSchemaFor, readEstimate, schemaDigest, toolAnnotations, type McpToolDef } from '../mcp/tool-catalog.js';
 import { allowedPolicies } from '../mcp/policies.js';
 import { RETIRED_TOOL_NAMES, currentNameFor, isRetiredToolName, retiredNamesFor } from '../mcp/tool-names.js';
 import { HANDOFF_TO_CATALOG } from '../dashboard/local-handoff-format.js';
@@ -173,6 +173,25 @@ describe('WebMCP naming convention (spec §1)', () => {
   });
 });
 
+// ── Visible state: only page tools change what the user sees (#163) ─────────
+
+describe('only page tools change what the user sees', () => {
+  test('a declarative tool is never a read: an agent filling its form changes what the user sees', () => {
+    for (const d of MCP_TOOL_CATALOG.filter((t) => t.exposure === 'declarative')) {
+      expect(d.classification, d.name).not.toBe('read');
+      // A form that changes nothing stored is a page tool that says so; one that does goes through a card.
+      if (d.classification === 'page') expect(d.uiEffect, d.name).toBe(true);
+    }
+  });
+
+  test('a tool that changes what the user sees is never advertised read-only', () => {
+    for (const d of MCP_TOOL_CATALOG.filter((t) => t.uiEffect === true)) {
+      expect(d.classification, d.name).toBe('page');
+      expect(toolAnnotations(d.name).readOnlyHint, d.name).toBe(false);
+    }
+  });
+});
+
 // ── Namespaces: collision with chat tool names ───────────────────────────────
 
 /** Chat tool names pinned by the mutation audit (not env-conditional registry loading), plus the dynamic ones. */
@@ -204,22 +223,34 @@ describe('namespace collision (N10)', () => {
 describe('retired names (N11)', () => {
   const entries = Object.entries(RETIRED_TOOL_NAMES);
 
-  test('15 pairs: 7 shipped in v0.9.x, 8 never shipped', () => {
-    expect(entries).toHaveLength(15);
+  test('16 pairs: 7 shipped in v0.9.x, 9 never shipped', () => {
+    expect(entries).toHaveLength(16);
     expect(entries.filter(([, r]) => r.shipped).map(([o]) => o).sort()).toEqual(
       ['edit_transaction', 'forecast', 'net_worth', 'profit_loss', 'spending_summary', 'tax_flag', 'transaction_search']
     );
   });
 
-  test('the map is injective, every value is a current catalog name with the same classification, and no key is current', () => {
-    const values = entries.map(([, r]) => r.name);
-    expect(new Set(values).size).toBe(values.length);
+  test('every value is a current catalog name with the same classification (or the documented reclassification), and no key is current', () => {
     for (const [old, r] of entries) {
       expect(byName.has(old), `${old} is a current catalog name`).toBe(false);
       const def = byName.get(r.name);
       expect(def, r.name).toBeDefined();
-      expect((baseline as Record<string, { classification: string }>)[old]!.classification, old).toBe(def!.classification);
+      const moved = RECLASSIFIED[r.name];
+      if (moved) {
+        expect(moved.names, old).toContain(old);
+        expect(def!.classification, old).toBe(moved.changes.classification);
+        if (BASE[old]) expect(BASE[old]!.classification, old).toBe(moved.from);
+      } else {
+        expect(BASE[old]!.classification, old).toBe(def!.classification);
+      }
     }
+  });
+
+  test('injective except for a tool renamed twice: every old name of it maps to the one current name', () => {
+    const values = entries.map(([, r]) => r.name);
+    const repeated = [...new Set(values.filter((v, i) => values.indexOf(v) !== i))];
+    expect(repeated).toEqual(Object.keys(RECLASSIFIED));
+    for (const [name, moved] of Object.entries(RECLASSIFIED)) expect(retiredNamesFor(name).sort()).toEqual([...moved.names].sort());
   });
 
   test('helpers: retiredNamesFor and currentNameFor invert each other; own-property lookups only', () => {
@@ -249,6 +280,15 @@ type BaselineEntry = {
 const BASE = baseline as unknown as Record<string, BaselineEntry>;
 const currentOf = (old: string) => currentNameFor(old) ?? old;
 
+/**
+ * Tools whose class changed after the 0.10.0 rename, by current name, with every retired name they had and exactly
+ * the attributes that changed. Each needs its issue. Every other retired name keeps its class (N11) and its attributes (I1).
+ */
+const RECLASSIFIED: Record<string, { from: string; names: string[]; changes: { classification: McpToolDef['classification']; uiEffect: boolean } }> = {
+  // #163: its form is the Transactions tab's filter bar, so a call changes what the user sees. A page tool (fill_), not a read (list_).
+  fill_transaction_filters: { from: 'read', names: ['filter_transactions', 'list_transactions'], changes: { classification: 'page', uiEffect: true } },
+};
+
 describe('I1 baseline equivalence', () => {
   test('the baseline holds the 26 pre-rename names', () => {
     expect(Object.keys(BASE)).toHaveLength(26);
@@ -263,11 +303,15 @@ describe('I1 baseline equivalence', () => {
           exposure: d.exposure, uiEffect: d.uiEffect ?? null, autosubmit: d.autosubmit ?? null,
           defaultPolicy: d.defaultPolicy, untrustedOutput: d.untrustedOutput, allowedPolicies: allowedPolicies(d),
         };
-      const expected: unknown = {
-        classification: b.classification, minRole: b.minRole, transports: b.transports, surface: b.surface,
-        exposure: b.exposure, uiEffect: b.uiEffect, autosubmit: b.autosubmit,
-        defaultPolicy: b.defaultPolicy, untrustedOutput: b.untrustedOutput, allowedPolicies: b.allowedPolicies,
-      };
+      const expected: unknown = Object.assign(
+        {
+          classification: b.classification, minRole: b.minRole, transports: b.transports, surface: b.surface,
+          exposure: b.exposure, uiEffect: b.uiEffect, autosubmit: b.autosubmit,
+          defaultPolicy: b.defaultPolicy, untrustedOutput: b.untrustedOutput, allowedPolicies: b.allowedPolicies,
+        },
+        // A documented reclassification changes exactly what it lists, nothing else.
+        RECLASSIFIED[d.name]?.changes,
+      );
       expect(actual, old).toEqual(expected);
     }
   });

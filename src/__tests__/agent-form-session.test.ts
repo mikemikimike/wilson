@@ -96,7 +96,7 @@ const invariant = (h: Harness, where: string) => {
 };
 
 describe('G1: the verifier repro (human route, then toolcancel)', () => {
-  for (const [classification, tool] of [['read', 'list_transactions'], ['page', 'fill_forecast_inputs']] as const) {
+  for (const [classification, tool] of [['page', 'fill_transaction_filters'], ['page', 'fill_forecast_inputs']] as const) {
     test(`${classification} form: activate, human submit, settle, toolcancel leaves held:false and the form takes human edits`, async () => {
       const h = new Harness(classification, tool);
       h.event({ type: 'toolactivated', toolName: tool });
@@ -190,9 +190,9 @@ describe('G1: the verifier repro (human route, then toolcancel)', () => {
 
 describe('G1 safety net: the tracker flag never drops while the guard is still active', () => {
   test('a reset, a toolcancel, or the tool going not-live after a settle that missed the guard discards and restores', () => {
-    for (const drop of [{ type: 'reset' } as const, { type: 'toolcancel', toolName: 'list_transactions' } as const]) {
-      const s = new AgentFormSession<string>('list_transactions');
-      s.apply({ type: 'toolactivated', toolName: 'list_transactions' }, { policy: 'ask', take: () => 'human' });
+    for (const drop of [{ type: 'reset' } as const, { type: 'toolcancel', toolName: 'fill_transaction_filters' } as const]) {
+      const s = new AgentFormSession<string>('fill_transaction_filters');
+      s.apply({ type: 'toolactivated', toolName: 'fill_transaction_filters' }, { policy: 'ask', take: () => 'human' });
       const r = s.apply(drop);
       expect(r.restore).toEqual({ value: 'human' });
       expect(s.guard.active).toBe(false);
@@ -211,17 +211,17 @@ describe('G1 safety net: the tracker flag never drops while the guard is still a
   });
 
   test('a stale settle (a newer activation happened) neither clears the flag nor touches the guard', () => {
-    const s = new AgentFormSession<string>('list_transactions');
-    s.apply({ type: 'toolactivated', toolName: 'list_transactions' }, { policy: 'ask', take: () => 'h1' });
+    const s = new AgentFormSession<string>('fill_transaction_filters');
+    s.apply({ type: 'toolactivated', toolName: 'fill_transaction_filters' }, { policy: 'ask', take: () => 'h1' });
     const old = s.tracker.beginSubmit();
-    s.apply({ type: 'toolactivated', toolName: 'list_transactions' }, { policy: 'ask', take: () => 'h2' });
+    s.apply({ type: 'toolactivated', toolName: 'fill_transaction_filters' }, { policy: 'ask', take: () => 'h2' });
     const r = s.settle(old);
     expect(r).toEqual({ touched: true, cleared: false, restore: null });
     expect(s.guard.active).toBe(true);
   });
 
   test('an activation for a different tool does not touch this session', () => {
-    const s = new AgentFormSession<string>('list_transactions');
+    const s = new AgentFormSession<string>('fill_transaction_filters');
     const r = s.apply({ type: 'toolactivated', toolName: 'fill_forecast_inputs' }, { policy: 'ask', take: () => 'h' });
     expect(r).toEqual({ touched: false, cleared: false, restore: null });
     expect(s.guard.active).toBe(false);
@@ -258,7 +258,7 @@ describe('G1 invariant: (tracker.touched === false) implies (guard.active === fa
     while (open.length) { await (open.shift() as () => Promise<void>)(); invariant(h, `draining [${steps.join(',')}]`); }
   }
 
-  for (const [classification, tool] of [['read', 'list_transactions'], ['page', 'fill_forecast_inputs'], ['mutating', 'resolve_review_item']] as const) {
+  for (const [classification, tool] of [['page', 'fill_transaction_filters'], ['page', 'fill_forecast_inputs'], ['mutating', 'resolve_review_item']] as const) {
     test(`${classification}: every sequence of up to 4 events keeps the invariant`, async () => {
       let n = 0;
       const walk = async (prefix: Step[], depth: number): Promise<void> => {
@@ -281,12 +281,12 @@ describe('G1 invariant: (tracker.touched === false) implies (guard.active === fa
   }
 
   test('after a human submit settles, an agent that activates again is held and discardable again (no stuck state)', async () => {
-    const h = new Harness('read', 'list_transactions');
-    h.event({ type: 'toolactivated', toolName: 'list_transactions' });
+    const h = new Harness('page', 'fill_transaction_filters');
+    h.event({ type: 'toolactivated', toolName: 'fill_transaction_filters' });
     await h.submit('human').finish();
-    h.event({ type: 'toolactivated', toolName: 'list_transactions' });
+    h.event({ type: 'toolactivated', toolName: 'fill_transaction_filters' });
     expect(h.held).toBe(true);
-    h.event({ type: 'toolcancel', toolName: 'list_transactions' });
+    h.event({ type: 'toolcancel', toolName: 'fill_transaction_filters' });
     expect(h.held).toBe(false);
     expect(h.active).toBe(false);
   });

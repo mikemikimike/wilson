@@ -89,7 +89,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_profit_loss: 'Profit & Loss',
   get_net_worth: 'Net Worth',
   get_cash_forecast: 'Cash Forecast',
-  list_transactions: 'List Transactions',
+  fill_transaction_filters: 'Fill Transaction Filters',
   fill_forecast_inputs: 'Fill Forecast Inputs',
   open_tab: 'Open Tab',
   get_page_context: 'Get Page Context',

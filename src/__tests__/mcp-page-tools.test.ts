@@ -101,9 +101,9 @@ describe('the P3 catalog entries', () => {
     expect(schema.required).toEqual(['tab']);
   });
 
-  test('only open_transaction, open_review_item and open_interaction read a row on the server', () => {
+  test('only open_transaction, open_review_item and open_interaction read a row on the server, and fill_transaction_filters a page of rows', () => {
     const withData = MCP_TOOL_CATALOG.filter((d) => typeof d.pageData === 'function').map((d) => d.name).sort();
-    expect(withData).toEqual(['open_interaction', 'open_review_item', 'open_transaction']);
+    expect(withData).toEqual(['fill_transaction_filters', 'open_interaction', 'open_review_item', 'open_transaction']);
   });
 });
 

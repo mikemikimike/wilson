@@ -21,7 +21,7 @@ export type FormClass = 'read' | 'mutating' | 'proposal' | 'page';
 
 /** The one thing the page needs to know about each declarative form that the catalog also knows. A test pins them together. */
 export const DECLARATIVE_FORMS: Readonly<Record<string, { classification: FormClass; autosubmit: boolean }>> = {
-  list_transactions: { classification: 'read', autosubmit: true },
+  fill_transaction_filters: { classification: 'page', autosubmit: true },
   resolve_review_item: { classification: 'mutating', autosubmit: false },
   set_budget: { classification: 'mutating', autosubmit: false },
   update_goal: { classification: 'mutating', autosubmit: false },

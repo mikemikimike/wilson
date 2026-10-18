@@ -277,8 +277,9 @@ export function TransactionsTab() {
     return row ? String(row.id) : '';
   };
 
-  // The filter bar is a declarative form (`list_transactions`). Humans keep filtering live as they type; an
-  // agent's submit is a server read, after which the page applies the same filters to its own state.
+  // The filter bar is a declarative form (`fill_transaction_filters`, a page tool: a call changes what the user sees).
+  // Humans keep filtering live as they type; an agent's submit is authorized by the server, which also reads the first
+  // matches, after which the page applies the same filters to its own state.
   //
   // An agent's values must not filter the list (or move the app-wide date range, which refetches) before the server
   // authorizes the call: under an Ask policy the card is still open while the agent has already filled the form. While
@@ -286,7 +287,7 @@ export function TransactionsTab() {
   // `afterServer` (authorized) and is dropped by `restore` (Reject, expiry, a refusal, the agent cancelling).
   const [draft, setDraft] = useState<FilterDraft | null>(null);
   const filterForm = useDeclarativeTool({
-    tool: 'list_transactions',
+    tool: 'fill_transaction_filters',
     // Options are loaded before the form advertises itself, so Chrome derives the complete category enum.
     ready: categoryRows != null,
     snapshot: () => ({ search, category: categoryFilter, start: dateRange.startDate, end: dateRange.endDate }),
