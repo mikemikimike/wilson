@@ -168,6 +168,8 @@ function SecuritySection() {
   const [adminConfirm, setAdminConfirm] = useState('');
   const [creatingAdmin, setCreatingAdmin] = useState(false);
   const [adminError, setAdminError] = useState('');
+  // The server's reason when removing a user is refused (e.g. the 409 for the last active admin).
+  const [userError, setUserError] = useState('');
 
   const isAdmin = authStatus?.user?.role === 'admin';
   const authEnabled = authStatus?.authEnabled ?? false;
@@ -249,12 +251,13 @@ function SecuritySection() {
   }
 
   async function handleDeleteUser(id: number) {
+    setUserError('');
     try {
       await api(`/api/auth/users/${id}`, { method: 'DELETE' });
       const updated = await api<DashboardUser[]>('/api/auth/users');
       setUsers(updated);
-    } catch {
-      // silent
+    } catch (err) {
+      setUserError(apiErrorMessage(err, 'Could not remove the user.'));
     }
   }
 
@@ -406,6 +409,7 @@ function SecuritySection() {
                 </div>
               ))}
             </div>
+            {userError && <div role="alert" className="text-xs text-red mt-2">{userError}</div>}
           </div>
         )}
 

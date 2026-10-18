@@ -1,10 +1,13 @@
 import { describe, expect, test, afterEach } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createTestDb, seedTestData } from './helpers.js';
 import { startDashboardServer, stopDashboardServer } from '../dashboard/server.js';
 import { setInitialProfile, closeAll } from '../dashboard/db-manager.js';
 import {
   LastAdminError, cleanExpiredSessions, createUser, deactivateUser, enableAuth, getUser, validateToken, verifyLogin,
 } from '../dashboard/auth.js';
+import { apiErrorMessage } from '../dashboard/ui/src/lib/firstAdmin.js';
 
 /**
  * Two server-side auth bugs: session expiry compared an ISO expires_at against datetime('now') as text (so a
@@ -132,6 +135,27 @@ describe('DELETE /api/auth/users/:id against the real server', () => {
     expect((await fetch(`${base}/api/auth/users/${a.id}`, { method: 'DELETE', headers: authA })).status).toBe(200);
     expect(getUser(db, a.id)!.is_active).toBeFalsy();
     expect((await fetch(`${base}/api/auth/users/${b.id}`, { method: 'DELETE', headers: authB })).status).toBe(409);
+  });
+
+  test("Settings shows the refusal in the server's words instead of swallowing it", async () => {
+    const { db, base } = await start();
+    const owner = await createUser(db, 'owner', 'ownerpass1', 'admin');
+    enableAuth(db);
+    const auth = await login(base, 'owner', 'ownerpass1');
+    const res = await fetch(`${base}/api/auth/users/${owner.id}`, { method: 'DELETE', headers: auth });
+    // The UI's api() throws `API <status>: <body>` (ui/src/api.ts); handleDeleteUser shows apiErrorMessage of it.
+    const thrown = new Error(`API ${res.status}: ${await res.text()}`);
+    const shown = apiErrorMessage(thrown, 'Could not remove the user.');
+    expect(shown).toContain('last active admin');
+    expect(shown).not.toContain('API 409');
+
+    const ui = join(import.meta.dir, '../dashboard/ui/src');
+    expect(readFileSync(join(ui, 'api.ts'), 'utf8')).toContain('throw new Error(`API ${res.status}: ${body || res.statusText}`);');
+    const settings = readFileSync(join(ui, 'tabs/SettingsTab.tsx'), 'utf8');
+    const handler = settings.slice(settings.indexOf('async function handleDeleteUser('), settings.indexOf('async function handleLogout('));
+    expect(handler).toContain("setUserError(apiErrorMessage(err, 'Could not remove the user.'));");
+    expect(handler).not.toContain('// silent');
+    expect(settings).toContain('{userError && <div role="alert" className="text-xs text-red mt-2">{userError}</div>}');
   });
 
   test('a viewer still cannot delete anyone (403, existing check intact)', async () => {
