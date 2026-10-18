@@ -63,12 +63,13 @@ describe('computeSpendingSummary(db)', () => {
     const out = computeSpendingSummary(dbB, { period: 'year' });
     expect(out.totalSpending).toBe(-99);
     expect(out.categories.map((c) => c.category)).toEqual(['Dining']);
-    expect(out.previousPeriod).toBeUndefined();
   });
 
-  test('compareWithPrevious adds the previous period', () => {
+  test('compareWithPrevious adds the previous period, and is on when omitted (#161: one default for chat and WebMCP)', () => {
     const { dbB } = twoDbs();
     expect(computeSpendingSummary(dbB, { period: 'month', compareWithPrevious: true }).previousPeriod).toBeDefined();
+    expect(computeSpendingSummary(dbB, { period: 'month' }).previousPeriod).toBeDefined();
+    expect(computeSpendingSummary(dbB, { period: 'month', compareWithPrevious: false }).previousPeriod).toBeUndefined();
   });
 
   test('period defaults to month', () => {
