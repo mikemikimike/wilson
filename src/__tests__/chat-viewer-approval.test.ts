@@ -241,4 +241,41 @@ describe('#167: /api/chat says where the server agent model runs, for the proven
     expect(body.serverModelLocal).toBe(false);
     expect(body.serverProvider).toBeNull();
   });
+
+  // The agent's categorize / entity-classify tools send ledger rows to their
+  // own task model, so a cloud pin there makes the reply cloud too.
+  test('a local chat model with categorization pinned to a cloud model is not local, and names that provider', async () => {
+    setSetting('modelId', 'ollama:qwen3:8b');
+    setSetting('provider', 'ollama');
+    setSetting('modelOverride.categorization', 'claude-haiku-4-5');
+    const body = await chat('hello');
+    expect(body.serverModelLocal).toBe(false);
+    expect(body.serverProvider).toBe('Anthropic');
+  });
+
+  test('a cloud entity-classification pin also counts', async () => {
+    setSetting('modelId', 'ollama:qwen3:8b');
+    setSetting('provider', 'ollama');
+    setSetting('modelOverride.entity-classification', 'gpt-5.2');
+    const body = await chat('hello');
+    expect(body.serverModelLocal).toBe(false);
+    expect(body.serverProvider).toBe('OpenAI');
+  });
+
+  test('a cloud chat model is named over a cloud task pin', async () => {
+    setSetting('modelOverride.categorization', 'claude-haiku-4-5');
+    const body = await chat('hello');
+    expect(body.serverModelLocal).toBe(false);
+    expect(body.serverProvider).toBe('OpenAI');
+  });
+
+  test('a local task pin keeps a local chat model local', async () => {
+    setSetting('modelId', 'ollama:qwen3:8b');
+    setSetting('provider', 'ollama');
+    setSetting('modelOverride.categorization', 'ollama:gemma4:12b');
+    setSetting('modelOverride.entity-classification', 'transformers:onnx-community/gemma-4-E2B-it-ONNX');
+    const body = await chat('hello');
+    expect(body.serverModelLocal).toBe(true);
+    expect(body.serverProvider).toBeNull();
+  });
 });

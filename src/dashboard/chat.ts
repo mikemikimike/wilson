@@ -18,7 +18,7 @@ import {
 import { expandSlashCommand } from './chat-commands.js';
 import { categorizeTool } from '../tools/categorize/categorize.js';
 import type { ToolProgress } from '../model/types.js';
-import { getTaskModel } from '../model/task-models.js';
+import { getTaskModel, type OverridableTask } from '../model/task-models.js';
 import { resolveProvider } from '../providers.js';
 import { isChatProviderLocal } from './local-handoff.js';
 import { formatCategorizeSummary, parseCategorizeResult } from '../tools/categorize/summary.js';
@@ -44,6 +44,9 @@ export function getAppliedChatModel(): { model: string; provider: string } | nul
   return appliedModel;
 }
 
+/** Task models the dashboard chat agent can reach through its tools. */
+const AGENT_TASK_MODELS: readonly OverridableTask[] = ['categorization', 'entity-classification'];
+
 /**
  * Where the model that answers dashboard chat runs, for the browser's
  * provenance badge (#167). Local only by isChatProviderLocal (the providers'
@@ -54,12 +57,19 @@ export function getAppliedChatModel(): { model: string; provider: string } | nul
  * is local, so a cloud-classified reply never names a local runtime.
  * Prefers the model applied to the runner (what actually answered: every
  * message re-applies the setting first) over the saved setting.
+ *
+ * The chat agent's categorize and entity-classify tools (and /categorize) send
+ * ledger rows to their own task model, which an admin can pin to a cloud model
+ * in Settings > Models. Any task model that routes to a cloud provider makes
+ * the reply cloud too, named when the chat model itself is not cloud.
  */
 export function serverChatModelInfo(): { serverModelLocal: boolean; serverProvider: string | null } {
   try {
     const cfg = appliedModel ?? getConfiguredModel();
     const routed = resolveProvider(cfg.model);
-    return { serverModelLocal: isChatProviderLocal(cfg), serverProvider: routed.isLocal ? null : routed.displayName };
+    const cloudTask = AGENT_TASK_MODELS.map((task) => resolveProvider(getTaskModel(task))).find((p) => !p.isLocal);
+    const serverProvider = !routed.isLocal ? routed.displayName : (cloudTask?.displayName ?? null);
+    return { serverModelLocal: isChatProviderLocal(cfg) && !cloudTask, serverProvider };
   } catch {
     return { serverModelLocal: false, serverProvider: null };
   }
