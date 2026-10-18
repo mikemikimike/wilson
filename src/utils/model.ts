@@ -23,6 +23,17 @@ interface Provider {
   models: Model[];
 }
 
+/**
+ * Largest single-file ONNX (one protobuf, no .onnx_data shards) a WebGPU
+ * catalog entry may pin. ORT-web fails session creation with std::bad_alloc on
+ * Qwen3 1.7B q4f16, a single 1,426,069,098-byte file, in Chromium 153 on an
+ * M4 Pro, while Qwen3 0.6B q4f16 (569,789,750 bytes) loads on the same setup
+ * (#154; specs/eval/2026-10-03-round3-run.md). The cap sits between the two.
+ * Sharded exports are not limited by it. Enforced against the recorded Hub
+ * file lists by src/__tests__/transformers-dtype.test.ts.
+ */
+export const WEBGPU_SINGLE_FILE_ONNX_MAX_BYTES = 1_000_000_000;
+
 const PROVIDER_MODELS: Record<string, Model[]> = {
   ollama: [
     { id: 'ollama:qwen3:8b',        displayName: 'Qwen3 8B (local)',        tags: ['local', 'open'] },
@@ -43,9 +54,11 @@ const PROVIDER_MODELS: Record<string, Model[]> = {
     // failure. src/__tests__/transformers-dtype.test.ts checks every pin
     // against the recorded Hub file lists. downloadSize is the size at that dtype.
     //
-    // WebGPU models — require a GPU that ORT's bundled WebGPU EP can drive
+    // WebGPU models — require a GPU that ORT's bundled WebGPU EP can drive.
+    // A pinned ONNX file without external-data shards must stay under
+    // WEBGPU_SINGLE_FILE_ONNX_MAX_BYTES (above): Qwen3 1.7B q4f16 was dropped
+    // for exactly that (#154).
     { id: 'transformers:onnx-community/granite-4.0-micro-ONNX-web', displayName: 'Granite 4.0 Micro 3B (WebGPU)', tags: ['local', 'small', 'webgpu'], device: 'webgpu', dtype: 'q4f16', downloadSize: '~2.3GB' },
-    { id: 'transformers:onnx-community/Qwen3-1.7B-ONNX',            displayName: 'Qwen3 1.7B (WebGPU)',           tags: ['local', 'small', 'webgpu'], device: 'webgpu', dtype: 'q4f16', downloadSize: '~1.4GB' },
     { id: 'transformers:LiquidAI/LFM2.5-1.2B-Instruct-ONNX',        displayName: 'LFM2.5 1.2B Instruct (WebGPU)', tags: ['local', 'small', 'webgpu'], device: 'webgpu', dtype: 'q4f16', downloadSize: '~760MB' },
     { id: 'transformers:onnx-community/granite-4.0-350m-ONNX-web',  displayName: 'Granite 4.0 350M (WebGPU)',     tags: ['local', 'small', 'webgpu'], device: 'webgpu', dtype: 'q4f16', downloadSize: '~350MB' },
     { id: 'transformers:onnx-community/Qwen3-0.6B-ONNX',            displayName: 'Qwen3 0.6B (WebGPU)',           tags: ['local', 'small', 'webgpu'], device: 'webgpu', dtype: 'q4f16', downloadSize: '~570MB' },

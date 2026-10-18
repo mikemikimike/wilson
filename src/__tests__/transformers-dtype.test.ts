@@ -19,7 +19,7 @@ import {
   TransformersDtypeError,
   type DtypeFetch,
 } from '../model/transformers-dtype.js';
-import { getModelsForProvider, getTransformersCatalogEntry } from '../utils/model.js';
+import { getModelsForProvider, getTransformersCatalogEntry, WEBGPU_SINGLE_FILE_ONNX_MAX_BYTES, type Model } from '../utils/model.js';
 import { getProviderById } from '../providers.js';
 import {
   cachedOnnxFileSizes,
@@ -496,6 +496,59 @@ describe('Hub 401/404 vs. outages', () => {
     const anon = fakeHub();
     await resolveTransformersDtype('onnx-community/Qwen3-0.6B-ONNX', 'webgpu', anon);
     for (const h of anon.headers) expect(h).toBeUndefined();
+  });
+});
+
+/** Catalog downloadSize ('~570MB', '~1.4GB') in bytes; null when it does not parse. */
+function downloadSizeBytes(size: string | undefined): number | null {
+  const m = /^~?\s*(\d+(?:\.\d+)?)\s*(MB|GB)$/i.exec(size ?? '');
+  if (!m) return null;
+  return Number(m[1]) * (m[2].toUpperCase() === 'GB' ? 1e9 : 1e6);
+}
+
+/**
+ * Why a WebGPU entry cannot load in ORT-web, or null. A pinned ONNX file with
+ * no external-data shard in the recorded Hub file list is one protobuf, and
+ * one over WEBGPU_SINGLE_FILE_ONNX_MAX_BYTES fails session creation (#154).
+ */
+function webgpuSingleFileProblem(entry: Model, siblings: string[]): string | null {
+  if (entry.device !== 'webgpu' || !entry.dtype) return null;
+  const file = onnxFileForDtype(entry.dtype);
+  if (!siblings.includes(file)) return null; // multi-session export: per-session files, all sharded
+  if (siblings.some((f) => f.startsWith(`${file}_data`))) return null;
+  const bytes = downloadSizeBytes(entry.downloadSize);
+  if (bytes === null) return `${file} is a single file but downloadSize ${JSON.stringify(entry.downloadSize)} does not parse`;
+  if (bytes > WEBGPU_SINGLE_FILE_ONNX_MAX_BYTES) return `${file} is a single ${entry.downloadSize} file`;
+  return null;
+}
+
+describe('WebGPU single-file ONNX size cap (#154)', () => {
+  test('the guard rejects the Qwen3 1.7B q4f16 entry that ORT-web cannot load', () => {
+    const removed: Model = {
+      id: 'transformers:onnx-community/Qwen3-1.7B-ONNX', displayName: 'Qwen3 1.7B (WebGPU)',
+      tags: ['local', 'small', 'webgpu'], device: 'webgpu', dtype: 'q4f16', downloadSize: '~1.4GB',
+    };
+    expect(webgpuSingleFileProblem(removed, REPOS['onnx-community/Qwen3-1.7B-ONNX'].siblings)).toContain('single ~1.4GB file');
+  });
+
+  test('the guard passes the single-file Qwen3 0.6B q4f16 that does load, and sharded or CPU entries', () => {
+    const qwen06 = getTransformersCatalogEntry('transformers:onnx-community/Qwen3-0.6B-ONNX')!;
+    expect(webgpuSingleFileProblem(qwen06, REPOS['onnx-community/Qwen3-0.6B-ONNX'].siblings)).toBeNull();
+    const sharded: Model = { id: 'x', displayName: 'x', device: 'webgpu', dtype: 'q4f16', downloadSize: '~9GB' };
+    expect(webgpuSingleFileProblem(sharded, ['onnx/model_q4f16.onnx', 'onnx/model_q4f16.onnx_data'])).toBeNull();
+    const cpu: Model = { id: 'x', displayName: 'x', device: 'cpu', dtype: 'q4', downloadSize: '~9GB' };
+    expect(webgpuSingleFileProblem(cpu, ['onnx/model_q4.onnx'])).toBeNull();
+  });
+
+  test('Qwen3 1.7B is not offered as a WebGPU model', () => {
+    expect(getTransformersCatalogEntry('transformers:onnx-community/Qwen3-1.7B-ONNX')).toBeUndefined();
+  });
+
+  test('no WebGPU catalog entry pins a single ONNX file over the cap', () => {
+    const problems = getModelsForProvider('transformers')
+      .map((e) => [e.id, webgpuSingleFileProblem(e, REPOS[e.id.replace(/^transformers:/, '')]?.siblings ?? [])] as const)
+      .filter(([, problem]) => problem !== null);
+    expect(problems).toEqual([]);
   });
 });
 
