@@ -33,7 +33,7 @@ import { annotateAgentPresent, handleJudgementRoute } from './judgement-routes.j
 import { buildScheduleC, scheduleCToCsv, scheduleCToXlsxBuffer } from '../tools/tax/schedule-c.js';
 import { hasLicense } from '../licensing/license.js';
 import { getCheckoutUrl } from '../licensing/upsell.js';
-import { initChatSession, handleChatMessage, getCategorizeProgress, cancelChatRunForUser } from './chat.js';
+import { initChatSession, handleChatMessage, getCategorizeProgress, cancelChatRunForUser, serverChatModelInfo } from './chat.js';
 import {
   isAuthEnabled, enableAuth, disableAuth, lanAuthReady, hasActiveAdmin,
   listUsers, getUserCount, deactivateUser, hashPassword, insertUser, createFirstAdmin,
@@ -1112,7 +1112,9 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (result.busy) {
             return Response.json({ error: result.answer, sessionId: result.sessionId }, { status: 409, headers });
           }
-          return Response.json(result, { headers });
+          // serverModelLocal + serverProvider: the browser's provenance badge claims
+          // local processing only when the server agent's model is local (#167).
+          return Response.json({ ...result, ...serverChatModelInfo() }, { headers });
         }
 
         // ── Hybrid (local-first WebGPU) chat ────────────────────────

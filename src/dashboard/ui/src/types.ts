@@ -222,6 +222,10 @@ export interface ChatHistoryRow {
 export interface ChatResponse {
   answer: string;
   sessionId: string | null;
+  /** True only when the server agent's model runs on this machine (a local provider). Absent = unknown = treated as cloud. */
+  serverModelLocal?: boolean;
+  /** Display name of the cloud provider the server model routes to; null when local or unknown. */
+  serverProvider?: string | null;
 }
 
 // "@" mention wire format for POST /api/chat (validated + re-resolved from the

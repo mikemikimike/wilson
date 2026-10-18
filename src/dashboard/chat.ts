@@ -20,6 +20,7 @@ import { categorizeTool } from '../tools/categorize/categorize.js';
 import type { ToolProgress } from '../model/types.js';
 import { getTaskModel } from '../model/task-models.js';
 import { resolveProvider } from '../providers.js';
+import { isChatProviderLocal } from './local-handoff.js';
 import { formatCategorizeSummary, parseCategorizeResult } from '../tools/categorize/summary.js';
 import { canWrite, onAuthEnabled, type DashboardUser } from './auth.js';
 import { ensureHandoffSecret, setHandoffReplayDb } from '../training/handoff-tag.js';
@@ -41,6 +42,27 @@ let appliedModel: { model: string; provider: string } | null = null;
  */
 export function getAppliedChatModel(): { model: string; provider: string } | null {
   return appliedModel;
+}
+
+/**
+ * Where the model that answers dashboard chat runs, for the browser's
+ * provenance badge (#167). Local only by isChatProviderLocal (the providers'
+ * isLocal flag, both the saved provider and the prefix-routed model); a
+ * mismatch, an unreadable profile or anything unknown counts as cloud, so the
+ * badge can never claim local processing it cannot vouch for. serverProvider
+ * names the cloud provider the model routes to, and is null when that provider
+ * is local, so a cloud-classified reply never names a local runtime.
+ * Prefers the model applied to the runner (what actually answered: every
+ * message re-applies the setting first) over the saved setting.
+ */
+export function serverChatModelInfo(): { serverModelLocal: boolean; serverProvider: string | null } {
+  try {
+    const cfg = appliedModel ?? getConfiguredModel();
+    const routed = resolveProvider(cfg.model);
+    return { serverModelLocal: isChatProviderLocal(cfg), serverProvider: routed.isLocal ? null : routed.displayName };
+  } catch {
+    return { serverModelLocal: false, serverProvider: null };
+  }
 }
 
 /** The chat history backing the dashboard chat (null before initChatSession). */

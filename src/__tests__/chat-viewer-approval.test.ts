@@ -180,3 +180,65 @@ describe('#156: a viewer cannot approve chat operations', () => {
     expect(((await res.json()) as { answer: string }).answer).toBe('All done.');
   });
 });
+
+describe('#167: /api/chat says where the server agent model runs, for the provenance badge', () => {
+  let db: Database;
+  let server: Awaited<ReturnType<typeof startDashboardServer>>['server'];
+  let base: string;
+
+  const chat = async (query: string) => {
+    const res = await fetch(base + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: base, 'Sec-Fetch-Site': 'same-origin' },
+      body: JSON.stringify({ query }),
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()) as { answer: string; serverModelLocal?: unknown; serverProvider?: unknown };
+  };
+
+  beforeEach(async () => {
+    ensureTestProfile();
+    saveConfig({});
+    setSetting('modelId', 'gpt-5.2');
+    setSetting('provider', 'openai');
+    db = createTestDb();
+    seedTestData(db);
+    script = [];
+    setChatDeadlineMs(3000);
+    setInitialProfile('test', db);
+    ({ server } = await startDashboardServer(db, 0));
+    base = `http://localhost:${server.port}`;
+  });
+
+  afterEach(async () => {
+    await waitForAsync(async () => !isChatRunActive()).catch(() => {});
+    stopDashboardServer(server);
+    setChatDeadlineMs(null);
+    saveConfig({});
+    closeAll();
+  });
+
+  test('a cloud model is reported as not local and named', async () => {
+    const body = await chat('hello');
+    expect(body.answer).toBe('All done.');
+    expect(body.serverModelLocal).toBe(false);
+    expect(body.serverProvider).toBe('OpenAI');
+  });
+
+  test('switching to a local model flips the next reply to local, with no provider named', async () => {
+    await chat('hello');
+    setSetting('modelId', 'ollama:qwen3:8b');
+    setSetting('provider', 'ollama');
+    const body = await chat('hello again');
+    expect(body.serverModelLocal).toBe(true);
+    expect(body.serverProvider).toBeNull();
+  });
+
+  test('a provider/model mismatch is never reported as local, and never names the local runtime', async () => {
+    setSetting('modelId', 'ollama:qwen3:8b');
+    setSetting('provider', 'openai');
+    const body = await chat('hello');
+    expect(body.serverModelLocal).toBe(false);
+    expect(body.serverProvider).toBeNull();
+  });
+});

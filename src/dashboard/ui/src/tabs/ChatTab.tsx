@@ -20,8 +20,8 @@ import { ChatMarkdown, LocalChatMarkdown } from '@/lib/chatMarkdown';
 import { buildChatRequest, hasHandoffPayload } from '@/lib/chat-request';
 import { syncMirror } from '@/store/mirror-client';
 import type { PriorLocalTurn } from '@/hybrid/worker-protocol';
-import { deriveChatProvenance, isLocalProvenance, linksRenderAsText, localUnavailableNotice, PROVENANCE_BADGES } from '@/hybrid/core';
-import type { ChatProvenance, HybridResult } from '@/hybrid/core';
+import { deriveChatProvenance, isLocalProvenance, linksRenderAsText, localUnavailableNotice, provenanceBadge } from '@/hybrid/core';
+import type { ChatProvenance, HybridResult, ServerModelInfo } from '@/hybrid/core';
 import { Typeahead, type TypeaheadItem } from '@/components/Typeahead';
 import { ComposerBackdrop, MentionIcon } from '@/components/ComposerBackdrop';
 import { ImportStatementDialog, type ImportResponse } from '@/components/ImportStatementDialog';
@@ -74,6 +74,8 @@ interface DisplayMessage {
    * indicator (no chat-history schema change).
    */
   provenance?: ChatProvenance;
+  /** From the server chat response (#167): where the server agent's model runs. Absent = cloud wording. */
+  serverModel?: ServerModelInfo;
   /**
    * Live-only note when the on-device model could not be used, e.g.
    * "Local model unavailable: … requires … shader-f16". Never persisted.
@@ -756,7 +758,14 @@ export function ChatTab() {
         }
         setMessages((prev) => [
           ...prev,
-          { id: newId(), role: 'assistant', content: res.answer, provenance, ...(notice ? { notice } : {}) },
+          {
+            id: newId(),
+            role: 'assistant',
+            content: res.answer,
+            provenance,
+            serverModel: { serverModelLocal: res.serverModelLocal === true, serverProvider: res.serverProvider ?? null },
+            ...(notice ? { notice } : {}),
+          },
         ]);
         refetchSessions();
         // A server turn after on-device work may have changed data: re-sync the mirror
@@ -919,7 +928,7 @@ export function ChatTab() {
                           : 'text-text-muted'
                       }`}
                     >
-                      {PROVENANCE_BADGES[msg.provenance]}
+                      {provenanceBadge(msg.provenance, msg.serverModel)}
                     </div>
                   )}
                   {msg.localSteps && msg.localSteps.length > 0 && (

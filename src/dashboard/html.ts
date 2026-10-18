@@ -7,6 +7,8 @@
  * local database data — not user-supplied or external content. The renderMd()
  * function escapes ALL HTML entities before applying markdown transforms.
  */
+import { PROVENANCE_LABELS } from './ui/src/hybrid/provenance.js';
+
 export function getDashboardHtml(port: number): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1154,18 +1156,26 @@ export function getDashboardHtml(port: number): string {
     bubble.appendChild(textDiv); div.appendChild(bubble);
     chatMessages.appendChild(div); chatMessages.scrollTop = chatMessages.scrollHeight; return div;
   }
-  // Provenance badge — mirrors deriveChatProvenance in
-  // src/dashboard/ui/src/hybrid/core.ts (matrix pinned by
+  // Provenance badge — mirrors deriveChatProvenance and provenanceBadge in
+  // src/dashboard/ui/src/hybrid/ (matrix pinned by
   // src/__tests__/local-chat-provenance.test.ts). Inline copy because this
   // page cannot import ES modules and the hybrid chunk 404s in exactly the
-  // state ('unavailable') this badge must render.
-  var PROV_LABELS = { 'local-with-context':'answered locally · on-device', 'server-fallback':'server fallback', 'unavailable':'server agent' };
+  // state ('unavailable') this badge must render. The strings themselves are
+  // embedded from the shared PROVENANCE_LABELS. srv = the /api/chat reply:
+  // "on your laptop" only when it says the server model is local (#167).
+  var PROV_LABELS = ${JSON.stringify(PROVENANCE_LABELS)};
   function deriveProv(localAnswered, hybridPresent) {
     if (localAnswered) return 'local-with-context';
     return hybridPresent ? 'server-fallback' : 'unavailable';
   }
-  function stampProv(msgDiv, prov) {
-    var b = el('div','prov'+(prov==='local-with-context'?' prov-local':''),PROV_LABELS[prov]||'');
+  function provLabel(prov, srv) {
+    if (prov !== 'server-fallback') return PROV_LABELS[prov]||'';
+    if (srv && srv.serverModelLocal === true) return PROV_LABELS.serverLocal;
+    var who = srv && typeof srv.serverProvider === 'string' && srv.serverProvider.trim() ? srv.serverProvider.trim() : PROV_LABELS.unknownServer;
+    return PROV_LABELS.serverCloud.replace('{who}', who);
+  }
+  function stampProv(msgDiv, prov, srv) {
+    var b = el('div','prov'+(prov==='local-with-context'?' prov-local':''),provLabel(prov, srv));
     var bubble = msgDiv.querySelector('.bubble'); if (bubble) bubble.appendChild(b);
   }
   function renderSessionMessages(messages) {
@@ -1234,7 +1244,7 @@ export function getDashboardHtml(port: number): string {
         if (data.sessionId) { activeSessionId = data.sessionId; isLiveSession = true; }
         // Safe: renderMd escapes all HTML entities before applying markdown transforms
         pendingText.innerHTML = renderMd(answer);
-        stampProv(pending, prov);
+        stampProv(pending, prov, data);
         loadSessions();
       } catch(e) { pendingText.textContent = 'Error: '+e.message; stampProv(pending, prov); }
     }

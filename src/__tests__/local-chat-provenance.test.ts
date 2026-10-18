@@ -2,8 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import {
   deriveChatProvenance,
   PROVENANCE_BADGES,
+  PROVENANCE_LABELS,
+  provenanceBadge,
 } from '../dashboard/ui/src/hybrid/core.js';
-import type { ChatProvenance } from '../dashboard/ui/src/hybrid/core.js';
+import type { ChatProvenance, ServerModelInfo } from '../dashboard/ui/src/hybrid/core.js';
+import { getDashboardHtml } from '../dashboard/html.js';
+import { PROVIDERS } from '../providers.js';
 
 /**
  * Per-response chat provenance: which path actually produced a live chat
@@ -89,15 +93,118 @@ describe('PROVENANCE_BADGES', () => {
     expect(new Set(Object.values(PROVENANCE_BADGES)).size).toBe(expectedStates.length);
   });
 
-  test('subagent badges use the spec wording', () => {
+  test('browser-local badges use the spec wording', () => {
+    expect(PROVENANCE_BADGES['local-with-context']).toBe('answered locally · on-device');
     expect(PROVENANCE_BADGES['local-tools']).toBe('answered locally · on-device lookups');
-    expect(PROVENANCE_BADGES['server-continued']).toBe('server · continued from on-device work');
+    expect(PROVENANCE_BADGES['unavailable']).toBe('server agent');
   });
 
-  test('local state carries the on-device label; the two server states do not', () => {
-    expect(PROVENANCE_BADGES['local-with-context']).toBe('answered locally · on-device');
-    expect(PROVENANCE_BADGES['server-fallback']).toBe('server fallback');
-    expect(PROVENANCE_BADGES['unavailable']).toBe('server agent');
+  test('with no server model information the server states use cloud wording (#167)', () => {
+    expect(PROVENANCE_BADGES['server-fallback']).toBe('answered by the server · cloud model');
+    expect(PROVENANCE_BADGES['server-continued']).toBe('continued by the server from browser lookups · cloud model');
+  });
+
+  test('the old "server fallback" wording is gone', () => {
+    expect(Object.values(PROVENANCE_BADGES)).not.toContain('server fallback');
+  });
+});
+
+// Every server-model answer the badge can be asked about: local, each cloud
+// provider by name, and the ways a reply can be unknown or malformed.
+const LOCAL_INFO: ServerModelInfo = { serverModelLocal: true, serverProvider: null };
+const CLOUD_PROVIDER_NAMES = PROVIDERS.filter((p) => !p.isLocal).map((p) => p.displayName);
+const NOT_LOCAL_INFOS: Array<ServerModelInfo | undefined> = [
+  undefined,
+  {},
+  { serverModelLocal: false },
+  { serverModelLocal: false, serverProvider: null },
+  { serverModelLocal: false, serverProvider: '   ' },
+  { serverModelLocal: 'true' as unknown as boolean },
+  { serverModelLocal: 1 as unknown as boolean },
+  ...CLOUD_PROVIDER_NAMES.map((name) => ({ serverModelLocal: false, serverProvider: name })),
+];
+const LOCAL_WORDS = /local|on-device|laptop/i;
+
+describe('provenanceBadge: server wording follows where the server model runs (#167)', () => {
+  test('server-fallback with a local server model says "answered on your laptop"', () => {
+    expect(provenanceBadge('server-fallback', LOCAL_INFO)).toBe('answered on your laptop');
+    expect(provenanceBadge('server-fallback', { serverModelLocal: true, serverProvider: 'OpenAI' })).toBe(
+      'answered on your laptop',
+    );
+  });
+
+  test('server-fallback with a cloud model names the provider', () => {
+    expect(provenanceBadge('server-fallback', { serverModelLocal: false, serverProvider: 'Anthropic' })).toBe(
+      'answered by Anthropic · cloud model',
+    );
+  });
+
+  test('unknown, absent or malformed server info gets cloud wording, never local', () => {
+    expect(provenanceBadge('server-fallback')).toBe('answered by the server · cloud model');
+    expect(provenanceBadge('server-fallback', { serverModelLocal: 'true' as unknown as boolean })).toBe(
+      'answered by the server · cloud model',
+    );
+  });
+
+  test('server-continued follows the same rule', () => {
+    expect(provenanceBadge('server-continued', LOCAL_INFO)).toBe('continued on your laptop from browser lookups');
+    expect(provenanceBadge('server-continued', { serverModelLocal: false, serverProvider: 'Google' })).toBe(
+      'continued by Google from browser lookups · cloud model',
+    );
+  });
+
+  test('no server-side label says local, on-device or laptop unless the model is local', () => {
+    for (const p of ['server-fallback', 'server-continued', 'unavailable'] as const) {
+      for (const info of NOT_LOCAL_INFOS) {
+        expect(provenanceBadge(p, info)).not.toMatch(LOCAL_WORDS);
+      }
+    }
+  });
+
+  test('a local server model is never described as cloud, and never as on-device (that is the browser)', () => {
+    for (const p of ['server-fallback', 'server-continued'] as const) {
+      expect(provenanceBadge(p, LOCAL_INFO)).not.toMatch(/cloud/i);
+      expect(provenanceBadge(p, LOCAL_INFO)).not.toContain('on-device');
+    }
+  });
+
+  test('browser-local states ignore the server model', () => {
+    for (const info of [LOCAL_INFO, ...NOT_LOCAL_INFOS]) {
+      expect(provenanceBadge('local-with-context', info)).toBe('answered locally · on-device');
+      expect(provenanceBadge('local-tools', info)).toBe('answered locally · on-device lookups');
+    }
+  });
+});
+
+describe('legacy dashboard badge (src/dashboard/html.ts) agrees with provenanceBadge', () => {
+  const html = getDashboardHtml(0);
+  const start = html.indexOf('var PROV_LABELS = ');
+  const end = html.indexOf('function stampProv');
+  if (start < 0 || end < 0) throw new Error('legacy provenance source not found in dashboard html');
+  // eslint-disable-next-line no-new-func
+  const legacy = new Function(`${html.slice(start, end)}; return { deriveProv: deriveProv, provLabel: provLabel };`)() as {
+    deriveProv: (localAnswered: boolean, hybridPresent: boolean) => ChatProvenance;
+    provLabel: (prov: ChatProvenance, srv?: unknown) => string;
+  };
+
+  test('embeds the shared labels and no longer says "server fallback"', () => {
+    expect(html).toContain(`var PROV_LABELS = ${JSON.stringify(PROVENANCE_LABELS)};`);
+    expect(html).not.toContain('server fallback');
+  });
+
+  test('every legacy state and server reply renders the same text as the React badge', () => {
+    for (const [localAnswered, hybridPresent] of [[true, true], [false, true], [false, false]] as const) {
+      const prov = legacy.deriveProv(localAnswered, hybridPresent);
+      expect(prov).toBe(deriveChatProvenance({ localAnswered, hybridLayerPresent: hybridPresent }));
+      for (const info of [LOCAL_INFO, ...NOT_LOCAL_INFOS]) {
+        expect(legacy.provLabel(prov, info)).toBe(provenanceBadge(prov, info));
+      }
+    }
+  });
+
+  test('a cloud reply never gets local wording on the legacy page either', () => {
+    for (const info of NOT_LOCAL_INFOS) expect(legacy.provLabel('server-fallback', info)).not.toMatch(LOCAL_WORDS);
+    expect(legacy.provLabel('server-fallback', null)).toBe('answered by the server · cloud model');
   });
 });
 

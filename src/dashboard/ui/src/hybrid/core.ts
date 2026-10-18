@@ -16,6 +16,7 @@ import { CURRENT_MESSAGE_MARKER } from '../../../../utils/history-context.js';
 import { looksLikeBareToolCall } from '../../../../model/tool-call-parse.js';
 import { money } from '../format';
 import type { LocalHandoffV1 } from '../../../../dashboard/local-handoff-format.js';
+import type { ChatProvenance } from './provenance';
 
 export { CURRENT_MESSAGE_MARKER };
 
@@ -412,17 +413,10 @@ export function shouldAttemptLocal(state: HybridCapability): boolean {
 
 // ── Response provenance ─────────────────────────────────────────────────────
 
-/**
- * Which path actually produced a live chat response. Carried on the live
- * message only — never persisted (no chat-history schema change), so
- * history-loaded messages render with no indicator.
- */
-export type ChatProvenance =
-  | 'local-with-context' // bundle mode answered
-  | 'local-tools' // subagent answered from on-device tool reads
-  | 'server-continued' // subagent handed off WITH a payload; the server continued
-  | 'server-fallback' // local layer present, server answered without a handoff payload
-  | 'unavailable'; // hybrid layer absent / skipped
+// The provenance type and its badge strings live in ./provenance (import-free,
+// shared with the legacy dashboard); re-exported here for existing importers.
+export { PROVENANCE_BADGES, PROVENANCE_LABELS, provenanceBadge } from './provenance';
+export type { ChatProvenance, ServerModelInfo } from './provenance';
 
 /** True when the answer was composed on-device (bundle or subagent), whatever its text says. */
 export function isLocalProvenance(p: ChatProvenance | undefined): boolean {
@@ -438,14 +432,6 @@ export function isLocalProvenance(p: ChatProvenance | undefined): boolean {
 export function linksRenderAsText(msg: { provenance?: ChatProvenance; fromHistory?: boolean }): boolean {
   return msg.fromHistory === true || isLocalProvenance(msg.provenance);
 }
-
-export const PROVENANCE_BADGES: Record<ChatProvenance, string> = {
-  'local-with-context': 'answered locally · on-device',
-  'local-tools': 'answered locally · on-device lookups',
-  'server-continued': 'server · continued from on-device work',
-  'server-fallback': 'server fallback',
-  'unavailable': 'server agent',
-};
 
 /**
  * Single source of truth for the per-response indicator, pinned by
