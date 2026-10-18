@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import {
   callServerTool, callServerToolAnswer, createBridgeSession, createReconcileScheduler, desiredTools, executePageTool, executeServerTool, grantForCall,
-  liveSetFor, reconcile, registerLiveTools, liveToolsSignature, revokedToolError, sessionChangeFromEvent, sessionChangeFromStorage,
+  isUnauthorizedError, liveSetFor, reconcile, registerLiveTools, liveToolsSignature, revokedToolError, sessionChangeFromEvent, sessionChangeFromStorage,
   staleGrantRefusal, SESSION_HEADER,
   type ServerCallDeps, type LiveToolDescriptor, type PageToolRuntime,
 } from '../dashboard/webmcp-bridge-core.js';
@@ -1273,6 +1273,56 @@ describe('login session: resync on re-login, unexpose on logout', () => {
     bridge.release();
     await restarting;
     expect(bridge.exposed()).toEqual(['new_users_tool']);
+  });
+
+  test('a 401 on a poll (server-side expiry) ends the session at once: tools go, nothing resyncs', async () => {
+    const bridge = fakeBridge({ killSwitch: false, tools: ['list_transactions'] });
+    await bridge.sync();
+    expect(bridge.exposed()).toEqual(['list_transactions']);
+    // refreshPending / refreshState: the request started under this session and came back 401.
+    const epoch = bridge.session.epoch();
+    await bridge.session.lost(epoch);
+    expect(bridge.exposed()).toEqual([]);
+    expect(bridge.log).toEqual(['sync', 'unexpose']);
+    expect(bridge.session.isCurrent(epoch)).toBe(false);
+  });
+
+  test("a 401 from an earlier session's request changes nothing (the new login keeps its tools)", async () => {
+    const bridge = fakeBridge({ killSwitch: false, tools: ['list_transactions'] });
+    const stale = bridge.session.epoch();
+    await bridge.session.change('started');
+    expect(bridge.exposed()).toEqual(['list_transactions']);
+    await bridge.session.lost(stale);
+    expect(bridge.exposed()).toEqual(['list_transactions']);
+    // Two polls 401ing in the same session end it once.
+    const now = bridge.session.epoch();
+    await Promise.all([bridge.session.lost(now), bridge.session.lost(now)]);
+    expect(bridge.log.filter((l) => l === 'unexpose')).toHaveLength(2); // the start's, then this end's
+  });
+
+  test('kill switch on: a lost session exposes nothing, and neither does the next login', async () => {
+    const bridge = fakeBridge({ killSwitch: true, tools: ['list_transactions'] });
+    await bridge.session.lost(bridge.session.epoch());
+    expect(bridge.exposed()).toEqual([]);
+    await bridge.session.change('started');
+    expect(bridge.exposed()).toEqual([]);
+  });
+
+  test('isUnauthorizedError: only a 401 from the bridge api ends the session (a 403 is a role, not a lost login)', () => {
+    expect(isUnauthorizedError(new Error('401: {"error":"Unauthorized"}'))).toBe(true);
+    expect(isUnauthorizedError(new Error('403: Forbidden'))).toBe(false);
+    expect(isUnauthorizedError(new Error('500: 401 upstream'))).toBe(false);
+    expect(isUnauthorizedError(new TypeError('Failed to fetch'))).toBe(false);
+    expect(isUnauthorizedError('401: x')).toBe(false);
+  });
+
+  test('the state, operations and tool polls end the session on a 401 (source pin)', () => {
+    const bridge = readFileSync(new URL('../dashboard/webmcp-bridge.ts', import.meta.url), 'utf8');
+    const body = (name: string) => bridge.slice(bridge.indexOf(`async function ${name}(`), bridge.indexOf('\n}\n', bridge.indexOf(`async function ${name}(`)));
+    for (const name of ['refreshState', 'refreshPending', 'syncRegisteredTools']) {
+      expect(body(name)).toContain('const epoch = session.epoch();');
+      expect(body(name)).toContain('if (isUnauthorizedError(err)) await session.lost(epoch);');
+    }
   });
 
   test('liveSetFor: the kill switch read as on empties the set; no state yet leaves the server answer alone', () => {

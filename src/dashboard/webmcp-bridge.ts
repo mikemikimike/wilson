@@ -46,6 +46,7 @@ import {
   executePageTool,
   executeServerTool,
   grantForCall,
+  isUnauthorizedError,
   liveSetFor,
   liveToolsSignature,
   registerLiveTools,
@@ -196,8 +197,11 @@ async function refreshState(): Promise<void> {
   let next: AgentState;
   try {
     next = await api<AgentState>('/api/mcp/state');
-  } catch {
-    return; // keep the last good snapshot; the next sync tries again
+  } catch (err) {
+    // A 401 is the server ending this login (expiry, revocation): drop the tools now. Anything else keeps the last
+    // good snapshot; the next sync tries again.
+    if (isUnauthorizedError(err)) await session.lost(epoch);
+    return;
   }
   if (!session.isCurrent(epoch)) return; // read under a login that has ended since
   agentState = next;
@@ -607,8 +611,10 @@ async function refreshPending(options: { cards: boolean }): Promise<void> {
   try {
     const res = await api<{ operations: McpOperation[] }>('/api/mcp/operations');
     if (session.isCurrent(epoch)) applyOperations(res.operations, options);
-  } catch {
-    // Keep the last good list; the next poll tries again.
+  } catch (err) {
+    // A 401 ends the session at once (the poll is often the first request to see an expired login). Otherwise keep
+    // the last good list; the next poll tries again.
+    if (isUnauthorizedError(err)) await session.lost(epoch);
   }
 }
 
@@ -879,7 +885,9 @@ async function syncRegisteredTools(): Promise<void> {
     // failure does not: the live set is "granted, policy not Off, access on", and this tab can no longer say so,
     // so forms drop their tool attributes and imperative tools are unregistered until a sync succeeds. Calls do not go
     // out under a remembered grant either: this tab is not authorized to make them.
-    if (isAuthFailure(err) && session.isCurrent(epoch)) await dropLiveTools();
+    // A 401 (the login itself is gone) ends the session like the state and operation polls do.
+    if (isUnauthorizedError(err)) await session.lost(epoch);
+    else if (isAuthFailure(err) && session.isCurrent(epoch)) await dropLiveTools();
     return;
   }
   // An answer read under a login that has ended since is not this session's live set.

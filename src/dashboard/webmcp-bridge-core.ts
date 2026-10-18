@@ -741,6 +741,17 @@ export interface BridgeSession {
   isCurrent(epoch: number): boolean;
   /** Apply a session change. Resolves when the tools match it. */
   change(change: BridgeSessionChange): Promise<void>;
+  /**
+   * A request that started at `epoch` came back 401: the server no longer accepts this tab's login (expired or
+   * revoked there), so the session ends now instead of on the dashboard's next 401. A request from an earlier
+   * session changes nothing: that one already ended. Resolves when the tools are gone.
+   */
+  lost(epoch: number): Promise<void>;
+}
+
+/** The bridge's `api` throws `<status>: <body>`; a 401 means the server refused the login itself. */
+export function isUnauthorizedError(err: unknown): boolean {
+  return err instanceof Error && /^401:/.test(err.message);
 }
 
 /**
@@ -751,13 +762,18 @@ export interface BridgeSession {
  */
 export function createBridgeSession(deps: BridgeSessionDeps): BridgeSession {
   let epoch = 0;
+  async function change(next: BridgeSessionChange): Promise<void> {
+    epoch++;
+    await deps.unexpose();
+    if (next === 'started') await deps.resync();
+  }
   return {
     epoch: () => epoch,
     isCurrent: (e) => e === epoch,
-    async change(change) {
-      epoch++;
-      await deps.unexpose();
-      if (change === 'started') await deps.resync();
+    change,
+    async lost(e) {
+      // Ending never resyncs, so it exposes nothing (under the kill switch or otherwise) until a login starts again.
+      if (e === epoch) await change('ended');
     },
   };
 }
