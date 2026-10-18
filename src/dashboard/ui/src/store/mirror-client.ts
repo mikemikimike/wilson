@@ -127,6 +127,8 @@ let lastFailedInitAt = 0;
 let locked = true;
 /** Bumped by every lock, so a sync pull that started under the old session never writes after the wipe. */
 let sessionEpoch = 0;
+/** Bumped by every lock, suspend and unlock call: an unlock that waited out a wipe applies only if none came after it. */
+let gateSeq = 0;
 
 function localStore(): Storage | null {
   try {
@@ -186,8 +188,12 @@ async function doInit(): Promise<MirrorState> {
   return state;
 }
 
-/** Idempotently start the mirror. Resolves with the (possibly unavailable) state. */
+/**
+ * Idempotently start the mirror. Resolves with the (possibly unavailable) state. A wipe in flight finishes first,
+ * so a pool being deleted is never reopened.
+ */
 export function initMirror(): Promise<MirrorState> {
+  if (wiping) return wiping.then(() => initMirror());
   if (locked) return Promise.resolve(state);
   if (initPromise) return initPromise;
   if (Date.now() - lastFailedInitAt < INIT_RETRY_MS) return Promise.resolve(state);
@@ -387,9 +393,18 @@ export function openToolPort(expectedProfile?: string): MessagePort | null {
 
 // ── Session lock ─────────────────────────────────────────────────────────────
 
-/** The gate let the app in (a login, or a profile without auth): the mirror may open, sync and serve. */
-export function unlockMirror(): void {
-  locked = false;
+/**
+ * The gate let the app in (a login, or a profile without auth): the mirror may open, sync and serve. A wipe still in
+ * flight (Settings' logout, an earlier check) finishes first and the mirror stays locked until then, so nothing
+ * reopens or refills a pool being deleted. A lock or suspend that comes meanwhile wins. Resolves once settled.
+ */
+export async function unlockMirror(): Promise<void> {
+  const seq = ++gateSeq;
+  while (wiping) {
+    await wiping;
+    if (seq !== gateSeq) return;
+  }
+  if (seq === gateSeq) locked = false;
 }
 
 /**
@@ -398,6 +413,7 @@ export function unlockMirror(): void {
  * reopens it when the app comes back.
  */
 export function suspendMirror(): void {
+  gateSeq++;
   if (locked) return;
   locked = true;
   sessionEpoch++;
@@ -455,6 +471,7 @@ async function doWipe(): Promise<void> {
 export function lockMirror(): Promise<void> {
   locked = true;
   sessionEpoch++;
+  gateSeq++;
   if (!wiping) {
     wiping = doWipe()
       .catch((err) => console.warn('[mirror] wipe failed:', err instanceof Error ? err.message : err))

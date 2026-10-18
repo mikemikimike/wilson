@@ -85,7 +85,7 @@ export function AuthGate() {
         if (wipe) await lockMirror();
         mirrorOwnerRef.current = mirrorOwner;
         writeMirrorOwner(storage, mirrorOwner);
-        if (next.kind === 'app') unlockMirror();
+        if (next.kind === 'app') await unlockMirror();
         else if (!wipe) suspendMirror();
         if (remount) setGeneration((g) => g + 1);
         viewRef.current = next;

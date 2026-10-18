@@ -335,7 +335,8 @@ describe('wiring (source pins: these modules need a browser worker or React)', (
 
   test('the mirror starts locked: nothing opens, syncs or serves before the gate unlocks it', () => {
     expect(client).toContain('let locked = true;');
-    expect(client).toMatch(/export function initMirror\(\): Promise<MirrorState> \{\n {2}if \(locked\) return Promise\.resolve\(state\);/);
+    // (A wipe in flight is waited out first, then the lock is checked.)
+    expect(client).toMatch(/export function initMirror\(\): Promise<MirrorState> \{\n {2}if \(wiping\) return wiping\.then\(\(\) => initMirror\(\)\);\n {2}if \(locked\) return Promise\.resolve\(state\);/);
     expect(client).toMatch(/async function doSync\(\): Promise<void> \{\n {2}if \(locked\) return;/);
     expect(client).toContain('if (locked) return null;');
     expect(client).toContain('if (locked || !worker ||');
@@ -387,7 +388,8 @@ describe('wiring (source pins: these modules need a browser worker or React)', (
 
   test('the gate wipes before a login screen, unlocks before the app and suspends behind any other screen', () => {
     const wipe = gate.indexOf('if (wipe) await lockMirror();');
-    const unlock = gate.indexOf("if (next.kind === 'app') unlockMirror();");
+    // Awaited: an unlock waits out a wipe still in flight (mirror-client-wipe-race.test.ts) before the app mounts.
+    const unlock = gate.indexOf("if (next.kind === 'app') await unlockMirror();");
     const suspend = gate.indexOf('else if (!wipe) suspendMirror();');
     const show = gate.indexOf('setView(next);');
     expect(wipe).toBeGreaterThan(-1);
@@ -407,7 +409,7 @@ describe('wiring (source pins: these modules need a browser worker or React)', (
 
   test('suspending stops syncs and reads without a wipe; unlocking reopens', () => {
     const body = client.slice(client.indexOf('export function suspendMirror(): void {'));
-    expect(body).toMatch(/^export function suspendMirror\(\): void \{\n {2}if \(locked\) return;\n {2}locked = true;\n {2}sessionEpoch\+\+;\n\}/);
+    expect(body).toMatch(/^export function suspendMirror\(\): void \{\n {2}gateSeq\+\+;\n {2}if \(locked\) return;\n {2}locked = true;\n {2}sessionEpoch\+\+;\n\}/);
   });
 
   test('logout clears the token, tells the bridge and wipes the mirror before it reloads', () => {
