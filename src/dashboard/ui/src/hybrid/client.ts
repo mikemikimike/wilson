@@ -37,6 +37,7 @@ import {
   buildBundle,
   bundleWindow,
   checkAnswerFigures,
+  dollarFiguresInCents,
   computeBundleTotals,
   projectTransactions,
   shouldAttemptLocal,
@@ -598,7 +599,9 @@ export function createHybridChat(opts: HybridOpts) {
     }
     // A $ figure the app did not compute (the model added rows itself, or the
     // totals were unreliable) hands off exactly like NEED_MORE_DATA.
-    const checked = checkAnswerFigures(classified.text, bundle.allowedCents);
+    // Figures from the question itself may be echoed ("under $200"), but only
+    // beside a figure from the bundle.
+    const checked = checkAnswerFigures(classified.text, bundle.allowedCents, { queryCents: dollarFiguresInCents(query) });
     if (checked.kind === 'handoff') {
       return { ok: false, reason: checked.reason };
     }

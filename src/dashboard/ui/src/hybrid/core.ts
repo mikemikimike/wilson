@@ -661,22 +661,57 @@ export function classifyLocalOutput(raw: string): LocalVerdict {
 // ── Answer check (bundle mode) ──────────────────────────────────────────────
 
 /**
- * A money figure in free text: `$` (optionally signed, optionally followed by a
- * space) and a number, or a bare number with exactly two decimals that is not a
- * percent ("came to 215.50"). Thousands commas are allowed. A `k`/`m` suffix is
- * not read as a multiplier, so "$1.2k" parses as $1.20 and never matches a
- * total — it hands off, which is the safe direction.
+ * A number in free text, optionally led by `$` (optionally signed, optionally
+ * followed by a space). Thousands commas are allowed. Never matches inside a
+ * percent ("18.25%"), a longer number, or a date's digits.
  */
-const MONEY_IN_TEXT = /(-?\$\s?)?(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(?![\d%])/g;
+const NUMBER_IN_TEXT = /(-?\$\s?)?(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(?![\d%]|\.\d)/g;
+/** A scale suffix right after the number: "$1.2k", "$3m", "$2 million". */
+const SCALE_AFTER = /^(?:\s?(thousand|million|billion)\b|([kKmM])(?![A-Za-z]))/i;
+const SCALES: Record<string, number> = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6, billion: 1e9 };
+/** A currency word after ("215 dollars", "215 bucks", "215 USD") or before ("USD 215"). */
+const UNIT_AFTER = /^\s*(?:dollars?|bucks|usd)\b/i;
+const UNIT_BEFORE = /\busd\s?$/i;
+/**
+ * A spend/earn verb right before a bare whole number ("you spent 215 on
+ * dining", "dining came to 215."). Only counts when the number is then
+ * followed by the end of the text, punctuation, or a word that keeps it a
+ * money amount, so counts ("spent 3 times", "a total of 12 purchases") stay
+ * counts.
+ */
+const MONEY_VERB_BEFORE =
+  /\b(?:spent|spend|spending\s+(?:of|was|is)|paid|pay|costs?|came\s+to|comes\s+to|totals?|totaled|totalled|totaling|totalling|earned|received|income\s+(?:of|was|is))\s+(?:(?:about|around|roughly|approximately|nearly|almost|over|under|just|only|exactly|a\s+total\s+of|total\s+of)\s+)*$/i;
+const MONEY_FOLLOW = /^(?:\s*$|\s*[.,;:!?)]|\s+(?:on|for|in|at|this|last|so|total|overall|across|during|over|from|to|and|which|while|versus|vs)\b)/i;
 
-/** Every money figure in `text`, as absolute cents, in order of appearance. */
+/**
+ * Every money figure in `text`, as absolute cents, in order of appearance. A
+ * number is money when it has a `$`, one or two decimals ("215.5", "215.50"),
+ * a currency word next to it, or a spend verb right before it. A k/m/million
+ * suffix scales it ("$1.2k" is $1,200.00), so it is held to the allowed set
+ * like any other figure.
+ */
 export function dollarFiguresInCents(text: string): number[] {
+  const src = String(text ?? '');
   const out: number[] = [];
-  for (const m of String(text ?? '').matchAll(MONEY_IN_TEXT)) {
-    const [, dollarSign, whole, frac] = m;
-    const isMoney = dollarSign !== undefined || (frac !== undefined && frac.length === 3);
+  for (const m of src.matchAll(NUMBER_IN_TEXT)) {
+    const [whole0, dollarSign, whole, frac] = m;
+    const start = m.index ?? 0;
+    let after = src.slice(start + whole0.length);
+    const before = src.slice(Math.max(0, start - 60), start);
+    let scale = 1;
+    const scaled = SCALE_AFTER.exec(after);
+    if (scaled) {
+      scale = SCALES[(scaled[1] ?? scaled[2]!).toLowerCase()] ?? 1;
+      after = after.slice(scaled[0].length);
+    }
+    const isMoney =
+      dollarSign !== undefined ||
+      (frac !== undefined && frac.length <= 3) ||
+      UNIT_AFTER.test(after) ||
+      UNIT_BEFORE.test(before) ||
+      (MONEY_VERB_BEFORE.test(before) && (scaled !== null || MONEY_FOLLOW.test(after)));
     if (!isMoney) continue;
-    const value = Number(`${whole!.replace(/,/g, '')}${frac ?? ''}`);
+    const value = Number(`${whole!.replace(/,/g, '')}${frac ?? ''}`) * scale;
     if (Number.isFinite(value)) out.push(Math.round(Math.abs(value) * 100));
   }
   return out;
@@ -695,9 +730,25 @@ export function unverifiedDollarFigures(text: string, allowedCents: Iterable<num
  * a reliable computed total, a weekly-summary figure, or one shown transaction
  * amount). Any other figure hands the turn to the server exactly as
  * NEED_MORE_DATA does ('outside-bundle'). Answers without figures pass.
+ *
+ * `queryCents` (the figures in the user's own question) may also appear, so a
+ * threshold question ("more than $200?") answered with a bundle figure ("No,
+ * $159.50, under $200") stays local. An answer whose only figures echo the
+ * question ("Did I spend $215.50?" → "Yes, $215.50") still hands off: the
+ * question's figure is not evidence, so at least one figure must come from
+ * the bundle.
  */
-export function checkAnswerFigures(text: string, allowedCents: Iterable<number>): LocalVerdict {
-  return unverifiedDollarFigures(text, allowedCents).length > 0
+export function checkAnswerFigures(
+  text: string,
+  allowedCents: Iterable<number>,
+  opts: { queryCents?: Iterable<number> } = {},
+): LocalVerdict {
+  const allowed = new Set(allowedCents);
+  const fromQuery = new Set(opts.queryCents ?? []);
+  const figures = dollarFiguresInCents(text);
+  const unverified = figures.filter((c) => !allowed.has(c) && !fromQuery.has(c));
+  const grounded = figures.length === 0 || figures.some((c) => allowed.has(c));
+  return unverified.length > 0 || !grounded
     ? { kind: 'handoff', reason: 'outside-bundle' }
     : { kind: 'answer', text };
 }

@@ -263,6 +263,33 @@ describe('dollarFiguresInCents', () => {
   test('no figures → empty', () => {
     expect(dollarFiguresInCents('Dining is your top category.')).toEqual([]);
   });
+
+  test('a bare number with a currency word is money ("215 dollars", "215.5 USD", "USD 215")', () => {
+    expect(dollarFiguresInCents('You spent 215 dollars on dining')).toEqual([21500]);
+    expect(dollarFiguresInCents('That is 40 bucks.')).toEqual([4000]);
+    expect(dollarFiguresInCents('215.5 USD')).toEqual([21550]);
+    expect(dollarFiguresInCents('USD 215 so far')).toEqual([21500]);
+  });
+
+  test('a bare number with one decimal is money ("came to 215.5")', () => {
+    expect(dollarFiguresInCents('Dining came to 215.5')).toEqual([21550]);
+  });
+
+  test('a bare whole number right after a spend verb is money; counts stay counts', () => {
+    expect(dollarFiguresInCents('You spent 215 on dining this month.')).toEqual([21500]);
+    expect(dollarFiguresInCents('Dining came to 215.')).toEqual([21500]);
+    expect(dollarFiguresInCents('You spent 3 times more at the diner.')).toEqual([]);
+    expect(dollarFiguresInCents('a total of 12 purchases')).toEqual([]);
+    expect(dollarFiguresInCents('You made 12 purchases in 2 weeks.')).toEqual([]);
+  });
+
+  test('a k / m / million suffix scales the figure ("$1.2k" is $1,200.00, not $1.20)', () => {
+    expect(dollarFiguresInCents('$1.2k')).toEqual([120000]);
+    expect(dollarFiguresInCents('about $3M')).toEqual([300000000]);
+    expect(dollarFiguresInCents('$2 million')).toEqual([200000000]);
+    // "m" that starts a word is not a suffix.
+    expect(dollarFiguresInCents('$5 more than last week')).toEqual([500]);
+  });
 });
 
 describe('checkAnswerFigures', () => {
@@ -306,5 +333,26 @@ describe('checkAnswerFigures', () => {
 
   test('with nothing allowed (totals unreliable, no rows) any figure hands off', () => {
     expect(checkAnswerFigures('You spent $258.60.', []).kind).toBe('handoff');
+  });
+
+  test('a wrong total written without $ or with one decimal hands off', () => {
+    expect(checkAnswerFigures('You spent 215 dollars on dining', allowed).kind).toBe('handoff');
+    expect(checkAnswerFigures('Dining came to 215.5', allowed).kind).toBe('handoff');
+    expect(checkAnswerFigures('215.5 USD', allowed).kind).toBe('handoff');
+  });
+
+  test('"$1.2k" no longer passes as a $1.20 row', () => {
+    expect(checkAnswerFigures('You spent $1.2k on fees.', [120]).kind).toBe('handoff');
+  });
+
+  test('threshold question: a figure from the question may be echoed beside a bundle figure', () => {
+    const text = 'No, you spent $159.50, under $200.';
+    expect(checkAnswerFigures(text, allowed, { queryCents: [20000] })).toEqual({ kind: 'answer', text });
+    // Without the query figures, $200 is not the app's, so it hands off.
+    expect(checkAnswerFigures(text, allowed).kind).toBe('handoff');
+  });
+
+  test('an answer that only echoes the question\'s figure is not grounded and hands off', () => {
+    expect(checkAnswerFigures('Yes, you spent $215.50 on dining.', allowed, { queryCents: [21550] }).kind).toBe('handoff');
   });
 });

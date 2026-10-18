@@ -98,12 +98,12 @@ describe('bundle mode: calendar window, computed totals, answer check', () => {
     else delete (globalThis as { sessionStorage?: unknown }).sessionStorage;
   });
 
-  async function ask(answer: string, rows?: unknown[]) {
+  async function ask(answer: string, rows?: unknown[], question = 'how much did I spend on dining this month?') {
     const a = api(rows);
     const backend = backendAnswering(answer);
     const chat = createHybridChat({ baseUrl: '', fetchImpl: a.fn, backend, now: () => NOW });
     expect(await chat.loadModel()).not.toBeNull();
-    const result = await chat.tryLocal('how much did I spend on dining this month?');
+    const result = await chat.tryLocal(question);
     return { result, urls: a.urls, backend };
   }
 
@@ -129,6 +129,13 @@ describe('bundle mode: calendar window, computed totals, answer check', () => {
     const { result, urls } = await ask('You spent $215.50 on dining this month.');
     expect(result).toEqual({ ok: false, reason: 'outside-bundle' });
     expect(urls).not.toContain('/api/chat/local');
+  });
+
+  test('threshold question: echoing the question\'s $200 beside the computed total answers locally', async () => {
+    const answer = 'No, you spent $159.50 on dining this month, under $200.';
+    const { result, urls } = await ask(answer, undefined, 'Did I spend more than $200 on dining this month?');
+    expect(result).toEqual({ ok: true, answer, sessionId: 's1', source: 'local' });
+    expect(urls).toContain('/api/chat/local');
   });
 
   test('when the fetch hits the row limit, a total answer hands off (totals could be incomplete)', async () => {
