@@ -52,14 +52,19 @@ Build the UI first if `src/dashboard/ui/dist` is stale (`cd src/dashboard/ui && 
 `http://localhost:3141` in one Chrome tab with WebMCP enabled and keep using that same tab for every snippet. With
 dashboard auth off, `/mcp` client tokens are read-only and Approve on a card is a 0.6 s press-and-hold.
 
-**What Chrome 154 actually does** (the helpers below are written to it; the full list is "Live findings (Chrome 154)"
-in `specs/webmcp-security-judge.md`):
+**Chrome 155 is the target; Chrome 154 differs in two shapes** (the helpers below handle both; the full 154 list is
+"Live findings (Chrome 154)" in `specs/webmcp-security-judge.md`). Run Chrome 155 with
+`--enable-features=WebMCPTesting`:
 
-- `document.modelContext.getTools()` items are `{name, description, inputSchema, origin, title, window[, annotations]}`
-  and `inputSchema` is a **JSON string**: `JSON.parse` it. Annotations are absent for declarative form tools.
-- `document.modelContext.executeTool(tool, inputJSONString[, {signal}])` takes the **entry from `getTools()`** (not a
-  name) and a **JSON string**, and returns a **JSON string**: `JSON.parse` it. The helpers `w.exec(name, args)` and
-  `w.schemaOf(name)` do both.
+- `document.modelContext.getTools()` items are `{name, description, inputSchema, origin, title, window[, annotations]}`.
+  On **155** `inputSchema` is an **object**. On **154** it is a **JSON string** you must `JSON.parse`. Annotations are
+  absent for declarative form tools. The helper `w.schemaOf(name)` returns an object on both.
+- `document.modelContext.executeTool(tool, input[, {signal}])` takes the **entry from `getTools()`** (not a name). On
+  **155** `input` is an **object**; on **154** it must be a **JSON string** (and the result came back as a JSON string).
+  The helpers `w.exec(name, args)` / `w.call(name, args)` pick the form from `typeof tool.inputSchema` (string means
+  154) and normalise a string result with `JSON.parse`, so a snippet never branches on the build. The bridge itself
+  is shape-agnostic: it receives the already-parsed input in `execute(input)` and returns a plain object, so the
+  difference lives only in these page-side helpers (`src/dashboard/webmcp-bridge.ts`, `webmcp-bridge-core.ts`).
 - `toolactivated` / `toolcancel` are dispatched on **`window`** (a trusted `WebMCPEvent`, `toolName` on its prototype),
   not on `document.modelContext`. `toolchange` **is** on `document.modelContext`, and it **names no tool**.
 - **Never mutate tool-defining DOM during a call.** Chrome re-derives a declarative tool's schema from the form DOM whenever it
@@ -145,16 +150,18 @@ returns `{}` for a promise, run `window.__wlcResult` in the next call.
     const tools = await mc.getTools();
     return tools.map((t) => t.name);
   };
-  // Chrome 154: a getTools() item is {name, description, inputSchema (a JSON STRING), origin, title, window[, annotations]}.
+  // A getTools() item is {name, description, inputSchema, origin, title, window[, annotations]}: inputSchema is an OBJECT on Chrome 155, a JSON STRING on 154.
   const getTool = async (name) => (await document.modelContext.getTools()).find((t) => t.name === name);
-  const schemaOf = async (name) => { const t = await getTool(name); return t ? JSON.parse(t.inputSchema) : null; };
-  // executeTool(registeredTool, inputJSONString[, {signal}]) returns a JSON string. A page tool's refusal is a RESULT: {error:{code,message}}.
+  const schemaOf = async (name) => { const t = await getTool(name); return t ? (typeof t.inputSchema === 'string' ? JSON.parse(t.inputSchema) : t.inputSchema) : null; };
+  // executeTool(registeredTool, input[, {signal}]): input is an object on 155, a JSON string on 154 (result: object / JSON string). A page tool's refusal is a RESULT: {error:{code,message}}.
   const exec = async (name, args, opts) => {
     const mc = document.modelContext;
     if (typeof mc?.executeTool !== 'function') throw new Error('executeTool is not exposed: ask the built-in agent, then read the page state');
     const tool = await getTool(name);
     if (!tool) throw new Error('not registered: ' + name);
-    return JSON.parse(await mc.executeTool(tool, JSON.stringify(args ?? {}), opts));
+    const input = typeof tool.inputSchema === 'string' ? JSON.stringify(args ?? {}) : (args ?? {});   // 154: JSON string in; 155: object in
+    const res = await mc.executeTool(tool, input, opts);
+    return typeof res === 'string' ? JSON.parse(res) : res;   // 154 returns a JSON string
   };
   // Kill switch: read it from the server's one state snapshot, not from the DOM or the panel.
   const killSwitchOn = async () => (await api('GET', '/api/mcp/state')).body.enabled;
@@ -230,7 +237,7 @@ Record the **actual JSON Schema** Chrome derived for `resolve_review_item` (UNCE
 ```js
 (async () => {
   const t = await window.__wlc.getTool('resolve_review_item');
-  const schema = JSON.parse(t.inputSchema);   // inputSchema is a JSON STRING in Chrome 154
+  const schema = typeof t.inputSchema === 'string' ? JSON.parse(t.inputSchema) : t.inputSchema;   // object on Chrome 155, JSON string on 154
   window.__wlcResult = { ...t, inputSchema: schema };
   // PASS: review_id is {type:string, anyOf:[{const,title}], enum} whose titles look like "#id · date · amount"; `required` is always [].
   // PASS (L2): category_id lists EVERY category (more than the empty option), so action=correct is usable by an agent.
@@ -255,7 +262,7 @@ The design does not depend on these (it remounts the form through its React `key
   await w.sleep(500);
   const withAttrs = (await w.registered())?.includes('wlc_scratch');
   const schemaText = (await document.modelContext?.getTools?.())?.find((t) => t.name === 'wlc_scratch')?.inputSchema;
-  const schema = schemaText ? JSON.parse(schemaText) : undefined;   // Chrome 154: type=hidden inputs ARE exposed, as string properties
+  const schema = typeof schemaText === 'string' ? JSON.parse(schemaText) : schemaText;   // 154 string / 155 object; type=hidden inputs ARE exposed, as string properties
   f.removeAttribute('toolname'); f.removeAttribute('tooldescription');
   await w.sleep(500);
   const afterRemoval = (await w.registered())?.includes('wlc_scratch');
@@ -348,7 +355,7 @@ Control: with **no** `toolactivated` fired, the same `requestSubmit()` on a fres
 ```js
 (async () => {
   const w = window.__wlc;
-  const started = w.exec('resolve_review_item', { review_id: '<id from the form>', action: 'confirm' });   // JSON string in, JSON.parse'd result out
+  const started = w.exec('resolve_review_item', { review_id: '<id from the form>', action: 'confirm' });   // object in (155) or JSON string (154); the helper returns the parsed result
   started.catch?.(() => {});   // do not await: a change resolves only after a human answers the card
   await w.sleep(1500);
   const pending = await w.pending();
@@ -489,6 +496,12 @@ monthly_savings:800}` returns `{horizonMonths, p10, p50, p90}` (numbers) after t
   return JSON.stringify(out, null, 1);
 })()
 ```
+
+A call that was already in flight, or that Chrome starts after the switch flipped, still reaches the server under the
+tool's last grant and is **refused with the kill-switch message** ("Agent access is turned off. Ask the user to turn
+it on in Settings → Agent access.") as a result `{error:{code:'kill_switch',message}}`, not a hang or a bare error. The
+server writes a `denied_kill_switch` audit row for it, and the Agent access log **folds** these rows **per tab** into one
+row with a count (e.g. "x3"). Check this with the late-call step in P3.6.
 
 Then turn the global kill switch off from the bridge panel (AGENT ACCESS, bottom left) or
 `PUT /api/mcp/settings {"enabled":false}`: `await w.killSwitchOn()` (it reads `GET /api/mcp/state`) must be `false`,
@@ -670,7 +683,7 @@ same as P2), ask Chrome's built-in agent to call the tool instead and read the p
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const mc = document.modelContext;
   const toolchange = { count: 0, at: [] };
-  // Chrome 154: `toolchange` IS dispatched on document.modelContext (toolactivated / toolcancel are on window).
+  // Chrome 154 and 155: `toolchange` IS dispatched on document.modelContext (toolactivated / toolcancel are on window).
   mc?.addEventListener?.('toolchange', () => { toolchange.count++; toolchange.at.push(performance.now()); });
   const names = async () => {
     if (!mc || typeof mc.getTools !== 'function') return null;   // UNCERTAIN: not exposed to page script
@@ -680,13 +693,15 @@ same as P2), ask Chrome's built-in agent to call the tool instead and read the p
   const grant = async (tools) => (await api('POST', '/api/mcp/grants', { tools })).status;
   const pending = async () => (await api('GET', '/api/mcp/operations')).body.operations.filter((o) => o.status === 'pending');
   const resync = async () => { window.dispatchEvent(new CustomEvent('wilson:agent-grants-changed', { detail: { from: 'live-check' } })); await sleep(1500); };
-  // Call a registered tool the way an agent would (Chrome 154): executeTool(<getTools() entry>, JSON string) -> JSON string.
+  // Call a registered tool the way an agent would: executeTool(<getTools() entry>, input) -> result. Chrome 155: object in; Chrome 154: JSON string in and out.
   // A refusal comes back as a RESULT {error:{code,message}}, never as a rejection.
   const call = async (name, args, opts) => {
     if (typeof mc?.executeTool !== 'function') throw new Error('executeTool is not exposed: ask the built-in agent, then read the page state');
     const tool = (await mc.getTools()).find((t) => t.name === name);
     if (!tool) throw new Error('not registered: ' + name);
-    return JSON.parse(await mc.executeTool(tool, JSON.stringify(args ?? {}), opts));
+    const input = typeof tool.inputSchema === 'string' ? JSON.stringify(args ?? {}) : (args ?? {});   // 154: JSON string in; 155: object in
+    const res = await mc.executeTool(tool, input, opts);
+    return typeof res === 'string' ? JSON.parse(res) : res;   // 154 returns a JSON string
   };
   const killSwitchOn = async () => (await api('GET', '/api/mcp/state')).body.enabled;
   // Change tab the way a click does (the tab bar sets the hash) and time how long the registered set takes to settle.
@@ -910,6 +925,24 @@ back to Allow afterwards.
 
 Turn the switch back on (`PUT /api/mcp/settings {"enabled":true}`, or the bridge panel) and re-grant with P3.1 before
 the next step. Grants made before the switch stay dead.
+
+**Late call.** Re-enable the switch, grant `get_page_context`, then start a call and flip the switch before Chrome's call
+reaches the server (or call a tool captured before the flip). The call must end with the kill-switch message, not hang:
+
+```js
+(async () => {
+  const w = window.__wlc3;
+  await w.api('PUT', '/api/mcp/settings', { enabled: true });
+  await w.grant(['get_page_context']); await w.resync();
+  const late = w.call('get_page_context', {});                    // in flight ...
+  await w.api('PUT', '/api/mcp/settings', { enabled: false });    // ... when the switch flips
+  const result = await late.catch((e) => ({ thrown: String(e) }));
+  const audit = (await w.api('GET', '/api/mcp/audit')).body;
+  return JSON.stringify({ result, audit: JSON.stringify(audit).match(/denied_kill_switch/g)?.length ?? 0 }, null, 1);
+  // PASS: result.error.message is "Agent access is turned off. Ask the user to turn it on in Settings → Agent access."
+  // PASS: at least one denied_kill_switch audit row; in the Agent access log, repeated late calls from one tab are ONE row with a count.
+})()
+```
 
 ## P3.7 Reload restores registrations for live grants only (spec item 7)
 
@@ -1170,13 +1203,15 @@ the snippets.
   const grant = async (tools) => (await api('POST', '/api/mcp/grants', { tools })).status;
   const resync = async () => { window.dispatchEvent(new CustomEvent('wilson:agent-grants-changed', { detail: { from: 'live-check' } })); await sleep(1500); };
   const pending = async () => (await api('GET', '/api/mcp/operations')).body.operations.filter((o) => o.status === 'pending');
-  // Call a registered tool the way an agent would (Chrome 154): executeTool(<getTools() entry>, JSON string) -> JSON string.
+  // Call a registered tool the way an agent would: executeTool(<getTools() entry>, input) -> result. Chrome 155: object in; Chrome 154: JSON string in and out.
   // A refusal comes back as a RESULT {error:{code,message}}, never as a rejection.
   const call = async (name, args, opts) => {
     if (typeof mc?.executeTool !== 'function') throw new Error('executeTool is not exposed: ask the built-in agent, then read the page state');
     const tool = (await mc.getTools()).find((t) => t.name === name);
     if (!tool) throw new Error('not registered: ' + name);
-    return JSON.parse(await mc.executeTool(tool, JSON.stringify(args ?? {}), opts));
+    const input = typeof tool.inputSchema === 'string' ? JSON.stringify(args ?? {}) : (args ?? {});   // 154: JSON string in; 155: object in
+    const res = await mc.executeTool(tool, input, opts);
+    return typeof res === 'string' ? JSON.parse(res) : res;   // 154 returns a JSON string
   };
   const policy = async (tool, p) => (await api('PUT', '/api/mcp/policies/' + tool, { policy: p })).status;
   const stats = async () => (await api('GET', '/api/annotations/stats')).body;
