@@ -24,6 +24,45 @@ describe('entity_classify tool', () => {
     llmSpy.mockRestore();
   });
 
+  describe('write rights and cancellation (#165)', () => {
+    let business: number;
+    const setup = () => {
+      business = createEntity(db, { name: 'Consulting LLC' });
+      insertTransactions(db, [{ date: '2026-02-15', description: 'Office supplies', amount: -40 }]);
+      const txn = getTransactions(db)[0];
+      return { id: txn.id };
+    };
+    const answer = (id: number) => ({
+      response: { content: '', structured: { transactions: [{ id, entityId: business, confidence: 0.95, reasoning: 'r' }] } },
+      metadata: {},
+    });
+
+    test('rights lost while the model answers: the answer is not applied and the run stops, not a failed batch', async () => {
+      const { id } = setup();
+      let allowed = true;
+      llmSpy.mockImplementation(async () => { allowed = false; return answer(id); });
+      await expect(entityClassifyTool.func({}, { mayWrite: () => allowed })).rejects.toThrow('cancelled');
+      expect(getTransactions(db)[0].entity_id).toBeNull();
+    });
+
+    test('cancelled while the model answers: nothing is assigned, and the signal reaches callLlm', async () => {
+      const { id } = setup();
+      const controller = new AbortController();
+      llmSpy.mockImplementation(async () => { controller.abort(); return answer(id); });
+      await expect(entityClassifyTool.func({}, { signal: controller.signal })).rejects.toThrow('cancelled');
+      expect((llmSpy.mock.calls[0][1] as { signal?: AbortSignal }).signal).toBe(controller.signal);
+      expect(getTransactions(db)[0].entity_id).toBeNull();
+    });
+
+    test('a dry run only reads, so lost write rights do not stop it', async () => {
+      const { id } = setup();
+      llmSpy.mockResolvedValue(answer(id));
+      const result = JSON.parse(await entityClassifyTool.func({ dryRun: true }, { mayWrite: () => false }));
+      expect(result.data.wouldClassify).toBe(1);
+      expect(getTransactions(db)[0].entity_id).toBeNull();
+    });
+  });
+
   test('requires at least two entities', async () => {
     // Migrations seed exactly one default 'Personal' entity
     const raw = await entityClassifyTool.func({});

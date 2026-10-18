@@ -77,10 +77,20 @@ export const entityClassifyTool = defineTool({
       .optional()
       .describe('Minimum confidence to auto-assign (default: 0.7)'),
   }),
-  func: async ({ limit, dryRun, confidenceThreshold }) => {
+  func: async ({ limit, dryRun, confidenceThreshold }, config) => {
     const database = getDb();
     const threshold = confidenceThreshold ?? 0.7;
     const isDryRun = dryRun ?? false;
+    // As in categorize: a cancelled run (signal) stops before writing anything more, and so does a run whose
+    // write rights lapsed mid-tool (mayWrite: a dashboard chat whose owner was demoted, #165). A dry run only
+    // reads, so only a cancel stops it.
+    const signal = config?.signal;
+    let writeRevoked = false;
+    const throwIfAborted = () => {
+      if (!isDryRun && !writeRevoked && config?.mayWrite && !config.mayWrite()) writeRevoked = true;
+      if (signal?.aborted || writeRevoked) throw new DOMException('Entity classification cancelled', 'AbortError');
+    };
+    throwIfAborted();
 
     // 1. Validate at least 2 entities exist
     const entities = getEntities(database);
@@ -111,6 +121,7 @@ export const entityClassifyTool = defineTool({
     // 3. Process in batches (smaller for local models, as categorize does)
     const batchSize = resolveProvider(getTaskModel('entity-classification')).id === 'transformers' ? LOCAL_BATCH_SIZE : BATCH_SIZE;
     for (let i = 0; i < unassigned.length; i += batchSize) {
+      throwIfAborted();
       const batch = unassigned.slice(i, i + batchSize);
       const inputs: ClassificationInput[] = batch.map((t) => ({
         id: t.id,
@@ -140,7 +151,10 @@ export const entityClassifyTool = defineTool({
           // Room for every row's JSON: the local adapter otherwise caps output
           // at 512 tokens, truncating a full batch into invalid JSON.
           maxTokens: OUTPUT_TOKENS_OVERHEAD + OUTPUT_TOKENS_PER_ROW * batch.length,
+          signal,
         });
+        // Cancelled while the model was answering: its answer must not be applied.
+        throwIfAborted();
 
         // callLlm validated the structured output against the per-batch schema
         // (with one repair re-prompt) or threw — result.response.structured is guaranteed
@@ -201,6 +215,8 @@ export const entityClassifyTool = defineTool({
           assignEntityToTransactions(database, entityId, txnIds);
         }
       } catch (err) {
+        // A cancel is not a failed batch: stop the run (the caller reports it) instead of counting it.
+        if (signal?.aborted || writeRevoked) throw err;
         errors.push(
           `Batch ${Math.floor(i / batchSize) + 1}: ${err instanceof Error ? err.message : String(err)}`,
         );

@@ -158,6 +158,15 @@ export class AgentRunnerController {
     this.pendingApprovalIdValue = null;
   }
 
+  /**
+   * Forget every 'allow-session' approval, so each later write is asked again. The dashboard chat calls it when
+   * a user loses write rights (#165): approvals given while they could write must not outlive that, even if they
+   * get them back later in the same session.
+   */
+  clearSessionApprovals() {
+    this.sessionApprovedTools.clear();
+  }
+
   cancelExecution() {
     if (this.abortController) {
       this.abortController.abort();

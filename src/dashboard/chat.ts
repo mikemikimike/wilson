@@ -534,8 +534,11 @@ export function revokeChatWritesForUser(db: Database, userId: number): boolean {
 }
 
 // deactivateUser and setUserRole call this (a hook, because auth.ts cannot import this module), so no caller of
-// either can forget the run: deactivation cancels it (#159), a demotion strips its writes (#165).
+// either can forget the run: deactivation cancels it (#159), a demotion strips its writes (#165). The runner's
+// 'allow-session' approvals are dropped either way, run or not, so a user given write rights back later in the
+// same session is asked again; dropping them only ever costs a re-ask.
 onWriteRevoked((db, userId, why) => {
+  if (db === chatDb) agentRunner?.clearSessionApprovals();
   if (why === 'deactivated') cancelChatRunForUser(db, userId);
   else revokeChatWritesForUser(db, userId);
 });

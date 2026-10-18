@@ -22,6 +22,8 @@ import { setInitialProfile, closeAll } from '../dashboard/db-manager.js';
 import { gateToolCall } from '../agent/approval-gate.js';
 import { orchestrationGate, runOrchestratedToolCall, DENIED_RESULT } from '../orchestration/tool-calls.js';
 import { defineTool } from '../tools/define-tool.js';
+import { initEntityClassifyTool } from '../tools/entity/entity-classify.js';
+import { createEntity } from '../db/entity-queries.js';
 
 /**
  * #165 — an admin demoted to viewer while their dashboard chat run is in flight must not keep that run's write
@@ -37,12 +39,15 @@ const systemPromptSpy = scopedSpy(prompts, 'buildSystemPrompt', async () => 'You
 const soulSpy = scopedSpy(prompts, 'loadSoulDocument', async () => '');
 
 let script: LlmResponse['toolCalls'][number][] = [];
-/** When set, the first agent call (agentHold) or a categorizer call (categorizeHold) waits for it. */
+/** When set, the first agent call (agentHold) or a categorizer / entity-classifier call (categorizeHold) waits for it. */
 let agentHold: Promise<void> | null = null;
 let categorizeHold: Promise<void> | null = null;
 let agentEntered: (() => void) | null = null;
 let categorizeEntered: (() => void) | null = null;
 let categorizeTargetId = -1;
+/** The entity classifier confidently assigns this entity to this (unassigned) row. */
+let classifyEntityId = -1;
+let classifyTargetId = -1;
 const llmSpy = scopedSpy(llm, 'callLlm', async (_prompt, options): Promise<LlmResult> => {
   if (options?.callType === 'agent') {
     let response: LlmResponse = { content: 'All done.', toolCalls: [] };
@@ -54,9 +59,21 @@ const llmSpy = scopedSpy(llm, 'callLlm', async (_prompt, options): Promise<LlmRe
     }
     return { response, interactionId: null, traceId: 't', durationMs: 0 };
   }
-  // The categorizer: a confident answer for the one uncategorized row.
   categorizeEntered?.();
   if (categorizeHold) await categorizeHold;
+  if (options?.callType === 'entity-classification') {
+    return {
+      response: {
+        content: '',
+        toolCalls: [],
+        structured: { transactions: [{ id: classifyTargetId, entityId: classifyEntityId, confidence: 0.99, reasoning: 'r' }] },
+      },
+      interactionId: null,
+      traceId: 't',
+      durationMs: 0,
+    };
+  }
+  // The categorizer: a confident answer for the one uncategorized row.
   return {
     response: {
       content: '',
@@ -256,6 +273,64 @@ describe('#165: a run whose owner is demoted mid-run loses its writes (in-proces
 
     await run;
     expect(category()).toBeNull();
+  });
+
+  describe('an approved entity_classify tool call', () => {
+    const entityOf = (id: number) =>
+      (db.prepare('SELECT entity_id FROM transactions WHERE id = @id').get({ id }) as { entity_id: number | null }).entity_id;
+    const approveEntityClassify = async () => {
+      initEntityClassifyTool(db);
+      createEntity(db, { name: 'Household' });
+      classifyEntityId = createEntity(db, { name: 'Side Business' });
+      classifyTargetId = restaurantId;
+      agentHold = null;
+      const entered = new Promise<void>((r) => (categorizeEntered = r));
+      script = [{ id: 'tc1', name: 'entity_classify', args: {} }];
+      const run = handleChatMessage('sort my transactions into entities', undefined, undefined, { user: worker(), db });
+      await waitFor(() => getPendingChatApproval());
+      expect(respondToChatOperation(db, poll()!.id, 'allow-once')).toEqual({ ok: true, status: 'committed' });
+      await entered; // the approved tool is now waiting on its classifier call
+      return { run }; // wrapped: an async function returning the bare promise would wait for the run itself
+    };
+
+    test('stops writing once its owner is demoted mid-tool', async () => {
+      const { run } = await approveEntityClassify();
+      demoteInDb(db, workerId);
+      releaseCategorize();
+      await run;
+      expect(entityOf(restaurantId)).toBeNull();
+    });
+
+    test('control: writes when its owner keeps their role', async () => {
+      const { run } = await approveEntityClassify();
+      releaseCategorize();
+      await run;
+      expect(entityOf(restaurantId)).toBe(classifyEntityId);
+    });
+  });
+
+  test("a demotion drops the session's 'allow-session' approvals, so a re-promoted owner is asked again", async () => {
+    agentHold = null;
+    categorizeHold = null; // the agent's background calls (summaries) take the non-agent branch
+    const otherId = (db.prepare("SELECT id FROM transactions WHERE id != @id ORDER BY id LIMIT 1").get({ id: restaurantId }) as { id: number }).id;
+    script = [{ id: 'tc1', name: 'delete_transaction', args: { id: restaurantId } }];
+    const first = handleChatMessage('delete the restaurant charge', undefined, undefined, { user: worker(), db });
+    await waitFor(() => getPendingChatApproval());
+    expect(respondToChatOperation(db, poll()!.id, 'allow-session')).toEqual({ ok: true, status: 'committed' });
+    await first;
+    await waitFor(() => !isChatRunActive());
+    expect(exists(restaurantId)).toBe(false);
+
+    expect(setUserRole(db, workerId, 'viewer')).toBe(true);
+    expect(setUserRole(db, workerId, 'admin')).toBe(true);
+
+    script = [{ id: 'tc2', name: 'delete_transaction', args: { id: otherId } }];
+    const second = handleChatMessage('delete another charge', undefined, undefined, { user: worker(), db });
+    expect(await waitFor(() => getPendingChatApproval())).toBeTruthy();
+    expect(exists(otherId)).toBe(true);
+    respondToChatOperation(db, poll()!.id, 'deny');
+    await second;
+    expect(exists(otherId)).toBe(true);
   });
 
   test('deactivateUser itself (no HTTP route) cancels the run: the hook lives in auth.ts', async () => {
