@@ -23,7 +23,7 @@ const CONFIG: LocalChatConfigResponse = {
   displayName: 'Gemma 4 E2B (WebGPU)',
   downloadSize: '~3.6GB',
   dtype: 'q4',
-  bundle: { days: 30, limit: 200, maxChars: 6000 },
+  bundle: { limit: 200, maxChars: 6000 },
 };
 
 /** Behaves like authedFetch: resolves a path against the page origin itself. */
