@@ -76,8 +76,13 @@ export function getGlobalAgentState(): GlobalAgentState {
     // The file exists but cannot be read or parsed (truncated by hand, damaged from outside). This is a SAFETY
     // control, so it fails closed: access stays off, and every grant older than the damage is dead, as after a
     // flip. Only a missing file means "never configured". The next write (the switch in Settings) replaces it.
+    // The cutoff is also at least "now": Linux stamps mtime from a coarse kernel clock that can trail Date.now()
+    // by a few ms, so a grant issued just before the damage could otherwise carry a later timestamp and survive.
     console.warn(`[agent-access] ${filePath} is unreadable; agent access is off until it is rewritten.`);
-    state = { enabled: false, killSwitchEpoch: Math.max(cache?.state.killSwitchEpoch ?? 0, Math.ceil(mtimeMs)) };
+    state = {
+      enabled: false,
+      killSwitchEpoch: Math.max(cache?.state.killSwitchEpoch ?? 0, Math.ceil(mtimeMs), Date.now()),
+    };
   }
   cache = { mtimeMs, size, state };
   return { ...state };
