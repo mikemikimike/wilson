@@ -214,6 +214,23 @@ describe('Agent', () => {
     expect(doneEvent).toBeTruthy();
     expect((doneEvent as any).answer).toContain('Error');
   });
+
+  test('an LLM error marks the done event failed; a real answer does not (#177)', async () => {
+    // What a server Ollama that cannot be reached looks like to the agent.
+    mockAdapterCall.mockImplementation(async () => {
+      throw new Error('[Ollama API] Cannot connect to API: connect ECONNREFUSED 127.0.0.1:9');
+    });
+    const failedRun = await collectEvents((await Agent.create({ maxIterations: 2 })).run('how much did I spend?'));
+    const failedDone = failedRun.find((e) => e.type === 'done') as { answer: string; failed?: boolean };
+    expect(failedDone.answer).toStartWith('Error:');
+    expect(failedDone.failed).toBe(true);
+
+    mockAdapterCall.mockImplementation(async () => makeResponse('Your spending is $500.'));
+    const okRun = await collectEvents((await Agent.create({ maxIterations: 2 })).run('how much did I spend?'));
+    const okDone = okRun.find((e) => e.type === 'done') as { answer: string; failed?: boolean };
+    expect(okDone.answer).toBe('Your spending is $500.');
+    expect(okDone.failed).toBeUndefined();
+  });
 });
 
 describe('Agent tool selection (design 2026-10-03)', () => {

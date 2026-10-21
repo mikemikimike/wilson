@@ -633,7 +633,7 @@ export function initChatSession(db: Database): void {
  */
 export async function handleChatMessage(
   query: string, sessionId?: string, contextBlock?: string, options: { user?: ChatUser | null; db?: Database } = {}
-): Promise<{ answer: string; sessionId: string | null; busy?: true; stale?: true }> {
+): Promise<{ answer: string; sessionId: string | null; busy?: true; stale?: true; failed?: true }> {
   const user = options.user ?? null;
   // The runner and the agent tools are bound to the CURRENT profile's db (initChatSession). A caller that
   // authenticated against a different db (a request that outlived a profile switch) must not run on this one.
@@ -685,7 +685,7 @@ export async function handleChatMessage(
 
   if (!agentRunner || !chatHistory) {
     logger.warn(`Dashboard chat: session not initialized`);
-    return { answer: 'Chat session not initialized.', sessionId: null };
+    return { answer: 'Chat session not initialized.', sessionId: null, failed: true };
   }
 
   // One run at a time (see activeChatRun). Checked before anything touches
@@ -755,6 +755,7 @@ export async function handleChatMessage(
         answer: `Error: The request did not finish within ${minutes >= 1 ? `${minutes} minutes` : `${chatDeadlineMs} ms`} and was cancelled. ` +
           'A local model may be too slow for this request — try a shorter question or a cloud model.',
         sessionId: chatHistory.getSessionId() ?? null,
+        failed: true,
       };
     }
     // runQuery reports its own failures through `error` and resolves undefined.
@@ -771,13 +772,16 @@ export async function handleChatMessage(
               ? writeRightsLost(denied)
               : `Cancelled — you denied ${denied}.`
           : 'No response generated.');
-    logger.info(`Dashboard chat response`, { durationMs, answerChars: answer.length });
-    return { answer, sessionId: chatHistory.getSessionId() ?? null };
+    // A turn nothing answered (the model call failed, or no answer at all) is marked, so the
+    // browser shows no provenance badge on it (#177). A denied write is the user's own choice: unmarked.
+    const failed = result ? result.failed === true : Boolean(runner.error) || !denied;
+    logger.info(`Dashboard chat response`, { durationMs, answerChars: answer.length, failed });
+    return { answer, sessionId: chatHistory.getSessionId() ?? null, ...(failed ? { failed: true as const } : {}) };
   } catch (err) {
     const durationMs = Date.now() - startTime;
     const errorMsg = err instanceof Error ? err.message : String(err);
     logger.error(`Dashboard chat error`, { durationMs, error: errorMsg });
-    return { answer: `Error: ${errorMsg}`, sessionId: chatHistory.getSessionId() ?? null };
+    return { answer: `Error: ${errorMsg}`, sessionId: chatHistory.getSessionId() ?? null, failed: true };
   } finally {
     clearTimeout(deadline);
   }

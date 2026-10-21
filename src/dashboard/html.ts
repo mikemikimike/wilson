@@ -1207,6 +1207,11 @@ export function getDashboardHtml(port: number): string {
     if (host) return PROV_LABELS.serverOtherMachine.replace('{who}', who).replace('{host}', host);
     return PROV_LABELS.serverCloud.replace('{who}', who);
   }
+  // Mirrors replyProvenance in chat-provenance.ts: a badge only on an ok reply with an answer that
+  // /api/chat did not mark failed (model unreachable, deadline, no answer): nothing answered those (#177).
+  function replyAnswered(ok, data) {
+    return !!ok && !!data && !!data.answer && data.failed !== true;
+  }
   function stampProv(msgDiv, prov, srv) {
     var b = el('div','prov'+(prov==='local-with-context'?' prov-local':''),provLabel(prov, srv));
     var bubble = msgDiv.querySelector('.bubble'); if (bubble) bubble.appendChild(b);
@@ -1277,8 +1282,8 @@ export function getDashboardHtml(port: number): string {
         if (data.sessionId) { activeSessionId = data.sessionId; isLiveSession = true; }
         // Safe: renderMd escapes all HTML entities before applying markdown transforms
         pendingText.innerHTML = renderMd(answer);
-        // No badge on a failed turn (409 busy, error reply, no answer): nothing answered it.
-        if (res.ok && data.answer) stampProv(pending, prov, data);
+        // No badge on a failed turn (409 busy, error reply marked failed, no answer): nothing answered it.
+        if (replyAnswered(res.ok, data)) stampProv(pending, prov, data);
         loadSessions();
       } catch(e) { pendingText.textContent = 'Error: '+e.message; }
     }

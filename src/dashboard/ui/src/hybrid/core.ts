@@ -772,7 +772,7 @@ export function shouldAttemptLocal(state: HybridCapability): boolean {
 
 // The provenance type and its badge strings live in ./provenance (import-free,
 // shared with the legacy dashboard); re-exported here for existing importers.
-export { PROVENANCE_BADGES, PROVENANCE_LABELS, provenanceBadge } from '../../../../dashboard/chat-provenance.js';
+export { PROVENANCE_BADGES, PROVENANCE_LABELS, provenanceBadge, replyProvenance } from '../../../../dashboard/chat-provenance.js';
 export type { ChatProvenance, ServerModelInfo } from '../../../../dashboard/chat-provenance.js';
 
 /** True when the answer was composed on-device (bundle or subagent), whatever its text says. */

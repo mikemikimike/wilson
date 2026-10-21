@@ -246,6 +246,7 @@ export class Agent {
           yield {
             type: 'done',
             answer: `Error: ${formatUserFacingError(errorMessage)}`,
+            failed: true,
             toolCalls: ctx.scratchpad.getToolCallRecords(),
             iterations: ctx.iteration,
             totalTime,
