@@ -9,6 +9,7 @@ import type { ChatProvenance, ServerModelInfo } from '../dashboard/chat-provenan
 import { getDashboardHtml } from '../dashboard/html.js';
 import { InMemoryChatHistory } from '../utils/in-memory-chat-history.js';
 import { saveConfig, setSetting } from '../utils/config.js';
+import { categorizeTool } from '../tools/categorize/categorize.js';
 
 /**
  * #177: a chat turn that failed (the server's model unreachable, a deadline, a
@@ -121,6 +122,81 @@ describe('handleChatMessage marks every failed turn, and only those', () => {
     init();
     const res = await handleChatMessage('how much did I spend?');
     expect(res.answer).toBe('You spent $500.');
+    expect(res.failed).toBeUndefined();
+  });
+});
+
+describe('"/categorize" marks a run nothing answered, and only those', () => {
+  ensureTestProfile();
+
+  function init() {
+    saveConfig({});
+    setSetting('modelId', 'gpt-5.2');
+    setSetting('provider', 'openai');
+    initChatSession(createTestDb());
+  }
+
+  function categorizeReturns(impl: () => Promise<string>) {
+    spies.push(spyOn(categorizeTool, 'func').mockImplementation(impl as never));
+  }
+
+  const result = (data: Record<string, unknown>) => JSON.stringify({ data });
+
+  test('the categorize tool threw (model unreachable before any batch)', async () => {
+    categorizeReturns(async () => {
+      throw new Error('[Ollama API] Cannot connect to API: connect ECONNREFUSED 127.0.0.1:9');
+    });
+    init();
+    const res = await handleChatMessage('/categorize');
+    expect(res.answer).toStartWith('**Categorization failed:**');
+    expect(res.failed).toBe(true);
+  });
+
+  test('every batch failed: nothing categorized or routed, batch errors reported', async () => {
+    categorizeReturns(async () => result({
+      success: true, totalUncategorized: 20, categorized: 0, ruleMatched: 0, llmCategorized: 0, routedForReview: 0,
+      errors: ['Batch 1: [Ollama API] Cannot connect to API', 'Batch 2: [Ollama API] Cannot connect to API'],
+      message: 'Categorized 0 of 20 transactions.', stillUncategorized: 20,
+    }));
+    init();
+    const res = await handleChatMessage('/categorize');
+    expect(res.answer).toContain('Cannot connect');
+    expect(res.failed).toBe(true);
+  });
+
+  test('the tool reported an error', async () => {
+    categorizeReturns(async () => result({ error: 'database not initialized', categorized: 0 }));
+    init();
+    const res = await handleChatMessage('/categorize');
+    expect(res.failed).toBe(true);
+  });
+
+  test('a partly successful run (some rows applied despite batch errors) is not marked', async () => {
+    categorizeReturns(async () => result({
+      success: true, totalUncategorized: 20, categorized: 10, ruleMatched: 0, llmCategorized: 10, routedForReview: 0,
+      categoriesApplied: { Dining: 10 }, errors: ['Batch 2: timeout'], stillUncategorized: 10,
+    }));
+    init();
+    const res = await handleChatMessage('/categorize');
+    expect(res.answer).toContain('Categorized **10** of 20');
+    expect(res.failed).toBeUndefined();
+  });
+
+  test('a run whose rows all went to review answered (the model replied), so it is not marked', async () => {
+    categorizeReturns(async () => result({
+      success: true, totalUncategorized: 5, categorized: 0, routedForReview: 5, stillUncategorized: 5,
+      message: 'Categorized 0 of 5 transactions. 5 routed for human review.',
+    }));
+    init();
+    const res = await handleChatMessage('/categorize');
+    expect(res.failed).toBeUndefined();
+  });
+
+  test('nothing to categorize is not marked', async () => {
+    categorizeReturns(async () => result({ message: 'All transactions are already categorized.', categorized: 0, stillUncategorized: 0 }));
+    init();
+    const res = await handleChatMessage('/categorize');
+    expect(res.answer).toBe('All transactions are already categorized.');
     expect(res.failed).toBeUndefined();
   });
 });

@@ -679,7 +679,14 @@ export async function handleChatMessage(
     cancelActiveRun = () => controller.abort();
     revokeActiveRunWrites = cancelActiveRun; // a "/categorize" only writes
     chatRunOwner = user;
-    return { answer: await categorizing, sessionId: sessionId ?? chatHistory?.getSessionId() ?? null };
+    // A run in which the model answered no batch (it could not be reached, the tool failed) is marked like a
+    // failed agent turn, so no provenance badge claims a model answered it (#177).
+    const outcome = await categorizing;
+    return {
+      answer: outcome.answer,
+      sessionId: sessionId ?? chatHistory?.getSessionId() ?? null,
+      ...(outcome.failed ? { failed: true as const } : {}),
+    };
   }
   query = contextBlock ? `${contextBlock}${expansion.query}` : expansion.query;
 
@@ -829,9 +836,15 @@ export function getCategorizeProgress(): ToolProgress | null {
  * the terminal's /categorize (src/cli.ts). Typing the command is the consent,
  * so there is no approval round-trip, and the categorizer's own small batch
  * prompt is used instead of the agent's full tool-schema prompt. Failures
- * always come back as an answer.
+ * always come back as an answer, with `failed` set when nothing answered the
+ * run (#177): the tool threw or reported an error, or every batch failed and
+ * none was applied or routed for review. A cancel is not marked (like a denied
+ * write, it is a stop, not a failure), and neither is a run that applied some
+ * rows despite batch errors.
  */
-async function runCategorizeCommand(limit: number | undefined, signal: AbortSignal, mayWrite: () => boolean): Promise<string> {
+async function runCategorizeCommand(
+  limit: number | undefined, signal: AbortSignal, mayWrite: () => boolean,
+): Promise<{ answer: string; failed?: true }> {
   const startTime = Date.now();
   const local = resolveProvider(getTaskModel('categorization')).id === 'transformers';
   const effectiveLimit = limit ?? (local ? LOCAL_CATEGORIZE_CHUNK : undefined);
@@ -855,16 +868,17 @@ async function runCategorizeCommand(limit: number | undefined, signal: AbortSign
         ? ` — send \`/categorize\` again for the next ${effectiveLimit}.`
         : '.';
     }
-    logger.info(`Dashboard /categorize`, { durationMs: Date.now() - startTime, limit: effectiveLimit, remaining });
-    return answer;
+    const failed = Boolean(data.error) || (!data.categorized && !data.routedForReview && Boolean(data.errors?.length));
+    logger.info(`Dashboard /categorize`, { durationMs: Date.now() - startTime, limit: effectiveLimit, remaining, failed });
+    return failed ? { answer, failed: true } : { answer };
   } catch (err) {
     if (signal.aborted) {
       logger.info(`Dashboard /categorize cancelled`, { durationMs: Date.now() - startTime });
-      return CATEGORIZE_CANCELLED_MESSAGE;
+      return { answer: CATEGORIZE_CANCELLED_MESSAGE };
     }
     const errorMsg = err instanceof Error ? err.message : String(err);
     logger.error(`Dashboard /categorize error`, { durationMs: Date.now() - startTime, error: errorMsg });
-    return `**Categorization failed:** ${errorMsg}`;
+    return { answer: `**Categorization failed:** ${errorMsg}`, failed: true };
   } finally {
     categorizeProgress = null;
   }
