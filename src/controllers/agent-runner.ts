@@ -167,10 +167,15 @@ export class AgentRunnerController {
    * Forget 'allow-session' approvals, so each later write is asked again: `userId`'s alone when given, otherwise
    * everyone's. The dashboard chat calls it with the user who lost write rights (#165, #172): approvals given while
    * they could write must not outlive that, even if they get them back later in the same session.
+   * The Sets are emptied in place, never dropped from the map: a run in flight holds its user's Set (runQuery
+   * hands it to the Agent), so a revoke must reach that same object to take effect at the run's next write.
    */
   clearSessionApprovals(userId?: number | null) {
-    if (userId === undefined) this.sessionApprovedTools.clear();
-    else this.sessionApprovedTools.delete(userId);
+    if (userId === undefined) {
+      for (const approved of this.sessionApprovedTools.values()) approved.clear();
+    } else {
+      this.sessionApprovedTools.get(userId)?.clear();
+    }
   }
 
   /** The 'allow-session' approvals of `userId` (created empty on first use). */
