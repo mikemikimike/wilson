@@ -231,6 +231,25 @@ describe('Agent', () => {
     expect(okDone.answer).toBe('Your spending is $500.');
     expect(okDone.failed).toBeUndefined();
   });
+
+  test('an LLM error after an earlier model call returned is NOT marked failed (#177, #167)', async () => {
+    // Iteration 1 reaches the model and picks a tool; its result goes into the iteration-2 prompt, which
+    // then fails (rate limit). The data already reached the model, so the badge must stay.
+    let calls = 0;
+    mockAdapterCall.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) return makeResponse('', [{ id: 'tc1', name: 'csv_import', args: { filePath: '/tmp/test.csv' } }]);
+      throw new Error('429 rate limit exceeded');
+    });
+    const events = await collectEvents(
+      (await Agent.create({ maxIterations: 5, requestToolApproval: async () => 'allow-once' })).run('how much did I spend on dining?'),
+    );
+    const doneEvent = events.find((e) => e.type === 'done') as { answer: string; failed?: boolean; iterations: number };
+    expect(calls).toBeGreaterThan(1); // callLlm retries the 429 before giving up
+    expect(doneEvent.iterations).toBe(2);
+    expect(doneEvent.answer).toStartWith('Error:');
+    expect(doneEvent.failed).toBeUndefined();
+  });
 });
 
 describe('Agent tool selection (design 2026-10-03)', () => {
