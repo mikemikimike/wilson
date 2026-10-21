@@ -40,14 +40,19 @@ const systemPromptSpy = scopedSpy(prompts, 'buildSystemPrompt', async () => 'You
 const soulSpy = scopedSpy(prompts, 'loadSoulDocument', async () => '');
 
 let scriptedToolCall: LlmResponse['toolCalls'][number] | null = null;
+/** A second tool call for the same run, made on the next LLM turn; `before` runs first (e.g. a mid-run revoke). */
+let scriptedFollowUp: { before?: () => void; call: LlmResponse['toolCalls'][number] } | null = null;
 let agentCalls = 0;
 const llmSpy = scopedSpy(llm, 'callLlm', async (_prompt, options): Promise<LlmResult> => {
   if (options?.callType !== 'agent') throw new Error('no background LLM calls in this test');
   agentCalls++;
+  if (agentCalls === 2 && scriptedFollowUp) scriptedFollowUp.before?.();
   const response: LlmResponse =
     agentCalls === 1 && scriptedToolCall
       ? { content: '', toolCalls: [scriptedToolCall] }
-      : { content: 'All done.', toolCalls: [] };
+      : agentCalls === 2 && scriptedFollowUp
+        ? { content: '', toolCalls: [scriptedFollowUp.call] }
+        : { content: 'All done.', toolCalls: [] };
   return { response, interactionId: null, traceId: 't', durationMs: 0 };
 });
 
@@ -87,6 +92,7 @@ describe('approval on every agent surface (#152)', () => {
 
   afterEach(() => {
     scriptedToolCall = null;
+    scriptedFollowUp = null;
     setChatDeadlineMs(null);
     saveConfig({});
   });
@@ -267,6 +273,139 @@ describe('approval on every agent surface (#152)', () => {
       await r.runQuery('delete another');
       expect(exists(second)).toBe(false);
       expect(r.pendingApproval).toBeNull();
+    });
+  });
+
+  describe("'allow-session' approvals belong to the user who gave them (#172)", () => {
+    const ids = () => (db.prepare('SELECT id FROM transactions ORDER BY id LIMIT 3').all() as { id: number }[]).map((r) => r.id);
+    const exists = (id: number) => Boolean(db.prepare('SELECT 1 FROM transactions WHERE id = @id').get({ id }));
+
+    /** Run a delete as `userId`, answering its approval with `allow-session`. */
+    async function approveForSession(r: AgentRunnerController, id: number, userId: number | null | undefined) {
+      agentCalls = 0;
+      scriptedToolCall = { id: `tc-${id}`, name: 'delete_transaction', args: { id } };
+      const run = r.runQuery('delete one', userId === undefined ? {} : { userId });
+      await waitFor(() => r.pendingApproval);
+      r.respondToApproval('allow-session');
+      await run;
+      expect(exists(id)).toBe(false);
+    }
+
+    test("user A's approval does not wave user B's run through: B is asked", async () => {
+      const [first, second] = ids();
+      const r = runner();
+      await approveForSession(r, first, 1);
+
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc2', name: 'delete_transaction', args: { id: second } };
+      const bRun = r.runQuery('delete another', { userId: 2 });
+      expect(await waitFor(() => r.pendingApproval)).toMatchObject({ tool: 'delete_transaction', args: { id: second } });
+      expect(exists(second)).toBe(true);
+      r.respondToApproval('deny');
+      await bRun;
+      expect(exists(second)).toBe(true);
+    });
+
+    test("A's own later run in the session still skips the prompt", async () => {
+      const [first, second] = ids();
+      const r = runner();
+      await approveForSession(r, first, 1);
+
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc2', name: 'delete_transaction', args: { id: second } };
+      await r.runQuery('delete another', { userId: 1 });
+      expect(exists(second)).toBe(false);
+      expect(r.pendingApproval).toBeNull();
+      expect(r.history.at(-1)!.events.map((e) => e.event.type)).not.toContain('tool_approval');
+    });
+
+    test("B's own approval is remembered for B, not reused for an anonymous run", async () => {
+      const [first, second] = ids();
+      const r = runner();
+      await approveForSession(r, first, 2);
+
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc2', name: 'delete_transaction', args: { id: second } };
+      const anon = r.runQuery('delete another');
+      await waitFor(() => r.pendingApproval);
+      r.respondToApproval('deny');
+      await anon;
+      expect(exists(second)).toBe(true);
+    });
+
+    test('runs that name no user (TUI, auth off) share approvals as before', async () => {
+      const [first, second] = ids();
+      const r = runner();
+      await approveForSession(r, first, undefined);
+
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc2', name: 'delete_transaction', args: { id: second } };
+      await r.runQuery('delete another', { userId: null });
+      expect(exists(second)).toBe(false);
+      expect(r.pendingApproval).toBeNull();
+    });
+
+    test("clearSessionApprovals(userId) forgets that user's approvals only", async () => {
+      const [first, second, third] = ids();
+      const r = runner();
+      await approveForSession(r, first, 1);
+      await approveForSession(r, second, 2);
+
+      r.clearSessionApprovals(2);
+
+      // A is still remembered...
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc3', name: 'delete_transaction', args: { id: third } };
+      const aRun = r.runQuery('delete a third', { userId: 1 });
+      await aRun;
+      expect(exists(third)).toBe(false);
+      expect(r.pendingApproval).toBeNull();
+
+      // ...and B is asked again.
+      const fourth = (db.prepare('SELECT id FROM transactions ORDER BY id LIMIT 1').get() as { id: number }).id;
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc4', name: 'delete_transaction', args: { id: fourth } };
+      const bRun = r.runQuery('delete a fourth', { userId: 2 });
+      await waitFor(() => r.pendingApproval);
+      r.respondToApproval('deny');
+      await bRun;
+      expect(exists(fourth)).toBe(true);
+    });
+
+    test('clearSessionApprovals(userId) during a run: the same run asks again at its next write (#165)', async () => {
+      const [first, second] = ids();
+      const r = runner();
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc1', name: 'delete_transaction', args: { id: first } };
+      // Between the run's two writes the user loses (and may regain) write rights: onWriteRevoked clears theirs.
+      scriptedFollowUp = { before: () => r.clearSessionApprovals(7), call: { id: 'tc2', name: 'delete_transaction', args: { id: second } } };
+      const run = r.runQuery('delete two', { userId: 7 });
+      expect(await waitFor(() => r.pendingApproval)).toMatchObject({ args: { id: first } });
+      r.respondToApproval('allow-session');
+
+      // The approval the run holds was emptied in place, so the second delete is asked for, not waved through.
+      expect(await waitFor(() => (r.pendingApproval?.args as { id?: number } | undefined)?.id === second && r.pendingApproval)).toBeTruthy();
+      expect(exists(first)).toBe(false);
+      expect(exists(second)).toBe(true);
+      r.respondToApproval('deny');
+      await run;
+      expect(exists(second)).toBe(true);
+    });
+
+    test('clearSessionApprovals() with no user during a run: the same run asks again too', async () => {
+      const [first, second] = ids();
+      const r = runner();
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc1', name: 'delete_transaction', args: { id: first } };
+      scriptedFollowUp = { before: () => r.clearSessionApprovals(), call: { id: 'tc2', name: 'delete_transaction', args: { id: second } } };
+      const run = r.runQuery('delete two', { userId: 7 });
+      await waitFor(() => r.pendingApproval);
+      r.respondToApproval('allow-session');
+
+      expect(await waitFor(() => (r.pendingApproval?.args as { id?: number } | undefined)?.id === second && r.pendingApproval)).toBeTruthy();
+      r.respondToApproval('deny');
+      await run;
+      expect(exists(second)).toBe(true);
     });
   });
 });
