@@ -194,8 +194,9 @@ export type SessionTransition = 'started' | 'ended' | null;
 
 /**
  * Whose login the offline mirror was last unlocked for: a user id, null for no login (auth off), undefined when
- * nothing is known (never unlocked here, or wiped since). The gate keeps it apart from the screen it shows, so a
- * screen in between (an error, a re-check) cannot hide that the app now opens for someone else.
+ * nothing is known (never unlocked here, wiped since, or a pre-0.10 mirror, which never recorded one). The gate keeps
+ * it apart from the screen it shows, so a screen in between (an error, a re-check) cannot hide that the app now opens
+ * for someone else. Unknown is treated as foreign (#175): the copy may be any login's.
  */
 export type MirrorOwner = number | null | undefined;
 
@@ -224,6 +225,10 @@ export interface SettledAuthCheck {
  * each time (a wipe that found nothing is cheap, and one another tab could not finish gets another go). So is an
  * app that the server opens for a different login than `mirrorOwner`, the one the mirror was last unlocked for,
  * whatever screen showed in between (an error page, a re-check). It defaults to the login of a `previous` app.
+ * An unknown owner counts as different (#175): a 0.9 mirror never recorded one, so it may be another login's. That
+ * costs one wipe and one resync, once, after which the owner is stamped; a wipe after a login screen finds nothing.
+ * Auth off is stamped null ("no login"), and an unknown copy is wiped before that too: null must only ever mean
+ * "filled with auth off", since a later login keeps a null-owned copy (auth switched on in place).
  * An unreachable server says nothing about who is logged in, so it neither wipes nor changes the owner. An app
  * that opens after the first check of the page is a session starting in place (the WebMCP bridge resyncs); one on
  * the first check is the page load, which the bridge syncs on its own.
@@ -242,8 +247,10 @@ export function settleAuthCheck(
   const view = authGateView(check, previous, offlineLocked);
   const remount = view.kind === 'app' && (previous.kind !== 'app' || previous.userId !== view.userId);
   const serverOpensApp = view.kind === 'app' && check.kind === 'status';
-  // A different login (another tab signed in as someone else, or auth switched off) must not inherit a login's copy.
-  const switchedUser = serverOpensApp && typeof mirrorOwner === 'number' && mirrorOwner !== view.userId;
+  // A different login (another tab signed in as someone else, or auth switched off) must not inherit a login's copy,
+  // nor anyone a copy whose owner is unknown (a pre-0.10 mirror, #175).
+  const switchedUser = serverOpensApp
+    && (mirrorOwner === undefined || (typeof mirrorOwner === 'number' && mirrorOwner !== view.userId));
   const locks = view.kind === 'login' || view.kind === 'setup';
   const wipe = locks || switchedUser;
   const wasLocked = previous.kind === 'login' || previous.kind === 'setup';

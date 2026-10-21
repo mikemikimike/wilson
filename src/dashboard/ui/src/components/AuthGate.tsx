@@ -57,7 +57,8 @@ async function checkAuth(): Promise<AuthCheck> {
  * for a new login, so nothing loaded for the old session survives.
  *
  * The offline mirror follows the same decision: it is unlocked only for the app, and wiped before every login or
- * setup screen and before the app opens for a different login. Offline, a profile with auth on and no stored login
+ * setup screen and before the app opens for a different login (or one whose copy has no known owner, as a pre-0.10
+ * mirror). Offline, a profile with auth on and no stored login
  * gets the login form, never the mirror.
  */
 export function AuthGate() {
