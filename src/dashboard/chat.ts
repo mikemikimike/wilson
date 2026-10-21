@@ -534,11 +534,11 @@ export function revokeChatWritesForUser(db: Database, userId: number): boolean {
 }
 
 // deactivateUser and setUserRole call this (a hook, because auth.ts cannot import this module), so no caller of
-// either can forget the run: deactivation cancels it (#159), a demotion strips its writes (#165). The runner's
+// either can forget the run: deactivation cancels it (#159), a demotion strips its writes (#165). The user's
 // 'allow-session' approvals are dropped either way, run or not, so a user given write rights back later in the
-// same session is asked again; dropping them only ever costs a re-ask.
+// same session is asked again; dropping them only ever costs a re-ask. Other users' approvals are theirs (#172).
 onWriteRevoked((db, userId, why) => {
-  if (db === chatDb) agentRunner?.clearSessionApprovals();
+  if (db === chatDb) agentRunner?.clearSessionApprovals(userId);
   if (why === 'deactivated') cancelChatRunForUser(db, userId);
   else revokeChatWritesForUser(db, userId);
 });
@@ -720,8 +720,9 @@ export async function handleChatMessage(
     if (requestId) runner.respondToApproval('deny', requestId);
   };
   // A writer's run re-checks its owner at every write it makes (#165), so rights lost mid-run are honoured.
+  // Its 'allow-session' approvals are its owner's alone (#172); with auth off the owner is null, as before.
   const mayWrite = () => runMayWrite(runDb, user);
-  const run = runner.runQuery(query, readOnlyUser ? { approvals: 'deny' } : { mayWrite });
+  const run = runner.runQuery(query, readOnlyUser ? { approvals: 'deny' } : { mayWrite, userId: user?.id ?? null });
   const settled: Promise<void> = run.then(
     () => {},
     () => {},

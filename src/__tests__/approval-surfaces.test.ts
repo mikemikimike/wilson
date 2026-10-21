@@ -269,4 +269,101 @@ describe('approval on every agent surface (#152)', () => {
       expect(r.pendingApproval).toBeNull();
     });
   });
+
+  describe("'allow-session' approvals belong to the user who gave them (#172)", () => {
+    const ids = () => (db.prepare('SELECT id FROM transactions ORDER BY id LIMIT 3').all() as { id: number }[]).map((r) => r.id);
+    const exists = (id: number) => Boolean(db.prepare('SELECT 1 FROM transactions WHERE id = @id').get({ id }));
+
+    /** Run a delete as `userId`, answering its approval with `allow-session`. */
+    async function approveForSession(r: AgentRunnerController, id: number, userId: number | null | undefined) {
+      agentCalls = 0;
+      scriptedToolCall = { id: `tc-${id}`, name: 'delete_transaction', args: { id } };
+      const run = r.runQuery('delete one', userId === undefined ? {} : { userId });
+      await waitFor(() => r.pendingApproval);
+      r.respondToApproval('allow-session');
+      await run;
+      expect(exists(id)).toBe(false);
+    }
+
+    test("user A's approval does not wave user B's run through: B is asked", async () => {
+      const [first, second] = ids();
+      const r = runner();
+      await approveForSession(r, first, 1);
+
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc2', name: 'delete_transaction', args: { id: second } };
+      const bRun = r.runQuery('delete another', { userId: 2 });
+      expect(await waitFor(() => r.pendingApproval)).toMatchObject({ tool: 'delete_transaction', args: { id: second } });
+      expect(exists(second)).toBe(true);
+      r.respondToApproval('deny');
+      await bRun;
+      expect(exists(second)).toBe(true);
+    });
+
+    test("A's own later run in the session still skips the prompt", async () => {
+      const [first, second] = ids();
+      const r = runner();
+      await approveForSession(r, first, 1);
+
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc2', name: 'delete_transaction', args: { id: second } };
+      await r.runQuery('delete another', { userId: 1 });
+      expect(exists(second)).toBe(false);
+      expect(r.pendingApproval).toBeNull();
+      expect(r.history.at(-1)!.events.map((e) => e.event.type)).not.toContain('tool_approval');
+    });
+
+    test("B's own approval is remembered for B, not reused for an anonymous run", async () => {
+      const [first, second] = ids();
+      const r = runner();
+      await approveForSession(r, first, 2);
+
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc2', name: 'delete_transaction', args: { id: second } };
+      const anon = r.runQuery('delete another');
+      await waitFor(() => r.pendingApproval);
+      r.respondToApproval('deny');
+      await anon;
+      expect(exists(second)).toBe(true);
+    });
+
+    test('runs that name no user (TUI, auth off) share approvals as before', async () => {
+      const [first, second] = ids();
+      const r = runner();
+      await approveForSession(r, first, undefined);
+
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc2', name: 'delete_transaction', args: { id: second } };
+      await r.runQuery('delete another', { userId: null });
+      expect(exists(second)).toBe(false);
+      expect(r.pendingApproval).toBeNull();
+    });
+
+    test("clearSessionApprovals(userId) forgets that user's approvals only", async () => {
+      const [first, second, third] = ids();
+      const r = runner();
+      await approveForSession(r, first, 1);
+      await approveForSession(r, second, 2);
+
+      r.clearSessionApprovals(2);
+
+      // A is still remembered...
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc3', name: 'delete_transaction', args: { id: third } };
+      const aRun = r.runQuery('delete a third', { userId: 1 });
+      await aRun;
+      expect(exists(third)).toBe(false);
+      expect(r.pendingApproval).toBeNull();
+
+      // ...and B is asked again.
+      const fourth = (db.prepare('SELECT id FROM transactions ORDER BY id LIMIT 1').get() as { id: number }).id;
+      agentCalls = 0;
+      scriptedToolCall = { id: 'tc4', name: 'delete_transaction', args: { id: fourth } };
+      const bRun = r.runQuery('delete a fourth', { userId: 2 });
+      await waitFor(() => r.pendingApproval);
+      r.respondToApproval('deny');
+      await bRun;
+      expect(exists(fourth)).toBe(true);
+    });
+  });
 });

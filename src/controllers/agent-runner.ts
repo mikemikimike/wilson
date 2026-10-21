@@ -48,7 +48,12 @@ export class AgentRunnerController {
   private readonly onChange?: ChangeListener;
   private abortController: AbortController | null = null;
   private approvalResolve: ((decision: ApprovalDecision) => void) | null = null;
-  private sessionApprovedTools = new Set<string>();
+  /**
+   * 'allow-session' approvals, per user (#172): the dashboard chat shares one runner among every user of a
+   * profile, so one user's approval must never cover another user's run. Keyed by the run's `userId`; runs that
+   * name no user (the TUI, the dashboard with auth off) share the `null` entry, as they always have.
+   */
+  private readonly sessionApprovedTools = new Map<number | null, Set<string>>();
   private readonly approvals: 'ask' | 'deny';
 
   constructor(
@@ -159,12 +164,23 @@ export class AgentRunnerController {
   }
 
   /**
-   * Forget every 'allow-session' approval, so each later write is asked again. The dashboard chat calls it when
-   * a user loses write rights (#165): approvals given while they could write must not outlive that, even if they
-   * get them back later in the same session.
+   * Forget 'allow-session' approvals, so each later write is asked again: `userId`'s alone when given, otherwise
+   * everyone's. The dashboard chat calls it with the user who lost write rights (#165, #172): approvals given while
+   * they could write must not outlive that, even if they get them back later in the same session.
    */
-  clearSessionApprovals() {
-    this.sessionApprovedTools.clear();
+  clearSessionApprovals(userId?: number | null) {
+    if (userId === undefined) this.sessionApprovedTools.clear();
+    else this.sessionApprovedTools.delete(userId);
+  }
+
+  /** The 'allow-session' approvals of `userId` (created empty on first use). */
+  private sessionApprovalsFor(userId: number | null): Set<string> {
+    let approved = this.sessionApprovedTools.get(userId);
+    if (!approved) {
+      approved = new Set<string>();
+      this.sessionApprovedTools.set(userId, approved);
+    }
+    return approved;
   }
 
   cancelExecution() {
@@ -189,10 +205,12 @@ export class AgentRunnerController {
    * `options.mayWrite` is the run's write authority, asked again at every
    * write it makes (#165): a dashboard user demoted mid-run keeps the run's
    * reads, and each write after the demotion is denied.
+   * `options.userId` names who the run is for (#172): it reads and adds to that user's 'allow-session'
+   * approvals only. Omitted or null, the run uses the shared anonymous approvals (TUI, dashboard with auth off).
    */
   async runQuery(
     query: string,
-    options: { approvals?: 'ask' | 'deny'; mayWrite?: () => boolean } = {},
+    options: { approvals?: 'ask' | 'deny'; mayWrite?: () => boolean; userId?: number | null } = {},
   ): Promise<RunQueryResult | undefined> {
     const approvals = options.approvals ?? this.approvals;
     const controller = new AbortController();
@@ -225,11 +243,13 @@ export class AgentRunnerController {
           controller.signal.aborted || approvals === 'deny'
             ? Promise.resolve<ApprovalDecision>('deny')
             : this.requestToolApproval(request),
-        // A deny run (a viewer's chat) must not inherit the runner's shared
-        // 'allow-session' approvals — the gate would wave a write through
-        // before the handler could deny it (#159). It gets its own empty set;
-        // denials never add to it, so nothing leaks back either way.
-        sessionApprovedTools: approvals === 'deny' ? new Set<string>() : this.sessionApprovedTools,
+        // A deny run (a viewer's chat) must not inherit any 'allow-session'
+        // approvals — the gate would wave a write through before the handler
+        // could deny it (#159). It gets its own empty set; denials never add
+        // to it, so nothing leaks back either way. Any other run sees only its
+        // own user's approvals (#172).
+        sessionApprovedTools:
+          approvals === 'deny' ? new Set<string>() : this.sessionApprovalsFor(options.userId ?? null),
         ...(options.mayWrite ? { mayWrite: options.mayWrite } : {}),
       });
       const stream = agent.run(query, this.inMemoryChatHistory);
