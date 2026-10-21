@@ -250,7 +250,7 @@ describe('settleAuthCheck', () => {
     expect(settleAuthCheck({ kind: 'network-error' }, login, memoryStorage()).view).toEqual(login);
   });
 
-  test('every login or setup screen wipes the mirror first; the app never does', () => {
+  test('every login or setup screen wipes the mirror first; an app for the login that owns it never does', () => {
     const asUser: AuthCheck = { kind: 'status', status: status({ user: { id: 1, username: 'u', role: 'admin' } }), sentToken: 't' };
     const noLogin: AuthCheck = { kind: 'status', status: status({}), sentToken: null };
     const noUsers: AuthCheck = { kind: 'status', status: status({ userCount: 0 }), sentToken: null };
@@ -259,7 +259,9 @@ describe('settleAuthCheck', () => {
     expect(settleAuthCheck(noLogin, login, memoryStorage()).wipe).toBe(true);
     expect(settleAuthCheck(noUsers, { kind: 'checking' }, memoryStorage()).wipe).toBe(true);
     expect(settleAuthCheck({ kind: 'network-error' }, { kind: 'app', userId: 1 }, memoryStorage(), true).wipe).toBe(true);
-    expect(settleAuthCheck(asUser, login, memoryStorage()).wipe).toBe(false);
+    expect(settleAuthCheck(asUser, { kind: 'app', userId: 1 }, memoryStorage()).wipe).toBe(false);
+    // The login form left the owner unknown (it wiped), so the login it lets in wipes again: one that finds nothing is cheap.
+    expect(settleAuthCheck(asUser, login, memoryStorage())).toMatchObject({ wipe: true, mirrorOwner: 1 });
     expect(settleAuthCheck({ kind: 'network-error' }, { kind: 'checking' }, memoryStorage()).wipe).toBe(false);
     expect(settleAuthCheck({ kind: 'http-error', message: 'x' }, { kind: 'app', userId: 1 }, memoryStorage()).wipe).toBe(false);
   });
@@ -277,9 +279,10 @@ describe('settleAuthCheck', () => {
     // Auth switched off in place: the copy was a login's.
     expect(settleAuthCheck({ kind: 'status', status: status({ authEnabled: false }), sentToken: null }, { kind: 'app', userId: 1 }, memoryStorage()).wipe).toBe(true);
     expect(settleAuthCheck(asUser(1), { kind: 'app', userId: 1 }, memoryStorage()).wipe).toBe(false);
-    // Auth switched on in place (the copy was no login's), or the first login of the page: nothing to drop.
+    // Auth switched on in place (the copy was no login's): nothing to drop.
     expect(settleAuthCheck(asUser(1), { kind: 'app', userId: null }, memoryStorage()).wipe).toBe(false);
-    expect(settleAuthCheck(asUser(1), { kind: 'checking' }, memoryStorage()).wipe).toBe(false);
+    // The first login of a page with no known owner (a pre-0.10 mirror, #175): the copy may be anyone's.
+    expect(settleAuthCheck(asUser(1), { kind: 'checking' }, memoryStorage()).wipe).toBe(true);
   });
 
   test('a user switch wipes even when another screen showed in between: the mirror owner, not the last view, decides', () => {
@@ -297,9 +300,49 @@ describe('settleAuthCheck', () => {
     // Auth switched off after an error page: the copy was a login's.
     const off: AuthCheck = { kind: 'status', status: status({ authEnabled: false }), sentToken: null };
     expect(settleAuthCheck(off, { kind: 'unavailable', message: 'x' }, memoryStorage(), false, 1)).toMatchObject({ wipe: true, mirrorOwner: null });
-    // A copy made with auth off, or nobody's yet, has no login to protect from the next one.
+    // A copy made with auth off has no login to protect from the next one; a copy whose owner is unknown might (#175).
     expect(settleAuthCheck(asUser(1), { kind: 'unavailable', message: 'x' }, memoryStorage(), false, null).wipe).toBe(false);
-    expect(settleAuthCheck(asUser(1), { kind: 'checking' }, memoryStorage(), false, undefined).wipe).toBe(false);
+    expect(settleAuthCheck(asUser(1), { kind: 'checking' }, memoryStorage(), false, undefined).wipe).toBe(true);
+  });
+
+  test('an unknown owner is foreign (#175): the first open the server answers wipes the copy, then stamps its owner', () => {
+    const asUser = (id: number): AuthCheck => ({ kind: 'status', status: status({ user: { id, username: 'u', role: 'admin' } }), sentToken: 't' });
+    const off: AuthCheck = { kind: 'status', status: status({ authEnabled: false }), sentToken: null };
+    // A 0.9 mirror never recorded whose it was: user 2 signing in on that browser must not inherit user 1's copy.
+    expect(settleAuthCheck(asUser(2), { kind: 'checking' }, memoryStorage(), false, undefined)).toEqual({
+      view: { kind: 'app', userId: 2 },
+      remount: true,
+      wipe: true,
+      session: null,
+      mirrorOwner: 2,
+    });
+    // Once stamped, the same login keeps it (one resync, once).
+    expect(settleAuthCheck(asUser(2), { kind: 'checking' }, memoryStorage(), false, 2).wipe).toBe(false);
+    // Auth off: wiped too, then owned by "no login". Stamping "none" on an unknown copy would launder it: a later
+    // login keeps a no-login copy (auth switched on in place), so "none" must only ever mean "filled with auth off".
+    expect(settleAuthCheck(off, { kind: 'checking' }, memoryStorage(), false, undefined)).toMatchObject({
+      view: { kind: 'app', userId: null },
+      wipe: true,
+      mirrorOwner: null,
+    });
+    expect(settleAuthCheck(off, { kind: 'checking' }, memoryStorage(), false, null)).toMatchObject({ wipe: false, mirrorOwner: null });
+    // Offline the server says nothing about who is signed in: nothing is wiped and the owner stays as it was
+    // (unknown, or "none" for an auth-off copy, which then keeps serving offline).
+    expect(settleAuthCheck({ kind: 'network-error' }, { kind: 'checking' }, memoryStorage(), false, undefined)).toMatchObject({
+      view: { kind: 'app', userId: null },
+      wipe: false,
+      mirrorOwner: undefined,
+    });
+    expect(settleAuthCheck({ kind: 'network-error' }, { kind: 'checking' }, memoryStorage(), false, null)).toMatchObject({
+      view: { kind: 'app', userId: null },
+      wipe: false,
+      mirrorOwner: null,
+    });
+    // An error page opens no app: nothing to wipe for yet, and the owner stays unknown for the check that does.
+    expect(settleAuthCheck({ kind: 'http-error', message: 'x' }, { kind: 'checking' }, memoryStorage(), false, undefined)).toMatchObject({
+      wipe: false,
+      mirrorOwner: undefined,
+    });
   });
 
   test('the owner follows what the server said: a login screen forgets it, an unreachable server keeps it', () => {

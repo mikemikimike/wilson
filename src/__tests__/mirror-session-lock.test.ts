@@ -24,6 +24,13 @@ import {
   type ListableStorage,
   type PoolRoot,
 } from '../dashboard/ui/src/store/mirror-session.js';
+import {
+  AUTH_TOKEN_KEY,
+  readAuthToken,
+  settleAuthCheck,
+  type AuthCheck,
+  type AuthGateView,
+} from '../dashboard/ui/src/lib/authSession.js';
 import { RECENT_MENTIONS_KEY } from '../dashboard/ui/src/lib/typeahead.js';
 import { cacheKey } from '../dashboard/ui/src/prelabel/core.js';
 import { optInKey } from '../dashboard/ui/src/prelabel/controller.js';
@@ -131,6 +138,80 @@ describe('the mirror owner (whose login it was last unlocked for)', () => {
     expect(readMirrorOwner(memoryStorage({ [MIRROR_OWNER_KEY]: '-1' }))).toBeUndefined();
     expect(readMirrorOwner(throwingStorage)).toBeUndefined();
     expect(() => writeMirrorOwner(throwingStorage, 1)).not.toThrow();
+  });
+});
+
+describe('a pre-0.10 mirror: a profile stored, no owner, no flags (#175)', () => {
+  // Exactly what 0.9.x left in localStorage (v0.9.1 mirror-client.ts / api.ts): the mirror profile after each sync
+  // pull, and the session token while signed in. No wilson_mirror_owner, no wilson_mirror_auth_profiles.
+  const preTen = (token?: string) =>
+    memoryStorage({ [MIRROR_PROFILE_KEY]: 'household', ...(token ? { [AUTH_TOKEN_KEY]: token } : {}) });
+  const asUser = (id: number): AuthCheck => ({
+    kind: 'status',
+    status: { authEnabled: true, user: { id, username: `u${id}`, role: 'admin' }, userCount: 2 },
+    sentToken: 't',
+  });
+  const authOff: AuthCheck = { kind: 'status', status: { authEnabled: false, user: null, userCount: 0 }, sentToken: null };
+
+  /** One check of a freshly loaded page, as components/AuthGate.tsx runs it (its ref starts from storage). */
+  function pageLoad(storage: ReturnType<typeof memoryStorage>, check: AuthCheck, previous: AuthGateView = { kind: 'checking' }) {
+    if (check.kind === 'status' && check.status.authEnabled) noteAuthEnabled(storage);
+    const offlineLocked = offlineLoginRequired(storage, readAuthToken(storage) !== null);
+    const settled = settleAuthCheck(check, previous, storage, offlineLocked, readMirrorOwner(storage));
+    writeMirrorOwner(storage, settled.mirrorOwner);
+    return settled;
+  }
+
+  test('reads as an unknown owner', () => {
+    expect(readMirrorOwner(preTen('u1-token'))).toBeUndefined();
+    expect(readMirrorOwner(preTen())).toBeUndefined();
+  });
+
+  test('another login on that browser wipes it before the app opens, then owns it', () => {
+    // User 1 filled it on 0.9; after the upgrade user 2 signs in (a token from the legacy dashboard, say).
+    const storage = preTen('u2-token');
+    const first = pageLoad(storage, asUser(2));
+    expect(first).toMatchObject({ view: { kind: 'app', userId: 2 }, wipe: true, mirrorOwner: 2 });
+    expect(storage.data.get(MIRROR_OWNER_KEY)).toBe('2');
+    // The next load keeps user 2's own copy.
+    expect(pageLoad(storage, asUser(2)).wipe).toBe(false);
+    // ...and a different login after that still wipes it, as for any 0.10 copy.
+    expect(pageLoad(storage, asUser(1)).wipe).toBe(true);
+  });
+
+  test('its own login pays one wipe and one resync, once', () => {
+    const storage = preTen('u1-token');
+    expect(pageLoad(storage, asUser(1)).wipe).toBe(true);
+    expect(pageLoad(storage, asUser(1)).wipe).toBe(false);
+  });
+
+  test('auth off: wiped once online and stamped "none"; offline it keeps serving, and later loads keep it', () => {
+    const storage = preTen();
+    // Offline before the first 0.10 check that reaches the server: no owner is guessed. A pre-flags copy may be an
+    // auth profile's, so it gets the offline login form (offlineLoginRequired), which wipes like every login screen.
+    expect(pageLoad(storage, { kind: 'network-error' })).toMatchObject({
+      view: { kind: 'login', offline: true },
+      wipe: true,
+      mirrorOwner: undefined,
+    });
+    expect(storage.data.has(MIRROR_OWNER_KEY)).toBe(false);
+    // Online, auth off: the unknown copy is wiped before the app opens, then owned by "no login".
+    expect(pageLoad(storage, authOff)).toMatchObject({ view: { kind: 'app', userId: null }, wipe: true, mirrorOwner: null });
+    expect(storage.data.get(MIRROR_OWNER_KEY)).toBe('none');
+    // The app's first sync pull refills it and records the profile's auth answer.
+    recordProfileAuth(storage, 'household', false);
+    // Single-user, offline: the copy serves with no login, unwiped.
+    expect(pageLoad(storage, { kind: 'network-error' })).toMatchObject({ view: { kind: 'app', userId: null }, wipe: false, mirrorOwner: null });
+    expect(pageLoad(storage, authOff).wipe).toBe(false);
+    expect(storage.data.get(MIRROR_OWNER_KEY)).toBe('none');
+  });
+
+  test('a login screen in between wipes it too (and the login after it wipes again, finding nothing)', () => {
+    const storage = preTen();
+    const login = pageLoad(storage, { kind: 'status', status: { authEnabled: true, user: null, userCount: 2 }, sentToken: null });
+    expect(login).toMatchObject({ view: { kind: 'login' }, wipe: true, mirrorOwner: undefined });
+    const signedIn = settleAuthCheck(asUser(2), login.view, storage, false, login.mirrorOwner);
+    expect(signedIn).toMatchObject({ view: { kind: 'app', userId: 2 }, wipe: true, mirrorOwner: 2 });
   });
 });
 

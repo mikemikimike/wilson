@@ -71,7 +71,8 @@ export function readAuthProfiles(storage: MirrorStorage | null): string[] {
 /**
  * The login the mirror was last unlocked for (lib/authSession.ts MirrorOwner), kept across reloads so a page that
  * opens for another login (one made in the legacy dashboard, say) still wipes the old one's copy first. A user id,
- * null for no login, undefined when unknown or unreadable.
+ * null for no login, undefined when unknown or unreadable. A pre-0.10 mirror recorded none, so the gate treats
+ * undefined as another login's and wipes before the app opens (settleAuthCheck, #175).
  */
 export function readMirrorOwner(storage: MirrorStorage | null): number | null | undefined {
   let raw: string | null | undefined;
