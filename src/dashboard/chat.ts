@@ -633,7 +633,7 @@ export function initChatSession(db: Database): void {
  */
 export async function handleChatMessage(
   query: string, sessionId?: string, contextBlock?: string, options: { user?: ChatUser | null; db?: Database } = {}
-): Promise<{ answer: string; sessionId: string | null; busy?: true; stale?: true }> {
+): Promise<{ answer: string; sessionId: string | null; busy?: true; stale?: true; failed?: true }> {
   const user = options.user ?? null;
   // The runner and the agent tools are bound to the CURRENT profile's db (initChatSession). A caller that
   // authenticated against a different db (a request that outlived a profile switch) must not run on this one.
@@ -679,13 +679,20 @@ export async function handleChatMessage(
     cancelActiveRun = () => controller.abort();
     revokeActiveRunWrites = cancelActiveRun; // a "/categorize" only writes
     chatRunOwner = user;
-    return { answer: await categorizing, sessionId: sessionId ?? chatHistory?.getSessionId() ?? null };
+    // A run in which the model answered no batch (it could not be reached, the tool failed) is marked like a
+    // failed agent turn, so no provenance badge claims a model answered it (#177).
+    const outcome = await categorizing;
+    return {
+      answer: outcome.answer,
+      sessionId: sessionId ?? chatHistory?.getSessionId() ?? null,
+      ...(outcome.failed ? { failed: true as const } : {}),
+    };
   }
   query = contextBlock ? `${contextBlock}${expansion.query}` : expansion.query;
 
   if (!agentRunner || !chatHistory) {
     logger.warn(`Dashboard chat: session not initialized`);
-    return { answer: 'Chat session not initialized.', sessionId: null };
+    return { answer: 'Chat session not initialized.', sessionId: null, failed: true };
   }
 
   // One run at a time (see activeChatRun). Checked before anything touches
@@ -756,6 +763,7 @@ export async function handleChatMessage(
         answer: `Error: The request did not finish within ${minutes >= 1 ? `${minutes} minutes` : `${chatDeadlineMs} ms`} and was cancelled. ` +
           'A local model may be too slow for this request — try a shorter question or a cloud model.',
         sessionId: chatHistory.getSessionId() ?? null,
+        failed: true,
       };
     }
     // runQuery reports its own failures through `error` and resolves undefined.
@@ -772,13 +780,16 @@ export async function handleChatMessage(
               ? writeRightsLost(denied)
               : `Cancelled — you denied ${denied}.`
           : 'No response generated.');
-    logger.info(`Dashboard chat response`, { durationMs, answerChars: answer.length });
-    return { answer, sessionId: chatHistory.getSessionId() ?? null };
+    // A turn nothing answered (the model call failed, or no answer at all) is marked, so the
+    // browser shows no provenance badge on it (#177). A denied write is the user's own choice: unmarked.
+    const failed = result ? result.failed === true : Boolean(runner.error) || !denied;
+    logger.info(`Dashboard chat response`, { durationMs, answerChars: answer.length, failed });
+    return { answer, sessionId: chatHistory.getSessionId() ?? null, ...(failed ? { failed: true as const } : {}) };
   } catch (err) {
     const durationMs = Date.now() - startTime;
     const errorMsg = err instanceof Error ? err.message : String(err);
     logger.error(`Dashboard chat error`, { durationMs, error: errorMsg });
-    return { answer: `Error: ${errorMsg}`, sessionId: chatHistory.getSessionId() ?? null };
+    return { answer: `Error: ${errorMsg}`, sessionId: chatHistory.getSessionId() ?? null, failed: true };
   } finally {
     clearTimeout(deadline);
   }
@@ -826,9 +837,15 @@ export function getCategorizeProgress(): ToolProgress | null {
  * the terminal's /categorize (src/cli.ts). Typing the command is the consent,
  * so there is no approval round-trip, and the categorizer's own small batch
  * prompt is used instead of the agent's full tool-schema prompt. Failures
- * always come back as an answer.
+ * always come back as an answer, with `failed` set when nothing answered the
+ * run (#177): the tool threw or reported an error, or every batch failed and
+ * none was applied or routed for review. A cancel is not marked (like a denied
+ * write, it is a stop, not a failure), and neither is a run that applied some
+ * rows despite batch errors.
  */
-async function runCategorizeCommand(limit: number | undefined, signal: AbortSignal, mayWrite: () => boolean): Promise<string> {
+async function runCategorizeCommand(
+  limit: number | undefined, signal: AbortSignal, mayWrite: () => boolean,
+): Promise<{ answer: string; failed?: true }> {
   const startTime = Date.now();
   const local = resolveProvider(getTaskModel('categorization')).id === 'transformers';
   const effectiveLimit = limit ?? (local ? LOCAL_CATEGORIZE_CHUNK : undefined);
@@ -852,16 +869,17 @@ async function runCategorizeCommand(limit: number | undefined, signal: AbortSign
         ? ` — send \`/categorize\` again for the next ${effectiveLimit}.`
         : '.';
     }
-    logger.info(`Dashboard /categorize`, { durationMs: Date.now() - startTime, limit: effectiveLimit, remaining });
-    return answer;
+    const failed = Boolean(data.error) || (!data.categorized && !data.routedForReview && Boolean(data.errors?.length));
+    logger.info(`Dashboard /categorize`, { durationMs: Date.now() - startTime, limit: effectiveLimit, remaining, failed });
+    return failed ? { answer, failed: true } : { answer };
   } catch (err) {
     if (signal.aborted) {
       logger.info(`Dashboard /categorize cancelled`, { durationMs: Date.now() - startTime });
-      return CATEGORIZE_CANCELLED_MESSAGE;
+      return { answer: CATEGORIZE_CANCELLED_MESSAGE };
     }
     const errorMsg = err instanceof Error ? err.message : String(err);
     logger.error(`Dashboard /categorize error`, { durationMs: Date.now() - startTime, error: errorMsg });
-    return `**Categorization failed:** ${errorMsg}`;
+    return { answer: `**Categorization failed:** ${errorMsg}`, failed: true };
   } finally {
     categorizeProgress = null;
   }

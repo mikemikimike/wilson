@@ -228,7 +228,7 @@ describe('legacy dashboard badge (src/dashboard/html.ts) agrees with provenanceB
 
   test('a failed turn (error, 409 busy, no answer) gets no "answered by" badge', () => {
     const send = html.slice(html.indexOf('async function sendChat'), html.indexOf("chatSend.addEventListener('click'"));
-    expect(send).toContain('if (res.ok && data.answer) stampProv(pending, prov, data);');
+    expect(send).toContain('if (replyAnswered(res.ok, data)) stampProv(pending, prov, data);');
     const catchBlock = send.slice(send.lastIndexOf('} catch(e) {'));
     expect(catchBlock.slice(0, catchBlock.indexOf('}', 1))).not.toContain('stampProv');
   });

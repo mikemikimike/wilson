@@ -90,6 +90,16 @@ export function provenanceBadge(p: ChatProvenance, info: ServerModelInfo = {}): 
 }
 
 /**
+ * The provenance a server reply's bubble carries: none when POST /api/chat marked the turn `failed` (the
+ * model call failed, a deadline, no answer at all), since nothing answered it (#177); otherwise the
+ * provenance decided at send time, unchanged. Only a literal `true` counts, so a malformed flag never hides
+ * a real answer's badge.
+ */
+export function replyProvenance(p: ChatProvenance, reply: { failed?: boolean }): ChatProvenance | undefined {
+  return reply.failed === true ? undefined : p;
+}
+
+/**
  * Badge per state with no server model information: the cloud-safe defaults.
  * Rendering code calls provenanceBadge() with the reply's ServerModelInfo.
  */

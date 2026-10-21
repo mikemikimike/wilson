@@ -228,6 +228,8 @@ export interface ChatResponse {
   serverProvider?: string | null;
   /** Host of the other machine a LAN runtime (Ollama via OLLAMA_BASE_URL) answered on; null otherwise. Still not local. */
   serverHost?: string | null;
+  /** True when the turn failed (model unreachable, deadline, no answer): `answer` is the error text and the bubble gets no provenance badge (#177). */
+  failed?: boolean;
 }
 
 // "@" mention wire format for POST /api/chat (validated + re-resolved from the

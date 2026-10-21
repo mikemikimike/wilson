@@ -21,7 +21,7 @@ import { ChatMarkdown, LocalChatMarkdown } from '@/lib/chatMarkdown';
 import { buildChatRequest, hasHandoffPayload } from '@/lib/chat-request';
 import { syncMirror } from '@/store/mirror-client';
 import type { PriorLocalTurn } from '@/hybrid/worker-protocol';
-import { deriveChatProvenance, isLocalProvenance, linksRenderAsText, localUnavailableNotice, provenanceBadge } from '@/hybrid/core';
+import { deriveChatProvenance, isLocalProvenance, linksRenderAsText, localUnavailableNotice, provenanceBadge, replyProvenance } from '@/hybrid/core';
 import { inTabStatusLine } from '@/hybrid/load-progress';
 import type { ChatProvenance, HybridResult, ServerModelInfo } from '@/hybrid/core';
 import { Typeahead, type TypeaheadItem } from '@/components/Typeahead';
@@ -753,14 +753,21 @@ export function ChatTab() {
           setActiveSessionId(res.sessionId);
           syncUrlSession(res.sessionId, 'replace');
         }
+        // A failed turn (the server's model unreachable, a deadline) comes back as a 200 "Error: ..." answer
+        // marked `failed`: nothing answered it, so it gets no provenance badge (#177).
+        const replyProv = replyProvenance(provenance, res);
         setMessages((prev) => [
           ...prev,
           {
             id: newId(),
             role: 'assistant',
             content: res.answer,
-            provenance,
-            serverModel: { serverModelLocal: res.serverModelLocal === true, serverProvider: res.serverProvider ?? null, serverHost: res.serverHost ?? null },
+            ...(replyProv
+              ? {
+                  provenance: replyProv,
+                  serverModel: { serverModelLocal: res.serverModelLocal === true, serverProvider: res.serverProvider ?? null, serverHost: res.serverHost ?? null },
+                }
+              : {}),
             ...(notice ? { notice } : {}),
           },
         ]);

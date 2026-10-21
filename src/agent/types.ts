@@ -179,6 +179,14 @@ export interface DoneEvent {
   totalTime: number;
   tokenUsage?: TokenUsage;
   tokensPerSecond?: number;
+  /**
+   * Set when the run ended on an error instead of an answer (the model call failed, e.g. a server Ollama that
+   * cannot be reached): `answer` is then the "Error: ..." text. Absent on a real answer. Lets the dashboard
+   * leave a provenance badge off a turn nothing answered (#177). Only set when NO model call of the run
+   * returned: once one did, the prompt and the tool results it led to reached the model, and the badge stays
+   * so where they went is still disclosed (#167), even though the turn ends on an error.
+   */
+  failed?: true;
 }
 
 /**

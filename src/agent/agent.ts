@@ -200,6 +200,10 @@ export class Agent {
 
     // Main agent loop
     let overflowRetries = 0;
+    // Set once any model call of this run returns. A later call that fails still ends the turn on an
+    // error, but it is not marked `failed`: the earlier call's prompt (and the tool results it led to)
+    // already reached the model, so the dashboard must keep disclosing where it went (#177, #167).
+    let modelAnswered = false;
     while (ctx.iteration < this.maxIterations) {
       ctx.iteration++;
       logger.debug(`Iteration ${ctx.iteration}/${this.maxIterations} starting`);
@@ -222,6 +226,7 @@ export class Agent {
           usage = result.usage;
           lastInteractionId = result.interactionId;
           overflowRetries = 0;
+          modelAnswered = true;
           break;
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
@@ -246,6 +251,7 @@ export class Agent {
           yield {
             type: 'done',
             answer: `Error: ${formatUserFacingError(errorMessage)}`,
+            ...(modelAnswered ? {} : { failed: true as const }),
             toolCalls: ctx.scratchpad.getToolCallRecords(),
             iterations: ctx.iteration,
             totalTime,

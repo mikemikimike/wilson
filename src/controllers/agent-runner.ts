@@ -15,6 +15,8 @@ type ChangeListener = () => void;
 
 export interface RunQueryResult {
   answer: string;
+  /** The run ended on an error, not an answer (DoneEvent.failed): `answer` is the error text (#177). */
+  failed?: true;
 }
 
 export interface AgentRunnerOptions {
@@ -221,6 +223,7 @@ export class AgentRunnerController {
     const controller = new AbortController();
     this.abortController = controller;
     let finalAnswer: string | undefined;
+    let finalFailed = false;
 
     const startTime = Date.now();
     const item: HistoryItem = {
@@ -261,11 +264,12 @@ export class AgentRunnerController {
       for await (const event of stream) {
         if (event.type === 'done') {
           finalAnswer = (event as DoneEvent).answer;
+          finalFailed = (event as DoneEvent).failed === true;
         }
         await this.handleEvent(event);
       }
       if (finalAnswer) {
-        return { answer: finalAnswer };
+        return finalFailed ? { answer: finalAnswer, failed: true } : { answer: finalAnswer };
       }
       return undefined;
     } catch (error) {
