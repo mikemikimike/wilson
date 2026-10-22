@@ -11,6 +11,16 @@
   "bin": {
     "wilson": "bin/wilson.js"
   },
+  "files": [
+    "bin/",
+    "src/",
+    "!src/__tests__/",
+    "!src/dashboard/ui/spike/",
+    "data/",
+    "SOUL.md",
+    "CHANGELOG.md",
+    "tsconfig.json"
+  ],
   "scripts": {
     "start": "bun run src/index.tsx",
     "dev": "bun --watch run src/index.tsx",
