@@ -11,7 +11,7 @@ bun install && (cd src/dashboard/ui && npm ci && bun run build)
 bun run typecheck
 bun test src/__tests__/<file>.test.ts      # CI runs every file in its own process
 bun run verify                              # MUST NOT TRADE OFF gate + coverage map (see below)
-bun run sandbox:up [--auth] [--name N]      # throwaway seeded dashboard; prints sandbox.json
+bun run sandbox:up [--auth] [--empty] [--name N]  # throwaway dashboard (seeded; --empty = fresh install); prints sandbox.json
 bun run sandbox:down [--name N]
 bun run e2e                                 # critical-path browser suite (pathrunner)
 bun run src/index.tsx --dashboard --port 3141
@@ -31,9 +31,11 @@ bun run src/index.tsx --dashboard --port 3141
 |---|---|---|
 | `breaker` agent | Attacks the sandboxed dashboard: races, double-submit, authz bypass, origin probes, bad input, latency | `breaker-report.md` |
 | `pathrunner` agent | Runs (or writes) `e2e/critical-paths.mjs` with agent-browser; records each path | `e2e/results/` |
+| `first-timer` agent | Blind usability walk as a brand-new visitor (agent-browser only; hook `.claude/hooks/first-timer-guard.mjs` keeps it off the code). Launched by `/first-timer` | report only |
+| `/first-timer [fresh\|seeded] [admin\|viewer]` | Starts a sandbox, briefs the first-timer with only a URL, triages its report against the specs | `.verify/first-timer/` |
 | `/direction` | Drift audit: code vs `specs/issue-*.md` + `DECISIONS.md` | report only |
 | `/prove <claim>` | Fresh agent re-checks a claim from scratch in a sandbox | report only |
-| `/security-gate` | DeepSec scan + review of the current diff against MUST NOT TRADE OFF | report only |
+| `/security-gate` | Review of the current diff against MUST NOT TRADE OFF (optional local SonarQube pre-pass, `scripts/sonar/`) | report only |
 
 Agents test only throwaway sandboxes (`bun run sandbox:up`), never the real HOME, profiles or keychain.
 

@@ -2,17 +2,17 @@
 /**
  * Start a THROWAWAY Wilson dashboard for agents (breaker, pathrunner, /prove) and the verify gate.
  *
- *   bun run sandbox:up [--auth] [--port N] [--name NAME]
+ *   bun run sandbox:up [--auth] [--empty] [--port N] [--name NAME]
  *   bun run sandbox:down [--name NAME]
  *
  * Creates HOME=/private/tmp/claude-501/wilson-sandbox/<name>, seeds it with scripts/webmcp-live-seed.ts (obviously fake
- * rows), optionally turns auth on with demo-only users (scripts/sandbox/users.ts), starts the dashboard on a free port
+ * rows) unless --empty (a fresh install: no profile, no data, for the first-timer agent), optionally turns auth on with demo-only users (scripts/sandbox/users.ts), starts the dashboard on a free port
  * with the keychain shim first on PATH, waits until it answers, and writes <home>/sandbox.json:
  *   { name, home, port, base, pid, auth, users?, log }
  * Your real ~/.openaccountant and login keychain are never touched: the seed guard refuses any HOME outside
  * /private/tmp, and the `security` shim makes the app fall back to plaintext SQLite.
  */
-import { existsSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { SANDBOX_USERS } from './users.js';
 
@@ -26,6 +26,7 @@ const name = opt('name') ?? 'default';
 if (!/^[\w-]+$/.test(name)) throw new Error(`bad --name ${name}`);
 const home = join(ROOT, name);
 const auth = flag('auth');
+const empty = flag('empty');
 
 async function freePort(): Promise<number> {
   const s = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } });
@@ -48,7 +49,11 @@ const run = (script: string) => {
     throw new Error(`${script} failed (exit ${r.exitCode})`);
   }
 };
-run('scripts/webmcp-live-seed.ts');
+// The seed writes this shim too; --empty skips the seed, so write it here so the app never reaches the keychain.
+mkdirSync(shimDir, { recursive: true });
+writeFileSync(join(shimDir, 'security'), '#!/bin/sh\nexit 44\n');
+chmodSync(join(shimDir, 'security'), 0o755);
+if (!empty) run('scripts/webmcp-live-seed.ts');
 if (auth) run('scripts/sandbox/enable-auth.ts');
 
 const port = Number(opt('port') ?? (await freePort()));
@@ -71,7 +76,7 @@ for (;;) {
   await Bun.sleep(250);
 }
 
-const info = { name, home, port, base, pid: proc.pid, auth, users: auth ? SANDBOX_USERS : undefined, log };
+const info = { name, home, port, base, pid: proc.pid, auth, empty, users: auth ? SANDBOX_USERS : undefined, log };
 writeFileSync(join(home, 'sandbox.json'), JSON.stringify(info, null, 2));
 console.log(JSON.stringify(info, null, 2));
 process.exit(0);
