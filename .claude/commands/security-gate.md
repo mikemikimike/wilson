@@ -21,7 +21,7 @@ Arguments: `$ARGUMENTS`
   `/private/tmp/claude-501/wilson-sandbox/<name>/sandbox.json`; demo-only creds) and ALWAYS
   `bun run sandbox:down --name sg-<unique>` when done.
 - Do not print financial values or tokens into the report; cite `file:line` only.
-- Only `.claude/commands/`, `.deepsec/` and the scratchpad may be written to by this command. No edits under `src/`.
+- Only `.claude/commands/`, `/private/tmp/claude-501/wilson-sonar/` (scan output) and the scratchpad may be written to by this command. No edits under `src/`.
 
 ## Step 1: Scope
 
@@ -34,39 +34,29 @@ Arguments: `$ARGUMENTS`
    MCP/WebMCP, UI, specs/docs. Pass the file list and `git diff $BASE...HEAD` to every lens agent.
 4. Empty scope: report "nothing to gate" and still run Step 4.
 
-## Step 2: DeepSec (optional pre-pass; skip silently unless enabled)
+## Step 2: SonarQube (local, optional pre-pass)
 
-DeepSec (npm `deepsec`, vercel-labs/deepsec, pinned 2.3.10) is an AI scanner. **It sends source code to a model
-provider**, so it is opt-in and never runs by default. Egress facts (from the 2.3.10 package, `dist/cli.mjs`):
+DeepSec was evaluated and skipped (needs a Vercel project plus a cloud model, so source would leave the machine: NN-01).
 
-- Default model route is Vercel AI Gateway `https://ai-gateway.vercel.sh` (cli.mjs:73524, 73598-73600); direct routes call
-  `api.anthropic.com` / `api.openai.com` (cli.mjs:73528, 73532, 82969-82970). Vercel API is also contacted for OIDC
-  token refresh (cli.mjs:4166).
-- `init` always links `.deepsec/` to a Vercel project and requires a Vercel login or token (docs/vercel-setup.md).
-  There is no local-model (Ollama) route; the only non-vendor option is a custom HTTPS provider (Pi backend).
-- Optional `sandbox` commands tar the working tree and upload it to Vercel Sandbox (cli.mjs:83020). Do not use them.
-- It behaves as a coding agent with shell access on the host. No telemetry/analytics client was found in cli.mjs.
-
-Run only if ALL are true: `.deepsec/` exists AND `DEEPSEC_ENABLED=1` is set in the environment AND a model key is
-already configured by Jd (name the env var, never print its value). Otherwise write "DeepSec: skipped (not enabled)".
-
-Setup (Jd does this once, not you): `npx deepsec@2.3.10 init` from the repo root creates `.deepsec/` (state, findings,
-`deepsec.config.ts`, `.vercel/`, `.env.local`). Gitignore `.deepsec/.env.local`, `.deepsec/.vercel/`,
-`.deepsec/data/*/files|runs`; reports under `.deepsec/reports/` are fine to keep once reviewed.
-Set `ignorePaths` in `.deepsec/data/<id>/config.json` to `data/**`, `demos/media/**`, `**/*.db`, `**/.env*`,
-`node_modules/**`, `.openaccountant*/**` so no financial or secret material is uploaded.
-
-Scan (diff only, to bound cost and egress), from `.deepsec/`:
+Opt-in: run only if the local server is already up (`curl -fsS http://127.0.0.1:9000/api/system/status` shows
+`"status":"UP"`); otherwise write "SonarQube: skipped (server not up)" and never start it yourself. Jd starts it with
+`scripts/sonar/up.sh` (Docker, 127.0.0.1 only, telemetry and update-center off, scanner container has no network
+route out; see `scripts/sonar/README.md`). Never use SonarCloud.
 
 ```bash
-cd .deepsec
-npx deepsec process --diff "$BASE" --max-cost-usd 5   # AI review of changed files only
-npx deepsec export --format md-dir --out ./findings
+scripts/sonar/scan.sh "$PWD" "wilson-sg-$(git rev-parse --short HEAD)"
+# -> /private/tmp/claude-501/wilson-sonar/out/<key>/{issues.json,hotspots.json,summary.md}
 ```
 
-Triage each DeepSec finding against the threat model: if it matches a T-number, cite it and mark "known" (not new)
-when a §8 invariant test covers it; if it matches a §7 accepted risk, mark "accepted" (not a finding). Everything
-left goes into Step 3's refute pass as a candidate.
+Read `summary.md` / the JSON (token and admin password stay in `/private/tmp/claude-501/wilson-sonar/`; never print them).
+It scans the whole tree, so keep only findings whose `file:line` is in the Step 1 scope. Drop obvious noise first:
+`S2245` on non-security randomness (ids, jitter, spinner verbs), `S4036` PATH on fixed `Bun.spawn` of system tools,
+`S5443` on `/private/tmp` scratch paths in scripts, CSS `S4659`, and every code smell.
+
+Triage each remaining finding against `specs/webmcp-threat-model.md`: if it matches a T-number (§6), cite it and mark
+"known" when a §8 invariant test covers it; if it matches a §7 accepted risk, mark "accepted" (not a finding).
+Everything left goes into Step 3's refute pass as a candidate. Note that type-aware rules are off in this setup
+(`disableTypeChecking`), so SonarQube is a cheap lint-grade pre-pass, not a substitute for the four lenses.
 
 ## Step 3: Parallel review lenses
 
@@ -98,7 +88,7 @@ finding without a `file:line` that the agent actually read.
 
 ### Adversarial refute pass
 
-For EACH finding (including triaged DeepSec ones) launch a separate skeptic subagent that tries to refute it:
+For EACH finding (including triaged SonarQube ones) launch a separate skeptic subagent that tries to refute it:
 read the cited code, trace callers, look for a gate upstream, check the tests and §7. Verdict per finding:
 `CONFIRMED` (could not refute), `DOWNGRADED` (real but lower severity / already contained), or `REFUTED` (drop, but
 list the one-line reason). Optionally reproduce against a sandbox (`sandbox:up --auth`, curl localhost with a foreign
@@ -115,7 +105,7 @@ as the fallback, flagged in the verdict.
 
 - **BLOCK**: any CONFIRMED High/Critical finding; any NN rule violated or without a passing check; a mutating
   route/tool in scope without gate or sweep-test coverage; new unexplained outbound host; `bun run verify` failed.
-- **PASS WITH NOTES**: only Medium/Low CONFIRMED or DOWNGRADED findings, accepted-risk reaffirmations, or DeepSec
+- **PASS WITH NOTES**: only Medium/Low CONFIRMED or DOWNGRADED findings, accepted-risk reaffirmations, or SonarQube
   skipped. List each with an owner-ready fix and a follow-up ticket suggestion.
 - **PASS**: no confirmed findings and verify green.
 
@@ -125,7 +115,7 @@ Output format (return it as the final message; do not write a report file):
 VERDICT: PASS | PASS WITH NOTES | BLOCK
 Scope: <BASE sha>..<HEAD sha>, N files (routes a, tools b, ...)
 verify: <exit code> - NN-01 ok, NN-02 ok, ... (list failures)
-DeepSec: skipped | ran (findings: n new, n known, n accepted)
+SonarQube: skipped | ran (findings in scope: n new, n known, n accepted, n noise-dropped)
 Findings (most severe first):
  1. [SEV][lens][CONFIRMED|DOWNGRADED] path/to/file.ts:LINE - one line. Rule: NN-xx / Txx. Refute attempt: <what was tried>. Fix: <suggestion>
 Refuted (dropped): <id - reason>
