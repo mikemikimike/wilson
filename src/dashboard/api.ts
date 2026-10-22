@@ -135,7 +135,7 @@ import {
 import { getSampleBySlug } from '../demo/samples.js';
 import { canWrite, mayUseChatSession, type DashboardUser } from './auth.js';
 import { getPrivacyExhibit, getPrivacyLedger, startPrivacyRun } from '../demo/privacy.js';
-import { HttpError } from './http-errors.js';
+import { HttpError, checkBody, zodMessage } from './http-errors.js';
 import { discoverSkills } from '../skills/registry.js';
 import { csvText, csvCell } from '../utils/spreadsheet-safe.js';
 import { xlsxToBuffer } from '../utils/xlsx-writer.js';
@@ -399,12 +399,6 @@ export function apiCorrectReview(db: Database, reviewId: number, body: { categor
 
 export type WriteResult<T extends object> = ({ success: true } & T) | { success: false; error: string; status: number };
 
-function zodMessage(error: z.ZodError): string {
-  return error.issues
-    .slice(0, 3)
-    .map((issue) => (issue.path.length > 0 ? `${issue.path.join('.')}: ${issue.message}` : issue.message))
-    .join('; ');
-}
 
 function isRealCalendarDate(s: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
@@ -932,6 +926,9 @@ export function apiRecordLocalChatMessage(
     return { error: `answer must be a string of at most ${MAX_LOCAL_ANSWER_CHARS} characters` };
   }
 
+  if (body?.sessionId !== undefined && body.sessionId !== null && typeof body.sessionId !== 'string') {
+    return { error: 'sessionId must be a string' };
+  }
   const supplied = typeof body?.sessionId === 'string' && body.sessionId ? body.sessionId : null;
   const existing = supplied ? getChatSessionById(db, supplied) : null;
   // The answer is the browser's and cannot be verified, so with auth on it lands only in the caller's own
@@ -1299,6 +1296,8 @@ export function apiMemories(db: Database) {
 
 const MEMORY_TYPES: MemoryInsert['memoryType'][] = ['context', 'insight', 'advice'];
 
+const MemoryCategoryBody = z.object({ category: z.string().nullable().optional() });
+
 export function apiAddMemory(db: Database, body: { memoryType?: string; content?: string; category?: string }) {
   if (!body.memoryType || !body.content) {
     throw new HttpError(400, 'memoryType and content required');
@@ -1306,10 +1305,11 @@ export function apiAddMemory(db: Database, body: { memoryType?: string; content?
   if (typeof body.content !== 'string' || !MEMORY_TYPES.includes(body.memoryType as MemoryInsert['memoryType'])) {
     throw new HttpError(400, `memoryType must be one of ${MEMORY_TYPES.join(', ')} and content must be a string`);
   }
+  checkBody(MemoryCategoryBody, body);
   const insert: MemoryInsert = {
     memoryType: body.memoryType as MemoryInsert['memoryType'],
     content: body.content,
-    category: body.category,
+    category: body.category ?? undefined,
   };
   const id = addMemory(db, insert);
   return { success: true, id };
@@ -1333,8 +1333,10 @@ export function apiGetCustomPrompt(db: Database) {
   }
 }
 
+const CustomPromptBody = z.object({ prompt: z.string().nullable().optional() });
+
 export function apiSetCustomPrompt(db: Database, body: { prompt?: string }) {
-  const prompt = body.prompt ?? '';
+  const prompt = checkBody(CustomPromptBody, body).prompt ?? '';
   db.prepare(`
     INSERT INTO dashboard_config (key, value) VALUES ('custom_prompt', @prompt)
     ON CONFLICT(key) DO UPDATE SET value = @prompt
@@ -1352,14 +1354,23 @@ export function apiEntities(db: Database) {
   }
 }
 
+// Entity fields are bound straight into SQLite: a non-string is a 400 here, not a bind-error 500.
+const EntityBody = z.object({
+  name: z.string().optional(),
+  description: z.string().nullable().optional(),
+  color: z.string().optional(),
+});
+
 export function apiCreateEntity(db: Database, body: { name?: string; description?: string; color?: string }) {
-  if (!body.name) throw new HttpError(400, 'name is required');
-  const id = createEntity(db, body as EntityInsert);
+  const fields = checkBody(EntityBody, body);
+  if (!fields.name) throw new HttpError(400, 'name is required');
+  const id = createEntity(db, fields as EntityInsert);
   return { success: true, id };
 }
 
 export function apiUpdateEntity(db: Database, id: number, body: { name?: string; description?: string; color?: string }) {
-  const success = updateEntity(db, id, body);
+  const fields = checkBody(EntityBody, body);
+  const success = updateEntity(db, id, fields as { name?: string; description?: string; color?: string });
   return { success, id };
 }
 

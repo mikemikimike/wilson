@@ -26,7 +26,8 @@ import {
 } from './api.js';
 import { validateMentions, resolveMentionContext } from './mentions.js';
 import { isBadRequest } from './spending-params.js';
-import { HttpError, jsonBody, jsonValue } from './http-errors.js';
+import { HttpError, checkBody, jsonBody, jsonValue } from './http-errors.js';
+import { z } from 'zod';
 import { buildHandoffContext, serverReadExecutor } from './local-handoff.js';
 import { apiDemoAutoBookCandidates } from '../demo/auto-book.js';
 import type { EmbedFn } from '../demo/statement-trace.js';
@@ -246,6 +247,17 @@ export interface DashboardServerOptions {
 }
 
 /** A request's JSON body, or `null` when it is missing or malformed (the route's schema then answers 400). */
+// Field types of the auth, profile and chat write bodies. A wrong type is a 400 with zod's message before any
+// hash, SQLite bind or chat run sees it (an object username was a bind 500; a number one became user "5").
+const CredentialsBody = z.object({
+  username: z.string().optional(),
+  password: z.string().optional(),
+  role: z.enum(['admin', 'viewer']).optional(),
+});
+const AuthConfigBody = z.object({ auth_enabled: z.boolean().optional() });
+const ProfileSwitchBody = z.object({ name: z.string().optional() });
+const ChatSessionBody = z.object({ sessionId: z.string().nullable().optional() });
+
 async function readJsonBody(req: Request): Promise<unknown> {
   try {
     return await req.json();
@@ -561,7 +573,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (getUserCount(activeDb) > 0) {
             return Response.json({ error: 'Admin already exists' }, { status: 400, headers });
           }
-          const body = await jsonBody<{ username?: string; password?: string }>(req);
+          const body = checkBody(CredentialsBody, await jsonBody(req));
           if (!body.username || !body.password) {
             return Response.json({ error: 'username and password required' }, { status: 400, headers });
           }
@@ -576,7 +588,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         }
 
         if (path === '/api/auth/login' && req.method === 'POST') {
-          const body = await jsonBody<{ username?: string; password?: string }>(req);
+          const body = checkBody(CredentialsBody, await jsonBody(req));
           if (!body.username || !body.password) {
             return Response.json({ error: 'username and password required' }, { status: 400, headers });
           }
@@ -611,7 +623,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (authEnabled && (!currentUser || !canManageUsers(currentUser.role))) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
-          const body = await jsonBody<{ username?: string; password?: string; role?: 'admin' | 'viewer' }>(req);
+          const body = checkBody(CredentialsBody, await jsonBody(req));
           if (!body.username || !body.password) {
             return Response.json({ error: 'username and password required' }, { status: 400, headers });
           }
@@ -651,7 +663,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (authEnabled && (!currentUser || !canManageUsers(currentUser.role))) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
-          const body = await jsonBody<{ auth_enabled?: boolean }>(req);
+          const body = checkBody(AuthConfigBody, await jsonBody(req));
           // Auth on with no active admin is a bootstrap hijack (#157): /api/auth/setup stays public
           // while no users exist, so whoever called it first would become admin. The first enable
           // goes through /api/auth/setup, which creates the admin and flips the flag in one
@@ -683,7 +695,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (authEnabled && currentUser && !canWrite(currentUser.role)) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
-          const body = await jsonBody<{ name?: string }>(req);
+          const body = checkBody(ProfileSwitchBody, await jsonBody(req));
           if (!body.name) {
             return Response.json({ error: 'name required' }, { status: 400, headers });
           }
@@ -1131,6 +1143,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (!body.query) {
             return Response.json({ error: 'query is required' }, { status: 400, headers });
           }
+          checkBody(ChatSessionBody, body);
           if (body.sessionId && chatUser && (typeof body.sessionId !== 'string' || !mayUseChatSession(activeDb, body.sessionId, chatUser))) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }

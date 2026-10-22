@@ -368,6 +368,12 @@ export function recordBrowserLocalTrace(body: BrowserTraceBody): { traceId: stri
   if (!Number.isFinite(n) || n < 0) {
     throw new Error('decisionMs must be a finite non-negative number');
   }
+  if (body?.ok !== undefined && typeof body.ok !== 'boolean') {
+    throw new Error('ok must be a boolean');
+  }
+  if (body?.error !== undefined && body.error !== null && typeof body.error !== 'string') {
+    throw new Error('error must be a string');
+  }
   const ok = body?.ok === true;
   const error = typeof body?.error === 'string' ? body.error : undefined;
   const durationMs = Math.round(n);
