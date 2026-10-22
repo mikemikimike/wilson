@@ -54,9 +54,16 @@ jobs:
         with:
           bun-version: "1.4.2"
 
-      - name: Install and test
+      - run: bun install --frozen-lockfile
+
+      # Same as ci.yml: root typecheck imports src/dashboard/ui/src/lib/chatMarkdown.tsx,
+      # which needs the UI package's own deps (separate lockfile).
+      - name: Install dashboard UI deps
+        working-directory: src/dashboard/ui
+        run: npm ci
+
+      - name: Test
         run: |
-          bun install --frozen-lockfile
           bun run typecheck
           FAIL=0
           for f in src/__tests__/*.test.ts; do
