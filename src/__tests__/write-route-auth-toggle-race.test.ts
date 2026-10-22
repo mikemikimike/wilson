@@ -31,7 +31,7 @@ const firstTxnId = (db: Database) => (db.prepare('SELECT id FROM transactions OR
 const browser = (port: number) => ({ Origin: `http://localhost:${port}`, 'Sec-Fetch-Site': 'same-origin', 'X-Wilson-Agent-Session': '10000000-0000-4000-8000-000000000001' });
 
 const CASES: RaceCase[] = [
-  { name: 'PATCH /api/transactions/:id', method: 'PATCH', path: (db) => `/api/transactions/${firstTxnId(db)}`, body: { category: 'Raced' }, writes: true },
+  { name: 'PATCH /api/transactions/:id', method: 'PATCH', path: (db) => `/api/transactions/${firstTxnId(db)}`, body: { category: 'Education' }, writes: true },
   { name: 'PUT /api/budgets/:category', method: 'PUT', path: () => '/api/budgets/Groceries', body: { monthlyLimit: 777 }, writes: true },
   { name: 'PATCH /api/goals/:id', method: 'PATCH', path: () => '/api/goals/1', body: { target_amount: 1 }, writes: false },
   { name: 'POST /api/entities', method: 'POST', path: () => '/api/entities', body: { name: 'Raced Entity' }, writes: true },

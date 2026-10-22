@@ -77,6 +77,10 @@ export class InMemoryChatHistory {
   private lastDbId: number | null = null;
   private sessionId: string | null = null;
   private sessionTitled: boolean = false;
+  /** Dashboard user the next lazily-created session belongs to (startSession); null = ownerless. */
+  private sessionOwner: number | null = null;
+  /** Whose turns `messages` holds: a dashboard user id (auth on), or null (auth off / CLI). See scopeContext. */
+  private contextOwner: number | null = null;
 
   constructor(model: string = DEFAULT_MODEL, maxTurns: number = DEFAULT_HISTORY_LIMIT) {
     this.model = model;
@@ -97,7 +101,7 @@ export class InMemoryChatHistory {
   private ensureSession(): void {
     if (this.sessionId || !this.db) return;
     try {
-      this.sessionId = createChatSession(this.db);
+      this.sessionId = createChatSession(this.db, this.sessionOwner);
     } catch {
       this.sessionId = null;
     }
@@ -117,6 +121,31 @@ export class InMemoryChatHistory {
   setSessionId(sessionId: string): void {
     this.sessionId = sessionId;
     this.sessionTitled = true; // existing sessions already have titles
+  }
+
+  /**
+   * Start a new session owned by a dashboard user (auth on), created lazily on the next message like the first one.
+   */
+  startSession(ownerUserId: number): void {
+    this.sessionId = null;
+    this.sessionTitled = false;
+    this.sessionOwner = ownerUserId;
+    this.contextOwner = ownerUserId;
+    this.clear(); // a new session starts with no conversation
+  }
+
+  /**
+   * Scope the in-memory conversation — what the next agent prompt replays (getRecentTurns) — to the user and session
+   * of the coming turn. A turn by a different owner than the one these messages came from, or (auth on) in a
+   * different session than the current one, starts from an empty history: there is no hydration from the DB
+   * (DECISIONS Q6). So no user's turns or answers ever reach another user's prompt. With auth off the owner is
+   * always null and nothing changes (the CLI and auth-off dashboard keep one running conversation, as before).
+   */
+  scopeContext(ownerUserId: number | null, sessionId: string | null): void {
+    const otherOwner = ownerUserId !== this.contextOwner;
+    const otherSession = ownerUserId !== null && sessionId !== null && sessionId !== this.sessionId;
+    if (otherOwner || otherSession) this.clear();
+    this.contextOwner = ownerUserId;
   }
 
   /**

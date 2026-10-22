@@ -30,7 +30,7 @@ const firstTxnId = (db: Database) => (db.prepare('SELECT id FROM transactions OR
 
 const CASES: HeldCase[] = [
   { name: 'POST /api/auth/users', method: 'POST', path: () => '/api/auth/users', body: { username: 'backdoor', password: 'backdoorpass1', role: 'admin' }, writes: true },
-  { name: 'PATCH /api/transactions/:id', method: 'PATCH', path: (db) => `/api/transactions/${firstTxnId(db)}`, body: { category: 'Raced' }, writes: true },
+  { name: 'PATCH /api/transactions/:id', method: 'PATCH', path: (db) => `/api/transactions/${firstTxnId(db)}`, body: { category: 'Education' }, writes: true },
   { name: 'POST /api/chat', method: 'POST', path: () => '/api/chat', body: { query: 'how much did I spend?' }, writes: false },
 ];
 

@@ -49,6 +49,7 @@ import { CATEGORIES } from '../tools/categorize/categories.js';
 import { embedTransactionIds } from '../utils/embed-on-write.js';
 import { hasLicense } from '../licensing/license.js';
 import { getCheckoutUrl } from '../licensing/upsell.js';
+import { MAX_CATEGORY_LENGTH, MAX_DESCRIPTION_LENGTH } from '../db/field-limits.js';
 import { NotFoundError, PrepareError, RubricChangedError, ToolNotFoundError } from './errors.js';
 import {
   argsHash,
@@ -151,6 +152,18 @@ const dateString = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be a date in YYYY-MM-DD format')
   .refine(isRealDate, 'must be a real calendar date in YYYY-MM-DD format');
 
+/**
+ * The editable fields of one transaction. Shared by the `update_transaction` tool and the dashboard's
+ * PATCH /api/transactions/:id, so a person and an agent are held to the same rules (breaker H1).
+ */
+export const transactionEditShape = {
+  date: dateString.optional().describe('New date, YYYY-MM-DD'),
+  description: z.string().max(MAX_DESCRIPTION_LENGTH).optional().describe('New description, up to 200 characters'),
+  amount: z.number().min(-1e9).max(1e9).optional().describe('New amount (negative=expense, positive=income)'),
+  category: z.string().max(MAX_CATEGORY_LENGTH).optional().describe('New category (existing category name)'),
+  notes: z.string().max(1000).optional().describe('New notes, up to 1000 characters'),
+};
+
 const GOAL_STATUSES = ['active', 'paused', 'completed', 'abandoned'] as const;
 
 const whatIfShape = z
@@ -204,7 +217,7 @@ export const MCP_TOOL_CATALOG: McpToolDef[] = [
     defaultPolicy: 'ask',
     zodShape: {
       id: transactionId,
-      category: z.string().min(1).max(64).describe('Existing category name, e.g. Groceries'),
+      category: z.string().min(1).max(MAX_CATEGORY_LENGTH).describe('Existing category name, e.g. Groceries'),
       entityId: z.number().int().positive().optional().describe('Optional entity ID to assign'),
     },
     example: { id: 42, category: 'Groceries' },
@@ -243,11 +256,7 @@ export const MCP_TOOL_CATALOG: McpToolDef[] = [
     defaultPolicy: 'ask',
     zodShape: {
       id: transactionId,
-      date: dateString.optional().describe('New date, YYYY-MM-DD'),
-      description: z.string().max(200).optional().describe('New description, up to 200 characters'),
-      amount: z.number().min(-1e9).max(1e9).optional().describe('New amount (negative=expense, positive=income)'),
-      category: z.string().max(64).optional().describe('New category (existing category name)'),
-      notes: z.string().max(1000).optional().describe('New notes, up to 1000 characters'),
+      ...transactionEditShape,
     },
     example: { id: 42, amount: -12.5 },
     refine: (args) =>
@@ -897,6 +906,15 @@ function findHiddenString(value: unknown, path: ReadonlyArray<PropertyKey>, key:
   return null;
 }
 
+/** The first string field holding control, bidi or zero-width characters, or null. Newlines are allowed only in notes. */
+export function findHiddenField(args: Record<string, unknown>): string | null {
+  for (const [key, value] of Object.entries(args)) {
+    const hidden = findHiddenString(value, [key], key);
+    if (hidden) return hidden;
+  }
+  return null;
+}
+
 /**
  * Validate an agent's arguments: strict zod shape, string hygiene (no control,
  * bidi or zero-width characters, so nothing renders differently on a card than
@@ -919,10 +937,8 @@ export function parseToolArgs(name: string, args: unknown): ParsedArgs {
   }
   const parsed = result.data as Record<string, unknown>;
 
-  for (const [key, value] of Object.entries(parsed)) {
-    const hidden = findHiddenString(value, [key], key);
-    if (hidden) return fail(`${hidden} contains invisible or control characters`);
-  }
+  const hidden = findHiddenField(parsed);
+  if (hidden) return fail(`${hidden} contains invisible or control characters`);
 
   const refinement = def.refine?.(parsed);
   if (refinement) return fail(refinement);
@@ -1334,13 +1350,13 @@ function getTaxDeductionByTransaction(db: Database, transactionId: number) {
     | undefined;
 }
 
-interface CategoryLookup {
+export interface CategoryLookup {
   name: string;
   label: string;
 }
 
 /** Same two-source category check the review routes use: the categories table, then the static list. */
-function lookupCategory(db: Database, raw: string): CategoryLookup | null {
+export function lookupCategory(db: Database, raw: string): CategoryLookup | null {
   const row = db
     .prepare('SELECT id, name, is_system FROM categories WHERE LOWER(name) = LOWER(@name)')
     .get({ name: raw }) as { id: number; name: string; is_system: number } | undefined;

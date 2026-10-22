@@ -596,8 +596,7 @@ describe('embed-on-write: update paths', () => {
     setEmbedOnWriteEmbedder(fake.embed);
 
     const result = await apiUpdateTransaction(db, restaurant.id, { description: 'Sushi Night' });
-    expect(result.success).toBe(true);
-    expect(result.id).toBe(restaurant.id);
+    expect(result).toEqual({ success: true, id: restaurant.id });
 
     expect(fake.calls).toEqual(['Sushi Night']);
     expect(getStoredVec(db, restaurant.id)).toEqual(fakeEmbedText('Sushi Night'));

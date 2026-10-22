@@ -1,4 +1,5 @@
 import type { Database } from '../db/compat-sqlite.js';
+import { MAX_CATEGORY_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_TEXT_FIELD_LENGTH, MAX_FILENAME_LENGTH } from '../db/field-limits.js';
 import { createHash } from 'crypto';
 import { z } from 'zod';
 import {
@@ -31,6 +32,7 @@ import {
   insertChatMessage,
   updateTransaction,
   deleteTransaction,
+  getTransactionById,
   insertTransactions,
   checkImported,
   checkExternalId,
@@ -68,6 +70,8 @@ import {
   getBudgetCountdown,
 } from '../db/daily-queries.js';
 import { checkAlerts, groupedAlertMoney } from '../alerts/engine.js';
+import { findHiddenField, lookupCategory, transactionEditShape } from '../mcp/tool-catalog.js';
+import { sanitizeUntrustedText } from '../mcp/output.js';
 import { getActiveGoals, getAllGoals, getGoalById, getGoalSnapshots, resolveGoalTarget, updateGoalStatus, upsertGoal, type GoalRow, type GoalSnapshotRow } from '../db/goal-queries.js';
 import { getActiveMemories, addMemory, deactivateMemory, type MemoryInsert } from '../db/memory-queries.js';
 import {
@@ -75,7 +79,7 @@ import {
   searchTransactionsSemantic,
   type SemanticTransactionFilters,
 } from '../db/embedding-queries.js';
-import { DEFAULT_EMBEDDING_MODEL, embedTexts } from '../utils/embeddings.js';
+import { DEFAULT_EMBEDDING_MODEL, embedTexts, isEmbeddingModelCached } from '../utils/embeddings.js';
 import { getLocalChatModelConfig } from '../model/local-chat.js';
 import { getModelPanel, setTaskOverride, validateTaskModel, type OverridableTask } from '../model/task-models.js';
 import { resolveProvider } from '../providers.js';
@@ -129,9 +133,11 @@ import {
   type BrowserTraceBody,
 } from '../demo/showdown.js';
 import { getSampleBySlug } from '../demo/samples.js';
+import { canWrite, mayUseChatSession, type DashboardUser } from './auth.js';
 import { getPrivacyExhibit, getPrivacyLedger, startPrivacyRun } from '../demo/privacy.js';
+import { HttpError } from './http-errors.js';
 import { discoverSkills } from '../skills/registry.js';
-import { csvText } from '../utils/spreadsheet-safe.js';
+import { csvText, csvCell } from '../utils/spreadsheet-safe.js';
 import { xlsxToBuffer } from '../utils/xlsx-writer.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -312,14 +318,49 @@ export function apiTransactions(db: Database, params: URLSearchParams) {
   return getTransactions(db, filters, { rules: DASHBOARD_RULES, page: { limit, offset } });
 }
 
-export async function apiUpdateTransaction(db: Database, id: number, updates: TransactionUpdate) {
-  const success = updateTransaction(db, id, updates);
-  // Description is part of the embed text — refresh the stored vector.
-  // Never fails the edit (degrade, never error).
-  if (success && updates.description !== undefined) {
-    await embedTransactionIds(db, [id]);
+/**
+ * The fields `update_transaction` lets an agent change, held to the same rules, plus the two only the dashboard sets:
+ * the entity picker and the verified flag. Anything else is refused, never stored (breaker H1).
+ */
+const TransactionPatchBody = z
+  .object({
+    ...transactionEditShape,
+    entity_id: z.number().int().positive().nullable().optional(),
+    user_verified: z.union([z.literal(0), z.literal(1), z.boolean()]).optional(),
+  })
+  .strict()
+  .refine((b) => Object.values(b).some((v) => v !== undefined), {
+    message: 'give at least one of date, description, amount, category, notes, entity_id or user_verified',
+  });
+
+/** PATCH /api/transactions/:id (admin-only route). 400 on a bad body, 404 for a missing transaction. */
+export async function apiUpdateTransaction(db: Database, id: number, body: unknown): Promise<WriteResult<{ id: number }>> {
+  const parsed = TransactionPatchBody.safeParse(body);
+  if (!parsed.success) return { success: false, error: zodMessage(parsed.error), status: 400 };
+  const hidden = findHiddenField(parsed.data);
+  if (hidden) return { success: false, error: `${hidden} contains invisible or control characters`, status: 400 };
+  if (!getTransactionById(db, id)) return { success: false, error: `transaction #${id} not found`, status: 404 };
+
+  const { user_verified, ...fields } = parsed.data;
+  const updates: TransactionUpdate = { ...fields };
+  if (user_verified !== undefined) updates.user_verified = Number(user_verified);
+  if (fields.category !== undefined) {
+    const category = lookupCategory(db, fields.category);
+    if (!category) return { success: false, error: `unknown category "${sanitizeUntrustedText(fields.category, 40)}"`, status: 400 };
+    updates.category = category.name;
   }
-  return { success, id };
+  if (fields.entity_id != null && !getEntityById(db, fields.entity_id)) {
+    return { success: false, error: `entity #${fields.entity_id} not found`, status: 400 };
+  }
+
+  if (!updateTransaction(db, id, updates)) return { success: false, error: `transaction #${id} not found`, status: 404 };
+  // Description is part of the embed text — refresh the stored vector.
+  // Fire-and-forget: never fails or delays the edit (embedTransactionIds
+  // never throws and logs its own failures).
+  if (updates.description !== undefined) {
+    void embedTransactionIds(db, [id]);
+  }
+  return { success: true, id };
 }
 
 // ── Categorization review queue ─────────────────────────────────────────────
@@ -436,6 +477,8 @@ export interface SemanticSearchResponse {
   /** Total transaction count. */
   total: number;
   model: string;
+  /** False when the embedding model is not downloaded yet — search did not run; `wilson --index` fetches it. */
+  modelReady: boolean;
 }
 
 /**
@@ -460,10 +503,13 @@ export async function apiSemanticSearch(
   const missing = countMissingTransactionTargets(db, DEFAULT_EMBEDDING_MODEL);
   const indexed = Math.max(0, total - missing);
   const model = DEFAULT_EMBEDDING_MODEL;
+  // The local engine is used only once the model is on disk — a search never
+  // triggers the model download (NN-01); the UI tells the user to run --index.
+  const modelReady = embed !== undefined || isEmbeddingModelCached(model);
 
   const q = (params.get('q') ?? '').trim();
-  if (!q) {
-    return { results: [], indexed, total, model };
+  if (!q || !modelReady) {
+    return { results: [], indexed, total, model, modelReady };
   }
 
   const parsedLimit = parseInt(params.get('limit') ?? '25', 10);
@@ -513,12 +559,12 @@ export async function apiSemanticSearch(
     }
   }
 
-  return { results, indexed, total, model };
+  return { results, indexed, total, model, modelReady };
 }
 
-export function apiDeleteTransaction(db: Database, id: number) {
-  const success = deleteTransaction(db, id);
-  return { success, id };
+export function apiDeleteTransaction(db: Database, id: number): WriteResult<{ id: number }> {
+  if (!deleteTransaction(db, id)) return { success: false, error: `transaction #${id} not found`, status: 404 };
+  return { success: true, id };
 }
 
 // ── Export ───────────────────────────────────────────────────────────────────
@@ -541,7 +587,7 @@ export function apiExportCsv(db: Database, params: URLSearchParams): string {
 
   const header = 'Date,Description,Amount,Category';
   const rows = txns.map((t) =>
-    [t.date, csvText(t.description), String(t.amount), csvText(t.category ?? '')].join(',')
+    [csvCell(t.date), csvText(t.description), csvCell(t.amount), csvText(t.category ?? '')].join(',')
   );
   return [header, ...rows].join('\n');
 }
@@ -603,7 +649,7 @@ export function apiExportNetWorthCsv(db: Database): string {
       csvText(a.account_type),
       csvText(a.account_subtype),
       csvText(a.institution ?? ''),
-      String(a.current_balance),
+      csvCell(a.current_balance),
     ].join(','));
   }
   lines.push(['','','','Total Assets', String(nw.totalAssets)].join(','));
@@ -747,18 +793,20 @@ export function apiLogs(db: Database, params: URLSearchParams) {
 
 // ── Chat ────────────────────────────────────────────────────────────────────
 
-export function apiChatHistory(db: Database) {
+/** `user` (auth on) sees only the turns of sessions it may use (auth.ts mayUseChatSession); null sees all. */
+export function apiChatHistory(db: Database, user: Pick<DashboardUser, 'id' | 'role'> | null = null) {
   try {
     const rows = getRecentChatHistory(db, 50);
-    return rows.reverse();
+    return rows.filter((r) => !user || (r.session_id !== null && mayUseChatSession(db, r.session_id, user))).reverse();
   } catch {
     return [];
   }
 }
 
-export function apiChatSessions(db: Database) {
+/** `user` (auth on) lists only its own sessions (plus ownerless ones for an admin); null lists all. */
+export function apiChatSessions(db: Database, user: Pick<DashboardUser, 'id' | 'role'> | null = null) {
   try {
-    return getChatSessions(db, 50);
+    return getChatSessions(db, 50, user ? { ownerUserId: user.id, includeOwnerless: canWrite(user.role) } : undefined);
   } catch {
     return [];
   }
@@ -863,12 +911,14 @@ export interface LocalChatRecordBody {
  * `summary` stays null: the LLM-summary pass is a server-agent behavior.
  *
  * OPERATOR VETO CANDIDATE: this is the only new write path added for hybrid
- * chat (browser-originated history append, same auth posture as POST /api/chat).
+ * chat (browser-originated history append, same auth posture as POST /api/chat:
+ * with auth on, only into a session the caller started).
  */
 export function apiRecordLocalChatMessage(
   db: Database,
   body: LocalChatRecordBody,
-): { success: true; sessionId: string } | { error: string } {
+  user: Pick<DashboardUser, 'id' | 'role'> | null = null,
+): { success: true; sessionId: string } | { error: string; forbidden?: true } {
   const query = typeof body?.query === 'string' ? body.query.trim() : '';
   const answer = typeof body?.answer === 'string' ? body.answer.trim() : '';
   if (!query || !answer) {
@@ -884,7 +934,12 @@ export function apiRecordLocalChatMessage(
 
   const supplied = typeof body?.sessionId === 'string' && body.sessionId ? body.sessionId : null;
   const existing = supplied ? getChatSessionById(db, supplied) : null;
-  const sessionId = existing ? existing.id : createChatSession(db);
+  // The answer is the browser's and cannot be verified, so with auth on it lands only in the caller's own
+  // session (auth.ts mayUseChatSession); a new one is the caller's.
+  if (existing && !mayUseChatSession(db, existing.id, user)) {
+    return { error: 'Forbidden', forbidden: true };
+  }
+  const sessionId = existing ? existing.id : createChatSession(db, user?.id ?? null);
   if (!existing) {
     updateSessionTitle(db, sessionId, query.slice(0, 100));
   }
@@ -1242,9 +1297,14 @@ export function apiMemories(db: Database) {
   }
 }
 
+const MEMORY_TYPES: MemoryInsert['memoryType'][] = ['context', 'insight', 'advice'];
+
 export function apiAddMemory(db: Database, body: { memoryType?: string; content?: string; category?: string }) {
   if (!body.memoryType || !body.content) {
-    throw new Error('memoryType and content required');
+    throw new HttpError(400, 'memoryType and content required');
+  }
+  if (typeof body.content !== 'string' || !MEMORY_TYPES.includes(body.memoryType as MemoryInsert['memoryType'])) {
+    throw new HttpError(400, `memoryType must be one of ${MEMORY_TYPES.join(', ')} and content must be a string`);
   }
   const insert: MemoryInsert = {
     memoryType: body.memoryType as MemoryInsert['memoryType'],
@@ -1293,7 +1353,7 @@ export function apiEntities(db: Database) {
 }
 
 export function apiCreateEntity(db: Database, body: { name?: string; description?: string; color?: string }) {
-  if (!body.name) throw new Error('name is required');
+  if (!body.name) throw new HttpError(400, 'name is required');
   const id = createEntity(db, body as EntityInsert);
   return { success: true, id };
 }
@@ -1374,6 +1434,25 @@ export interface ImportResult {
   error?: string;
 }
 
+/**
+ * Per-field caps for /api/import rows, shared with the agent tool validators (src/db/field-limits.ts)
+ * so imported values stay editable through update_transaction / categorize_transaction.
+ * description 200, category and category_detailed 64, other text fields 200, filename 255.
+ */
+export const IMPORT_MAX_DESCRIPTION = MAX_DESCRIPTION_LENGTH;
+export const IMPORT_MAX_CATEGORY = MAX_CATEGORY_LENGTH;
+export const IMPORT_MAX_TEXT_FIELD = MAX_TEXT_FIELD_LENGTH; // bank, merchant_name, payment_channel, external_id, account_last4
+export const IMPORT_MAX_FILENAME = MAX_FILENAME_LENGTH;
+const IMPORT_MIN_YEAR = 1900;
+const IMPORT_MAX_YEAR = 2100;
+
+/** Real calendar date (see isRealCalendarDate) within a sane statement-year range. */
+function isImportDate(s: string): boolean {
+  if (!isRealCalendarDate(s)) return false;
+  const y = Number(s.slice(0, 4));
+  return y >= IMPORT_MIN_YEAR && y <= IMPORT_MAX_YEAR;
+}
+
 function failedImport(error: string): ImportResult {
   return { status: 'failed', transactionsImported: 0, transactionsSkipped: 0, error, message: error };
 }
@@ -1390,6 +1469,15 @@ export async function apiImport(db: Database, body: ImportRequestBody): Promise<
   // 1. Validate the payload
   if (!body.filename || typeof body.filename !== 'string' || body.filename.trim() === '') {
     return failedImport('filename is required');
+  }
+  if (body.filename.length > IMPORT_MAX_FILENAME) {
+    return failedImport(`filename must be at most ${IMPORT_MAX_FILENAME} characters`);
+  }
+  if (body.bank !== undefined && body.bank !== null) {
+    if (typeof body.bank !== 'string') return failedImport('bank must be a string');
+    if (body.bank.length > IMPORT_MAX_TEXT_FIELD) {
+      return failedImport(`bank must be at most ${IMPORT_MAX_TEXT_FIELD} characters`);
+    }
   }
   if (!body.transactions) {
     return failedImport('transactions is required');
@@ -1411,17 +1499,45 @@ export async function apiImport(db: Database, body: ImportRequestBody): Promise<
       || typeof row.amount !== 'number' || !Number.isFinite(row.amount)) {
       return failedImport(`transactions[${i + 1}] must include date, description, and amount`);
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date)) {
-      return failedImport(`transactions[${i + 1}].date must be YYYY-MM-DD`);
+    const n = i + 1;
+    if (!isImportDate(row.date)) {
+      return failedImport(`transactions[${n}].date must be a real YYYY-MM-DD date`);
+    }
+    if (row.authorized_date !== undefined && (typeof row.authorized_date !== 'string' || !isImportDate(row.authorized_date))) {
+      return failedImport(`transactions[${n}].authorized_date must be a real YYYY-MM-DD date`);
+    }
+    if (row.description.length > IMPORT_MAX_DESCRIPTION) {
+      return failedImport(`transactions[${n}].description must be at most ${IMPORT_MAX_DESCRIPTION} characters`);
     }
     if (row.external_id !== undefined && (typeof row.external_id !== 'string' || row.external_id === '')) {
-      return failedImport(`transactions[${i + 1}].external_id must be a string`);
+      return failedImport(`transactions[${n}].external_id must be a string`);
+    }
+    for (const f of ['external_id', 'bank', 'merchant_name', 'category', 'category_detailed', 'payment_channel', 'account_last4'] as const) {
+      const v = row[f];
+      if (v === undefined) continue;
+      if (typeof v !== 'string') return failedImport(`transactions[${n}].${f} must be a string`);
+      const cap = f === 'category' || f === 'category_detailed' ? IMPORT_MAX_CATEGORY : IMPORT_MAX_TEXT_FIELD;
+      if (v.length > cap) {
+        return failedImport(`transactions[${n}].${f} must be at most ${cap} characters`);
+      }
+    }
+    // Categories render in dashboard filters; markup characters have no place in a category name.
+    for (const f of ['category', 'category_detailed'] as const) {
+      if (row[f] !== undefined && /[<>]/.test(row[f]!)) {
+        return failedImport(`transactions[${n}].${f} must not contain HTML`);
+      }
+    }
+    if (row.pending !== undefined && typeof row.pending !== 'boolean') {
+      return failedImport(`transactions[${n}].pending must be a boolean`);
     }
   }
 
   // 2. File-level dedup. When the client omits fileHash, hash the canonical JSON of
   //    the transactions array — best-effort (key order from the sender can differ
   //    between runs); row-level dedup via external_id is the real guarantee.
+  if (body.fileHash !== undefined && typeof body.fileHash !== 'string') {
+    return failedImport('fileHash must be a string');
+  }
   const fileHash = body.fileHash?.trim()
     ?? createHash('sha256').update(JSON.stringify(body.transactions)).digest('hex');
   const existing = checkImported(db, fileHash);
@@ -1477,8 +1593,9 @@ export async function apiImport(db: Database, body: ImportRequestBody): Promise<
   }));
   const { count, ids } = insertTransactions(db, txns);
 
-  // Embed-on-write: index the new rows immediately (never fails the import).
-  await embedTransactionIds(db, ids);
+  // Embed-on-write: index the new rows in the background — never fails or
+  // delays the import (embedTransactionIds never throws).
+  void embedTransactionIds(db, ids);
 
   // Date range (mirrors CLI step 9: lexicographic sort works for YYYY-MM-DD)
   const dates = newRows.map((t) => t.date).sort();

@@ -1,6 +1,7 @@
 import type { Database } from '../db/compat-sqlite.js';
 import { resolve as resolvePath, sep as pathSep } from 'node:path';
 import { getDashboardHtml } from './html.js';
+import { compressBytes, negotiateEncoding, varyWithEncoding, type Encoding } from './compression.js';
 import {
   apiSummary, apiPnl, apiBudgets, apiCoverage, apiBudgetLimits, apiCategories, apiCategoryOptions, apiSpendingBreakdown, apiSpendingSeries, apiSavings, apiCashflowMonthly, apiAlerts,
   apiTransactions, apiSemanticSearch, apiExportCsv, apiExportXlsx, apiExportPnlCsv, apiExportNetWorthCsv,
@@ -25,6 +26,7 @@ import {
 } from './api.js';
 import { validateMentions, resolveMentionContext } from './mentions.js';
 import { isBadRequest } from './spending-params.js';
+import { HttpError, jsonBody, jsonValue } from './http-errors.js';
 import { buildHandoffContext, serverReadExecutor } from './local-handoff.js';
 import { apiDemoAutoBookCandidates } from '../demo/auto-book.js';
 import type { EmbedFn } from '../demo/statement-trace.js';
@@ -37,7 +39,7 @@ import { initChatSession, handleChatMessage, getCategorizeProgress, nextChatMode
 import {
   isAuthEnabled, enableAuth, disableAuth, lanAuthReady, hasActiveAdmin,
   listUsers, getUserCount, deactivateUser, LastAdminError, hashPassword, insertUser, createFirstAdmin,
-  verifyLogin, validateToken, revokeToken, cleanExpiredSessions, canWrite,
+  verifyLogin, validateToken, revokeToken, cleanExpiredSessions, canWrite, mayUseChatSession,
   type DashboardUser,
 } from './auth.js';
 import {
@@ -119,6 +121,12 @@ const ASSET_MIME_TYPES: Record<string, string> = {
   '.json': 'application/json',
 };
 
+/** Types worth compressing; fonts and images are already compressed, so they go out as-is. */
+const COMPRESSIBLE_ASSET_EXTS = new Set(['.js', '.mjs', '.wasm', '.json']);
+
+/** Compressed asset bodies, keyed by path + encoding and stamped with the file's mtime/size so a rebuild is picked up. */
+const assetCompressionCache = new Map<string, { stamp: string; body: Promise<Uint8Array<ArrayBuffer>> }>();
+
 /**
  * Serve a file from the hybrid build output under /assets/.
  *
@@ -134,6 +142,7 @@ export async function serveDashboardAsset(
   pathname: string,
   dir: string,
   headers: Record<string, string>,
+  acceptEncoding?: string | null,
 ): Promise<Response> {
   const notFound = () => new Response('Not Found', { status: 404, headers });
 
@@ -149,7 +158,27 @@ export async function serveDashboardAsset(
 
   const ext = resolved.slice(resolved.lastIndexOf('.'));
   const contentType = ASSET_MIME_TYPES[ext] ?? 'application/octet-stream';
-  return new Response(file, { headers: { ...headers, 'Content-Type': contentType } });
+  const encoding = COMPRESSIBLE_ASSET_EXTS.has(ext) ? negotiateEncoding(acceptEncoding) : null;
+  if (!encoding) return new Response(file, { headers: { ...headers, 'Content-Type': contentType } });
+
+  const cacheKey = `${resolved}\0${encoding}`;
+  const stamp = `${file.lastModified}:${file.size}`;
+  let cached = assetCompressionCache.get(cacheKey);
+  if (!cached || cached.stamp !== stamp) {
+    // Cache the in-flight promise so concurrent first requests share one job; drop it on failure so a retry can succeed.
+    const job = file.arrayBuffer().then((buf) => compressBytes(new Uint8Array(buf), encoding));
+    cached = { stamp, body: job };
+    assetCompressionCache.set(cacheKey, cached);
+    job.catch(() => { if (assetCompressionCache.get(cacheKey)?.body === job) assetCompressionCache.delete(cacheKey); });
+  }
+  return new Response(await cached.body, {
+    headers: {
+      ...headers,
+      'Content-Type': contentType,
+      'Content-Encoding': encoding,
+      Vary: varyWithEncoding(headers.Vary),
+    },
+  });
 }
 
 // Profile names become path segments (see resolveProfile in profile/context.ts),
@@ -259,6 +288,10 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
     // React build not available — fall back to legacy getDashboardHtml()
   }
 
+  // The served page (HTML + bridge tag) and its compressed bodies, filled on first request.
+  let pageHtml: string | null = null;
+  const pageBodies = new Map<Encoding, Promise<Uint8Array<ArrayBuffer>>>();
+
   // Bundle the WebMCP bridge once at startup — deliberately independent of
   // the React dashboard build so the bridge works whether or not `ui/dist`
   // exists. Injected into whichever HTML the page route returns below.
@@ -348,7 +381,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         // so /assets/* is served without the auth middleware (same treatment
         // as the HTML page). Contents are build artifacts only.
         if (path.startsWith('/assets/')) {
-          return serveDashboardAsset(path, DASHBOARD_ASSETS_DIR, headers);
+          return serveDashboardAsset(path, DASHBOARD_ASSETS_DIR, headers, req.headers.get('Accept-Encoding'));
         }
 
         // ── Auth middleware ──────────────────────────────────────────
@@ -488,10 +521,19 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
 
         // ── HTML page ───────────────────────────────────────────────
         if (path === '/' || path === '/index.html') {
-          const html = injectWebMcpBridge(reactDashboardHtml ?? getDashboardHtml(port), port);
-          return new Response(html, {
-            headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' },
-          });
+          // The bridge tag is per-port, so compress after injecting; each variant is built once and reused.
+          pageHtml ??= injectWebMcpBridge(reactDashboardHtml ?? getDashboardHtml(port), port);
+          const encoding = negotiateEncoding(req.headers.get('Accept-Encoding'));
+          const pageHeaders = { ...headers, 'Content-Type': 'text/html; charset=utf-8', Vary: varyWithEncoding(headers.Vary) };
+          if (!encoding) return new Response(pageHtml, { headers: pageHeaders });
+          let body = pageBodies.get(encoding);
+          if (!body) {
+            const job = compressBytes(new TextEncoder().encode(pageHtml), encoding);
+            body = job;
+            pageBodies.set(encoding, job);
+            job.catch(() => { if (pageBodies.get(encoding) === job) pageBodies.delete(encoding); });
+          }
+          return new Response(await body, { headers: { ...pageHeaders, 'Content-Encoding': encoding } });
         }
 
         if (path === '/webmcp-bridge.js') {
@@ -519,7 +561,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (getUserCount(activeDb) > 0) {
             return Response.json({ error: 'Admin already exists' }, { status: 400, headers });
           }
-          const body = await req.json() as { username?: string; password?: string };
+          const body = await jsonBody<{ username?: string; password?: string }>(req);
           if (!body.username || !body.password) {
             return Response.json({ error: 'username and password required' }, { status: 400, headers });
           }
@@ -534,7 +576,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         }
 
         if (path === '/api/auth/login' && req.method === 'POST') {
-          const body = await req.json() as { username?: string; password?: string };
+          const body = await jsonBody<{ username?: string; password?: string }>(req);
           if (!body.username || !body.password) {
             return Response.json({ error: 'username and password required' }, { status: 400, headers });
           }
@@ -569,7 +611,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (authEnabled && (!currentUser || !canManageUsers(currentUser.role))) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
-          const body = await req.json() as { username?: string; password?: string; role?: 'admin' | 'viewer' };
+          const body = await jsonBody<{ username?: string; password?: string; role?: 'admin' | 'viewer' }>(req);
           if (!body.username || !body.password) {
             return Response.json({ error: 'username and password required' }, { status: 400, headers });
           }
@@ -609,7 +651,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (authEnabled && (!currentUser || !canManageUsers(currentUser.role))) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
-          const body = await req.json() as { auth_enabled?: boolean };
+          const body = await jsonBody<{ auth_enabled?: boolean }>(req);
           // Auth on with no active admin is a bootstrap hijack (#157): /api/auth/setup stays public
           // while no users exist, so whoever called it first would become admin. The first enable
           // goes through /api/auth/setup, which creates the admin and flips the flag in one
@@ -641,7 +683,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (authEnabled && currentUser && !canWrite(currentUser.role)) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
-          const body = await req.json() as { name?: string };
+          const body = await jsonBody<{ name?: string }>(req);
           if (!body.name) {
             return Response.json({ error: 'name required' }, { status: 400, headers });
           }
@@ -786,14 +828,15 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
             if (authEnabled && currentUser && !canWrite(currentUser.role)) {
               return Response.json({ error: 'Forbidden' }, { status: 403, headers });
             }
-            const body = await req.json() as Record<string, unknown>;
-            return Response.json(await apiUpdateTransaction(activeDb, id, body), { headers });
+            const result = await apiUpdateTransaction(activeDb, id, await jsonBody(req));
+            return Response.json(result, { status: result.success ? 200 : result.status, headers });
           }
           if (req.method === 'DELETE') {
             if (authEnabled && currentUser && !canWrite(currentUser.role)) {
               return Response.json({ error: 'Forbidden' }, { status: 403, headers });
             }
-            return Response.json(apiDeleteTransaction(activeDb, id), { headers });
+            const result = apiDeleteTransaction(activeDb, id);
+            return Response.json(result, { status: result.success ? 200 : result.status, headers });
           }
         }
 
@@ -813,7 +856,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           const id = parseInt(reviewMatch[1], 10);
           const result = reviewMatch[2] === 'confirm'
             ? apiConfirmReview(activeDb, id)
-            : apiCorrectReview(activeDb, id, await req.json() as { category?: string });
+            : apiCorrectReview(activeDb, id, await jsonBody<{ category?: string }>(req));
           auditRestWrite(`/api/reviews/:id/${reviewMatch[2]}`, result.success);
           return Response.json(result, { status: result.success ? 200 : result.status, headers });
         }
@@ -853,7 +896,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (authEnabled && currentUser && !canWrite(currentUser.role)) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
-          const body = await req.json() as Record<string, unknown>;
+          const body = await jsonBody<Record<string, unknown>>(req);
           return Response.json(apiCreateEntity(activeDb, body as { name?: string; description?: string; color?: string }), { headers });
         }
         const entityMatch = path.match(/^\/api\/entities\/(\d+)$/);
@@ -863,7 +906,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
             if (authEnabled && currentUser && !canWrite(currentUser.role)) {
               return Response.json({ error: 'Forbidden' }, { status: 403, headers });
             }
-            const body = await req.json() as Record<string, unknown>;
+            const body = await jsonBody<Record<string, unknown>>(req);
             return Response.json(apiUpdateEntity(activeDb, id, body as { name?: string; description?: string; color?: string }), { headers });
           }
           if (req.method === 'DELETE') {
@@ -880,7 +923,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (authEnabled && currentUser && !canWrite(currentUser.role)) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
-          const body = await req.json() as ImportRequestBody;
+          const body = await jsonBody<ImportRequestBody>(req);
           const result = await apiImport(activeDb, body);
           return Response.json(result, { status: result.status === 'failed' ? 400 : 200, headers });
         }
@@ -890,7 +933,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         // and mirrors /api/import's canWrite RBAC exactly.
 
         if (path === '/api/demo/trace/step' && req.method === 'POST') {
-          const body = await req.json() as { step?: unknown };
+          const body = await jsonBody<{ step?: unknown }>(req);
           if (body?.step === 'import' && authEnabled && currentUser && !canWrite(currentUser.role)) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
@@ -905,7 +948,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         // substrate's commit, after the human approves the confirmation card.
 
         if (path === '/api/demo/autobook/candidates' && req.method === 'POST') {
-          const body = await req.json() as unknown;
+          const body = await jsonValue(req);
           const result = apiDemoAutoBookCandidates(activeDb, body);
           if (!result.ok) return Response.json({ error: result.error }, { status: 400, headers });
           return Response.json({ candidates: result.candidates }, { headers });
@@ -920,7 +963,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (authEnabled && currentUser && !canWrite(currentUser.role)) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
-          const body = await req.json() as Record<string, unknown>;
+          const body = await jsonBody<Record<string, unknown>>(req);
           return Response.json(apiAddMemory(activeDb, body as { memoryType?: string; content?: string; category?: string }), { headers });
         }
         const memoryDeleteMatch = path.match(/^\/api\/memories\/(\d+)$/);
@@ -941,7 +984,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (authEnabled && currentUser && !canWrite(currentUser.role)) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
-          const body = await req.json() as { prompt?: string };
+          const body = await jsonBody<{ prompt?: string }>(req);
           return Response.json(apiSetCustomPrompt(activeDb, body), { headers });
         }
 
@@ -1062,25 +1105,34 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
 
         // ── Chat ────────────────────────────────────────────────────
 
+        // With auth on a chat session is its starter's alone (auth.ts mayUseChatSession): read and append
+        // only your own, so nobody can put words, or a forged assistant answer, into another user's history.
+        const chatUser = authEnabled && currentUser ? currentUser : null;
         if (path === '/api/chat/history') {
-          return Response.json(apiChatHistory(activeDb), { headers });
+          return Response.json(apiChatHistory(activeDb, chatUser), { headers });
         }
         if (path === '/api/chat/progress') {
           return Response.json({ progress: getCategorizeProgress() }, { headers });
         }
         if (path === '/api/chat/sessions') {
-          return Response.json(apiChatSessions(activeDb), { headers });
+          return Response.json(apiChatSessions(activeDb, chatUser), { headers });
         }
         const sessionMatch = path.match(/^\/api\/chat\/sessions\/(.+)$/);
         if (sessionMatch) {
+          if (chatUser && !mayUseChatSession(activeDb, sessionMatch[1], chatUser)) {
+            return Response.json({ error: 'Forbidden' }, { status: 403, headers });
+          }
           return Response.json(apiChatSessionHistory(activeDb, sessionMatch[1]), { headers });
         }
 
         if (path === '/api/chat' && req.method === 'POST') {
-          const body = await req.json() as { query?: string; sessionId?: string; mentions?: unknown; localHandoff?: unknown };
+          const body = await jsonBody<{ query?: string; sessionId?: string; mentions?: unknown; localHandoff?: unknown }>(req);
           // The body was read and auth re-checked centrally (readBodyThenRecheck).
           if (!body.query) {
             return Response.json({ error: 'query is required' }, { status: 400, headers });
+          }
+          if (body.sessionId && chatUser && (typeof body.sessionId !== 'string' || !mayUseChatSession(activeDb, body.sessionId, chatUser))) {
+            return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
           // Recorded verbatim in the interaction store and later normalised by training/judge reads: bound it here.
           if (typeof body.query !== 'string' || body.query.length > MAX_CHAT_QUERY_CHARS) {
@@ -1140,7 +1192,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (authEnabled && currentUser && !canWrite(currentUser.role)) {
             return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
-          const body = await req.json() as SetTaskModelBody;
+          const body = await jsonBody<SetTaskModelBody>(req);
           const result = apiSetTaskModel(body);
           if ('error' in result) {
             return Response.json(result, { status: 400, headers });
@@ -1153,10 +1205,10 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         }
 
         if (path === '/api/chat/local' && req.method === 'POST') {
-          const body = await req.json() as { query?: string; answer?: string; sessionId?: string };
-          const result = apiRecordLocalChatMessage(activeDb, body);
+          const body = await jsonBody<{ query?: string; answer?: string; sessionId?: string }>(req);
+          const result = apiRecordLocalChatMessage(activeDb, body, chatUser);
           if ('error' in result) {
-            return Response.json(result, { status: 400, headers });
+            return Response.json({ error: result.error }, { status: result.forbidden ? 403 : 400, headers });
           }
           return Response.json(result, { headers });
         }
@@ -1168,7 +1220,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         }
 
         if (path === '/api/demo/showdown/cloud' && req.method === 'POST') {
-          const body = await req.json() as Record<string, unknown>;
+          const body = await jsonBody<Record<string, unknown>>(req);
           try {
             const result = await apiDemoShowdownCloud(body);
             return Response.json(result, { headers });
@@ -1184,7 +1236,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         }
 
         if (path === '/api/demo/showdown/local' && req.method === 'POST') {
-          const body = await req.json() as Record<string, unknown>;
+          const body = await jsonBody<Record<string, unknown>>(req);
           try {
             const result = await apiDemoShowdownLocal(body);
             return Response.json(result, { headers });
@@ -1197,7 +1249,7 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         }
 
         if (path === '/api/demo/showdown/browser-trace' && req.method === 'POST') {
-          const body = await req.json() as Record<string, unknown>;
+          const body = await jsonBody<Record<string, unknown>>(req);
           try {
             const result = apiDemoShowdownBrowserTrace(body);
             return Response.json(result, { headers });
@@ -1351,10 +1403,11 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
 
         return new Response('Not Found', { status: 404, headers });
       } catch (err) {
-        return Response.json(
-          { error: err instanceof Error ? err.message : String(err) },
-          { status: 500, headers }
-        );
+        if (err instanceof HttpError) {
+          return Response.json({ error: err.message }, { status: err.status, headers });
+        }
+        console.error(`[dashboard] ${req.method} ${path} failed:`, err);
+        return Response.json({ error: 'Internal server error' }, { status: 500, headers });
       }
   };
 
