@@ -57,10 +57,11 @@ jobs:
       - run: bun install --frozen-lockfile
 
       # Same as ci.yml: root typecheck imports src/dashboard/ui/src/lib/chatMarkdown.tsx,
-      # which needs the UI package's own deps (separate lockfile).
+      # which needs the UI package's own deps (separate lockfile). --ignore-scripts:
+      # this job holds the release-bot token, and typecheck/tests need no install scripts.
       - name: Install dashboard UI deps
         working-directory: src/dashboard/ui
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Test
         run: |
