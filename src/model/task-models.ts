@@ -1,4 +1,5 @@
 import { resolveProvider, PROVIDERS as PROVIDER_DEFS } from '../providers.js';
+import { isModelLocal, providerCallLocality } from './locality.js';
 import { getModelDisplayName, isTransformersModelCached, PROVIDERS as PROVIDER_REGISTRY } from '../utils/model.js';
 import { getConfiguredModel, getSetting, setSetting } from '../utils/config.js';
 import { getOllamaModels } from '../utils/ollama.js';
@@ -85,7 +86,7 @@ export interface ModelTaskRow {
   provider: string | null;
   /** Provider display name; null when !inUse. */
   providerName: string | null;
-  /** Derived from ProviderDef.isLocal (local = Ollama/Transformers); null when !inUse. */
+  /** From isModelLocal (Ollama on loopback, not a cloud model; Transformers); null when !inUse. */
   execution: TaskExecution | null;
   /** Machine capability from the cached server-side probe — same value on every row. */
   webgpu: boolean;
@@ -119,7 +120,7 @@ function describeModel(modelId: string): ModelDescriptor {
     modelName: getModelDisplayName(modelId),
     provider: provider.id,
     providerName: provider.displayName,
-    execution: provider.isLocal ? 'local' : 'server',
+    execution: isModelLocal(modelId) ? 'local' : 'server',
   };
 }
 
@@ -240,7 +241,7 @@ export async function buildModelCatalog(webgpu: boolean): Promise<CatalogModel[]
         displayName: model.displayName,
         provider: provider.providerId,
         providerName: provider.displayName,
-        isLocal: def?.isLocal ?? false,
+        isLocal: def ? providerCallLocality(def, model.id).local : false,
         cached,
         downloadSize: model.downloadSize ?? null,
       });

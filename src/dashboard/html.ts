@@ -7,6 +7,9 @@
  * local database data — not user-supplied or external content. The renderMd()
  * function escapes ALL HTML entities before applying markdown transforms.
  */
+import { PROVENANCE_LABELS } from './chat-provenance.js';
+import { IN_TAB_PREPARING_LABEL, IN_TAB_SERVER_MEANWHILE, IN_TAB_WAITS_FOR_MODEL } from './ui/src/hybrid/load-progress.js';
+
 export function getDashboardHtml(port: number): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -106,6 +109,7 @@ export function getDashboardHtml(port: number): string {
   .chat-msg .text table { border-collapse:collapse; margin:8px 0; font-size:13px; }
   .chat-msg .text table th,.chat-msg .text table td { border:1px solid #30363d; padding:4px 8px; }
   .chat-msg .text table th { background:#21262d; }
+  .chat-model-status { font-size:12px; color:#8b949e; margin-bottom:6px; }
   .chat-input-row { display:flex; gap:8px; }
   .chat-input-row input { flex:1; background:#21262d; color:#e1e4e8; border:1px solid #30363d; padding:10px 14px; border-radius:6px; font-size:14px; }
   .chat-input-row input:focus { outline:none; border-color:#58a6ff; }
@@ -314,6 +318,7 @@ export function getDashboardHtml(port: number): string {
     </div>
     <div class="chat-main">
       <div class="chat-messages" id="chatMessages"></div>
+      <div class="chat-model-status" id="chatModelStatus" hidden></div>
       <div class="chat-input-row">
         <input type="text" id="chatInput" placeholder="Ask Open Accountant anything..." />
         <button id="chatSend">Send</button>
@@ -403,7 +408,23 @@ export function getDashboardHtml(port: number): string {
   var currentEndDate = '';
   var currentAccountId = '';
   var currentCategory = '';
-  var authToken = localStorage.getItem('oa_token') || '';
+  // One session key for both dashboards and the WebMCP bridge (see ui/src/lib/authSession.ts). A token this page
+  // stored under its old key 'oa_token' is moved over once (a token already under the shared key wins), then the
+  // old key is removed.
+  var AUTH_KEY = 'wilson_auth_token';
+  var LEGACY_AUTH_KEY = 'oa_token';
+  function readStoredToken() {
+    try {
+      var token = localStorage.getItem(AUTH_KEY);
+      var legacy = localStorage.getItem(LEGACY_AUTH_KEY);
+      if (legacy !== null) {
+        if (legacy && !token) { token = legacy; localStorage.setItem(AUTH_KEY, legacy); }
+        localStorage.removeItem(LEGACY_AUTH_KEY);
+      }
+      return token || '';
+    } catch (e) { return ''; }
+  }
+  var authToken = readStoredToken();
   var currentUser = null;
 
   function computeRange(key) {
@@ -455,6 +476,18 @@ export function getDashboardHtml(port: number): string {
     if (hybridInited || !window.WilsonHybridChat) return;
     window.WilsonHybridChat.init({ baseUrl: BASE, fetchImpl: authFetch });
     hybridInited = true;
+    // First use downloads the in-tab model in the background; the server
+    // answers meanwhile only when its model is local, otherwise turns wait.
+    // Mirrors inTabStatusLine in ui/src/hybrid/load-progress.ts.
+    if (window.WilsonHybridChat.onModelStatus) {
+      window.WilsonHybridChat.onModelStatus(function(s) {
+        var label = s && s.state === 'loading' ? (String(s.label || '').trim() || ${JSON.stringify(IN_TAB_PREPARING_LABEL)}) : '';
+        var line = !label ? '' : s.serverMeanwhile === true ? label + ${JSON.stringify(IN_TAB_SERVER_MEANWHILE)}
+          : label + (label.slice(-1) === '\u2026' ? ' ' : ' \u00b7 ') + ${JSON.stringify(IN_TAB_WAITS_FOR_MODEL)};
+        var el = document.getElementById('chatModelStatus');
+        if (el) { el.textContent = line; el.hidden = !line; }
+      });
+    }
   }
 
   // ── Auth ─────────────────────────────────────────────────────────────────
@@ -498,7 +531,7 @@ export function getDashboardHtml(port: number): string {
         var data = await res.json();
         if (!res.ok) { errDiv.textContent = data.error||'Login failed'; return; }
         authToken = data.token; currentUser = data.user;
-        localStorage.setItem('oa_token', authToken);
+        localStorage.setItem(AUTH_KEY, authToken);
         if (profileSelect && profileSelect.value) {
           await authFetch(BASE+'/api/profiles/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:profileSelect.value}) });
         }
@@ -550,7 +583,7 @@ export function getDashboardHtml(port: number): string {
         var data = await res.json();
         if (!res.ok) { errDiv.textContent = data.error||'Setup failed'; return; }
         authToken = data.token; currentUser = data.user;
-        localStorage.setItem('oa_token', authToken);
+        localStorage.setItem(AUTH_KEY, authToken);
         authOverlay.classList.add('hidden'); onAuthReady();
       } catch(e) { errDiv.textContent = e.message; }
     });
@@ -588,7 +621,7 @@ export function getDashboardHtml(port: number): string {
 
   document.getElementById('logoutBtn').addEventListener('click', async function() {
     await authFetch(BASE+'/api/auth/logout', {method:'POST'});
-    authToken = ''; currentUser = null; localStorage.removeItem('oa_token'); location.reload();
+    authToken = ''; currentUser = null; localStorage.removeItem(AUTH_KEY); location.reload();
   });
 
   // ── Profiles ────────────────────────────────────────────────────────────
@@ -890,7 +923,7 @@ export function getDashboardHtml(port: number): string {
   async function loadGoals() {
     var el = document.getElementById('goalsContent');
     try {
-      var goals = await (await authFetch(BASE+'/api/goals')).json();
+      var goals = (await (await authFetch(BASE+'/api/goals')).json()).filter(function(g) { return g.status === 'active'; });
       el.replaceChildren();
       if (!goals.length) {
         var emptyP = document.createElement('p');
@@ -1112,9 +1145,12 @@ export function getDashboardHtml(port: number): string {
   // neutralized before markdown tags are applied. Only our controlled
   // markdown transformations produce HTML in the output.
   var BT = String.fromCharCode(96), BT3 = BT+BT+BT;
-  function renderMd(text) {
+  // plainLinks: render [text](url) as just text (used for on-device model output).
+  // Quotes are escaped so an href value can never break out of its attribute, and
+  // only http(s)/mailto hrefs become anchors; anything else renders as plain text.
+  function renderMd(text, plainLinks) {
     if (!text) return '';
-    var s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    var s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     var codeBlockRe = new RegExp(BT3+'(\\\\w*)\\\\n([\\\\s\\\\S]*?)'+BT3,'g');
     s = s.replace(codeBlockRe, function(m,lang,code){return '<pre><code>'+code.replace(/\\n$/,'')+'</code></pre>';});
     s = s.replace(/((?:^\\|.+\\|$\\n?)+)/gm, function(block) {
@@ -1127,7 +1163,10 @@ export function getDashboardHtml(port: number): string {
     s = s.replace(/^### (.+)$/gm,'<h3>$1</h3>'); s = s.replace(/^## (.+)$/gm,'<h2>$1</h2>'); s = s.replace(/^# (.+)$/gm,'<h1>$1</h1>');
     s = s.replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>'); s = s.replace(/\\*(.+?)\\*/g,'<em>$1</em>');
     s = s.replace(new RegExp(BT+'([^'+BT+']+)'+BT,'g'),'<code>$1</code>');
-    s = s.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(m,label,url){
+      if (plainLinks || !/^(https?:|mailto:)/i.test(url) || url.indexOf('<') !== -1) return label;
+      return '<a href="'+url+'" target="_blank" rel="noopener">'+label+'</a>';
+    });
     s = s.replace(/((?:^[\\-\\*] .+$\\n?)+)/gm, function(block){return '<ul>'+block.trim().split('\\n').map(function(l){return '<li>'+l.replace(/^[\\-\\*] /,'')+'</li>';}).join('')+'</ul>';});
     s = s.replace(/((?:^\\d+\\. .+$\\n?)+)/gm, function(block){return '<ol>'+block.trim().split('\\n').map(function(l){return '<li>'+l.replace(/^\\d+\\. /,'')+'</li>';}).join('')+'</ol>';});
     s = s.replace(/\\n\\n+/g,'</p><p>'); s = '<p>'+s+'</p>';
@@ -1140,24 +1179,41 @@ export function getDashboardHtml(port: number): string {
     div.appendChild(el('div','sender',sender));
     var bubble = el('div','bubble'), textDiv = el('div','text');
     if (useMarkdown && text) {
-      // Safe: renderMd escapes all HTML entities before applying markdown transforms
-      textDiv.innerHTML = renderMd(text);
+      // Safe: renderMd escapes all HTML entities before applying markdown transforms.
+      // Only history replay uses useMarkdown, and replayed messages cannot be
+      // attributed local vs server, so every reloaded message shows links as text.
+      textDiv.innerHTML = renderMd(text, true);
     } else { textDiv.textContent = text||''; }
     bubble.appendChild(textDiv); div.appendChild(bubble);
     chatMessages.appendChild(div); chatMessages.scrollTop = chatMessages.scrollHeight; return div;
   }
-  // Provenance badge — mirrors deriveChatProvenance in
-  // src/dashboard/ui/src/hybrid/core.ts (matrix pinned by
+  // Provenance badge — mirrors deriveChatProvenance and provenanceBadge in
+  // src/dashboard/ui/src/hybrid/core.ts and chat-provenance.ts (matrix pinned by
   // src/__tests__/local-chat-provenance.test.ts). Inline copy because this
   // page cannot import ES modules and the hybrid chunk 404s in exactly the
-  // state ('unavailable') this badge must render.
-  var PROV_LABELS = { 'local-with-context':'answered locally · on-device', 'server-fallback':'server fallback', 'unavailable':'server agent' };
+  // state ('unavailable') this badge must render. The strings themselves are
+  // embedded from the shared PROVENANCE_LABELS. srv = the /api/chat reply:
+  // "on your laptop" only when it says the server model is local (#167).
+  var PROV_LABELS = ${JSON.stringify(PROVENANCE_LABELS)};
   function deriveProv(localAnswered, hybridPresent) {
     if (localAnswered) return 'local-with-context';
     return hybridPresent ? 'server-fallback' : 'unavailable';
   }
-  function stampProv(msgDiv, prov) {
-    var b = el('div','prov'+(prov==='local-with-context'?' prov-local':''),PROV_LABELS[prov]||'');
+  function provLabel(prov, srv) {
+    if (prov !== 'server-fallback') return PROV_LABELS[prov]||'';
+    if (srv && srv.serverModelLocal === true) return PROV_LABELS.serverLocal;
+    var who = srv && typeof srv.serverProvider === 'string' && srv.serverProvider.trim() ? srv.serverProvider.trim() : PROV_LABELS.unknownServer;
+    var host = srv && typeof srv.serverHost === 'string' && srv.serverHost.trim() ? srv.serverHost.trim() : '';
+    if (host) return PROV_LABELS.serverOtherMachine.replace('{who}', who).replace('{host}', host);
+    return PROV_LABELS.serverCloud.replace('{who}', who);
+  }
+  // Mirrors replyProvenance in chat-provenance.ts: a badge only on an ok reply with an answer that
+  // /api/chat did not mark failed (model unreachable, deadline, no answer): nothing answered those (#177).
+  function replyAnswered(ok, data) {
+    return !!ok && !!data && !!data.answer && data.failed !== true;
+  }
+  function stampProv(msgDiv, prov, srv) {
+    var b = el('div','prov'+(prov==='local-with-context'?' prov-local':''),provLabel(prov, srv));
     var bubble = msgDiv.querySelector('.bubble'); if (bubble) bubble.appendChild(b);
   }
   function renderSessionMessages(messages) {
@@ -1213,8 +1269,9 @@ export function getDashboardHtml(port: number): string {
     // in play but server answered → fallback; hybrid chunk absent → neutral.
     var prov = deriveProv(localAnswer != null, hybridPresent);
     if (localAnswer != null) {
-      // Safe: renderMd escapes all HTML entities before applying markdown transforms
-      pendingText.innerHTML = renderMd(localAnswer);
+      // Safe: renderMd escapes all HTML entities before applying markdown transforms.
+      // On-device model output is untrusted: links render as plain text.
+      pendingText.innerHTML = renderMd(localAnswer, true);
       stampProv(pending, prov);
       loadSessions();
     } else {
@@ -1225,9 +1282,10 @@ export function getDashboardHtml(port: number): string {
         if (data.sessionId) { activeSessionId = data.sessionId; isLiveSession = true; }
         // Safe: renderMd escapes all HTML entities before applying markdown transforms
         pendingText.innerHTML = renderMd(answer);
-        stampProv(pending, prov);
+        // No badge on a failed turn (409 busy, error reply marked failed, no answer): nothing answered it.
+        if (replyAnswered(res.ok, data)) stampProv(pending, prov, data);
         loadSessions();
-      } catch(e) { pendingText.textContent = 'Error: '+e.message; stampProv(pending, prov); }
+      } catch(e) { pendingText.textContent = 'Error: '+e.message; }
     }
     chatSend.disabled = false; chatMessages.scrollTop = chatMessages.scrollHeight;
   }

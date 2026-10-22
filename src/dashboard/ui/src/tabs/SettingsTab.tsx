@@ -2,8 +2,13 @@ import { useState, useMemo, useEffect } from 'react';
 import { useApi } from '@/hooks/useApi';
 import { api } from '@/api';
 import type { Memory, Entity, ModelTaskRow, CatalogModel, ModelsPanel } from '@/types';
-
-const AUTH_KEY = 'wilson_auth_token';
+import { parseDbTimestamp } from '@/format';
+import { reloadForProfileSwitch } from '@/hooks/useUrlState';
+import { AgentAccessCenter } from '@/components/agent/AgentAccessCenter';
+import { apiErrorMessage, firstAdminBody, shouldOfferFirstAdmin, validateFirstAdmin } from '@/lib/firstAdmin';
+import { clearAuthToken, notifySessionChange, writeAuthToken } from '@/lib/authSession';
+import { lockMirror } from '@/store/mirror-client';
+import { dispatchAuthSession } from '@webmcp-session';
 
 const MEMORY_TYPES = ['context', 'insight', 'advice'] as const;
 
@@ -25,25 +30,45 @@ interface ProfilesResponse {
   active: string;
 }
 
+// Mirrors the server-side check in /api/profiles/switch — keep in sync.
+const PROFILE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
 function ProfileSection() {
   const { data, loading, refetch } = useApi<ProfilesResponse>('/api/profiles');
   const [switching, setSwitching] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [addError, setAddError] = useState<string | null>(null);
 
   async function handleSwitch(name: string) {
     setSwitching(true);
+    setAddError(null);
     try {
       await api('/api/profiles/switch', {
         method: 'POST',
         body: JSON.stringify({ name }),
       });
       refetch();
-      // Reload to refresh all data
-      setTimeout(() => window.location.reload(), 300);
+      // Reload to refresh all data (dropping the old profile's filter ids)
+      setTimeout(reloadForProfileSwitch, 300);
     } catch {
-      // silent
+      setAddError('Could not switch profile.');
     } finally {
       setSwitching(false);
     }
+  }
+
+  function handleAdd() {
+    const name = newName.trim();
+    if (!PROFILE_NAME_RE.test(name)) {
+      setAddError('Use letters, numbers, "-" or "_" only (max 64 chars).');
+      return;
+    }
+    if (data?.profiles.includes(name)) {
+      setAddError(`Profile "${name}" already exists.`);
+      return;
+    }
+    setNewName('');
+    handleSwitch(name);
   }
 
   if (loading) {
@@ -57,7 +82,7 @@ function ProfileSection() {
     );
   }
 
-  if (!data || data.profiles.length <= 1) return null;
+  if (!data) return null;
 
   return (
     <div>
@@ -67,20 +92,45 @@ function ProfileSection() {
           Switch between database profiles. Each profile has its own transactions, budgets, and settings.
         </p>
         <div className="flex items-center gap-3">
-          <select
-            value={data.active}
-            onChange={(e) => handleSwitch(e.target.value)}
-            disabled={switching}
-            className="bg-surface border border-border rounded px-3 py-1.5 text-sm text-text"
-          >
-            {data.profiles.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
+          {data.profiles.length > 1 ? (
+            <select
+              value={data.active}
+              onChange={(e) => handleSwitch(e.target.value)}
+              disabled={switching}
+              className="bg-surface border border-border rounded px-3 py-1.5 text-sm text-text"
+            >
+              {data.profiles.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="text-sm text-text">{data.active} (only profile)</span>
+          )}
           {switching && <span className="text-xs text-text-muted">Switching...</span>}
         </div>
+
+        <div className="mt-3 pt-3 border-t border-border-muted flex items-center gap-2">
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => { setNewName(e.target.value); setAddError(null); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
+            disabled={switching}
+            placeholder="New profile name"
+            className="bg-surface border border-border rounded px-3 py-1.5 text-sm text-text flex-1"
+          />
+          <button
+            type="button"
+            onClick={handleAdd}
+            disabled={switching || !newName.trim()}
+            className="bg-green text-black px-3 py-1.5 rounded text-sm font-medium cursor-pointer border-none disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            + Add
+          </button>
+        </div>
+        {addError && <p className="text-xs text-red-500 mt-2">{addError}</p>}
       </div>
     </div>
   );
@@ -111,9 +161,20 @@ function SecuritySection() {
   const [newRole, setNewRole] = useState<'admin' | 'viewer'>('viewer');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // The server's reason when enabling or disabling auth is refused (e.g. the 409 for "no active admin").
+  const [toggleError, setToggleError] = useState('');
+  const [adminName, setAdminName] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminConfirm, setAdminConfirm] = useState('');
+  const [creatingAdmin, setCreatingAdmin] = useState(false);
+  const [adminError, setAdminError] = useState('');
+  // The server's reason when removing a user is refused (e.g. the 409 for the last active admin).
+  const [userError, setUserError] = useState('');
 
   const isAdmin = authStatus?.user?.role === 'admin';
   const authEnabled = authStatus?.authEnabled ?? false;
+  // Auth off and nobody to log in as: the first admin is created together with turning auth on.
+  const offerFirstAdmin = shouldOfferFirstAdmin(authStatus);
 
   useEffect(() => {
     if (authEnabled && isAdmin) {
@@ -124,14 +185,47 @@ function SecuritySection() {
   }, [authEnabled, isAdmin]);
 
   async function handleToggleAuth() {
+    setToggleError('');
     try {
       await api('/api/auth/config', {
         method: 'PATCH',
         body: JSON.stringify({ auth_enabled: !authEnabled }),
       });
       refetch();
-    } catch {
-      // silent
+      // Turning auth on with no login here (auth was off, so nobody logged in) means this tab must log in now;
+      // turning it off drops the login. Either way the gate re-checks.
+      notifySessionChange();
+    } catch (err) {
+      setToggleError(apiErrorMessage(err, `Could not ${authEnabled ? 'disable' : 'enable'} authentication.`));
+    }
+  }
+
+  // POST /api/auth/setup creates the admin and turns auth on in one step and returns that admin's session.
+  async function handleCreateFirstAdmin() {
+    const input = { username: adminName, password: adminPassword, confirm: adminConfirm };
+    const problem = validateFirstAdmin(input);
+    if (problem) {
+      setAdminError(problem);
+      return;
+    }
+    setCreatingAdmin(true);
+    setAdminError('');
+    try {
+      const res = await api<{ token?: string }>('/api/auth/setup', {
+        method: 'POST',
+        body: JSON.stringify(firstAdminBody(input)),
+      });
+      // Log in as the new admin (every later request carries this token), then re-read the auth state.
+      if (res.token) writeAuthToken(res.token);
+      setAdminName('');
+      setAdminPassword('');
+      setAdminConfirm('');
+      refetch();
+      notifySessionChange();
+    } catch (err) {
+      setAdminError(apiErrorMessage(err, 'Could not create the admin account.'));
+    } finally {
+      setCreatingAdmin(false);
     }
   }
 
@@ -157,12 +251,13 @@ function SecuritySection() {
   }
 
   async function handleDeleteUser(id: number) {
+    setUserError('');
     try {
       await api(`/api/auth/users/${id}`, { method: 'DELETE' });
       const updated = await api<DashboardUser[]>('/api/auth/users');
       setUsers(updated);
-    } catch {
-      // silent
+    } catch (err) {
+      setUserError(apiErrorMessage(err, 'Could not remove the user.'));
     }
   }
 
@@ -172,7 +267,11 @@ function SecuritySection() {
     } catch {
       // silent
     }
-    localStorage.removeItem(AUTH_KEY);
+    // The reload lands on the login view (components/AuthGate.tsx). Before it: this tab's WebMCP tools go now, and
+    // the offline copy of the ledger is deleted (other tabs do both when they see the token go).
+    clearAuthToken();
+    dispatchAuthSession('ended');
+    await lockMirror();
     window.location.reload();
   }
 
@@ -208,7 +307,7 @@ function SecuritySection() {
                 Logout ({authStatus.user.username})
               </button>
             )}
-            {(!authEnabled || isAdmin) && (
+            {((!authEnabled && !offerFirstAdmin) || isAdmin) && (
               <button
                 onClick={handleToggleAuth}
                 className={`px-3 py-1 rounded text-xs font-medium cursor-pointer border-none ${
@@ -222,6 +321,59 @@ function SecuritySection() {
             )}
           </div>
         </div>
+
+        {toggleError && (
+          <div role="alert" className="text-xs text-red">{toggleError}</div>
+        )}
+
+        {/* First admin: auth is off and no user exists, so turning auth on means creating the admin first */}
+        {offerFirstAdmin && (
+          <form
+            className="space-y-2"
+            onSubmit={(e) => { e.preventDefault(); handleCreateFirstAdmin(); }}
+          >
+            <div className="text-xs text-text-muted">
+              Create the first admin to turn on authentication. You will be logged in as this account.
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={adminName}
+                onChange={(e) => setAdminName(e.target.value)}
+                placeholder="Username"
+                autoComplete="username"
+                aria-label="Admin username"
+                className="bg-surface border border-border rounded px-2 py-1.5 text-sm text-text flex-1"
+              />
+              <input
+                type="password"
+                value={adminPassword}
+                onChange={(e) => setAdminPassword(e.target.value)}
+                placeholder="Password"
+                autoComplete="new-password"
+                aria-label="Admin password"
+                className="bg-surface border border-border rounded px-2 py-1.5 text-sm text-text flex-1"
+              />
+              <input
+                type="password"
+                value={adminConfirm}
+                onChange={(e) => setAdminConfirm(e.target.value)}
+                placeholder="Confirm password"
+                autoComplete="new-password"
+                aria-label="Confirm admin password"
+                className="bg-surface border border-border rounded px-2 py-1.5 text-sm text-text flex-1"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={creatingAdmin || !adminName.trim() || !adminPassword || !adminConfirm}
+              className="bg-green text-black px-3 py-1 rounded text-xs font-medium cursor-pointer border-none disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {creatingAdmin ? 'Creating...' : 'Create admin & enable'}
+            </button>
+            {adminError && <div role="alert" className="text-xs text-red">{adminError}</div>}
+          </form>
+        )}
 
         {/* User list (admin only, when auth enabled) */}
         {authEnabled && isAdmin && users.length > 0 && (
@@ -257,6 +409,7 @@ function SecuritySection() {
                 </div>
               ))}
             </div>
+            {userError && <div role="alert" className="text-xs text-red mt-2">{userError}</div>}
           </div>
         )}
 
@@ -347,7 +500,7 @@ function MemoryCard({
         </div>
         <div className="text-sm text-text">{memory.content}</div>
         <div className="text-xs text-text-muted mt-1">
-          {new Date(memory.created_at).toLocaleDateString()}
+          {parseDbTimestamp(memory.created_at).toLocaleDateString()}
         </div>
       </div>
       <button
@@ -949,6 +1102,7 @@ export function SettingsTab() {
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-6">
       <ModelsSection />
+      <AgentAccessCenter />
       <ProfileSection />
       <EntitySection />
       <SecuritySection />

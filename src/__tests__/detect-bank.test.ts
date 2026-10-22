@@ -48,6 +48,14 @@ describe('detectFormat', () => {
     expect(detectFormat('!Type:Bank\nD01/15/2026\nT-50.00')).toEqual({ format: 'qif', bank: 'qif' });
   });
 
+  test('detects a Quicken full export starting with !Option:AutoSwitch as QIF', () => {
+    expect(detectFormat('!Option:AutoSwitch\n!Account\nNChecking\nTBank\n^\n')).toEqual({ format: 'qif', bank: 'qif' });
+  });
+
+  test('detects a file starting with !Account as QIF', () => {
+    expect(detectFormat('!Account\nNChecking\nTBank\n^\n!Type:Bank\n')).toEqual({ format: 'qif', bank: 'qif' });
+  });
+
   test('detects QIF by D-date pattern', () => {
     expect(detectFormat('D01/15/2026\nT-50.00')).toEqual({ format: 'qif', bank: 'qif' });
   });

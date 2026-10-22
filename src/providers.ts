@@ -15,11 +15,12 @@ export interface ProviderDef {
   /** Fast model variant for lightweight tasks like summarization. */
   fastModel?: string;
   /**
-   * Where the model runs: on this device (local inference — Ollama,
-   * Transformers.js) or on a cloud server (API-keyed providers). The single
-   * place local-vs-server classification comes from — e.g. the Settings
-   * Models panel derives its "Runs on this device" / "Runs on a cloud
-   * server" badges from this.
+   * Where the provider's models CAN run: on this device (local inference —
+   * Ollama, Transformers.js) or on a cloud server (API-keyed providers).
+   * Whether a given model call actually stays local also depends on the
+   * model and base URL (an Ollama cloud model, an OLLAMA_BASE_URL on another
+   * host): every "runs on this device" claim goes through
+   * src/model/locality.ts, which starts from this flag.
    */
   isLocal: boolean;
 }
@@ -41,7 +42,7 @@ export const PROVIDERS: ProviderDef[] = [
     // webgpu-tagged id from the model catalog (src/utils/model.ts) — a test
     // cross-checks this, and the local-chat config endpoint exposes it to the
     // browser verbatim, so this is the single place to change the model.
-    fastModel: 'transformers:onnx-community/Qwen3-0.6B-ONNX',
+    fastModel: 'transformers:onnx-community/gemma-4-E2B-it-ONNX',
   },
   // Cloud providers
   {

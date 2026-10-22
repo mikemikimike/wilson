@@ -7,9 +7,27 @@
 // plus a subscribable MirrorState for the UI. Any init failure (no OPFS,
 // private mode, a second tab holding the pool lock) degrades to
 // `available: false` — the app silently stays network-only, never crashes.
+//
+// The mirror starts locked and serves nothing until the login gate
+// (components/AuthGate.tsx) lets the app in (unlockMirror). When the session
+// ends, lockMirror() wipes it before the login view shows (mirror-session.ts).
 
 import MirrorWorkerCtor from './mirror-worker.ts?worker&inline';
-import { SYNC_PULL_LIMIT, type SyncApplier } from './sync-engine.js';
+import { SYNC_PULL_LIMIT, collectSyncPayload, subagentEnabledFrom, type SyncApplier } from './sync-engine.js';
+import { isMirrorExcluded } from './mirror-reads.js';
+import { bearerHeader, readAuthToken, reportUnauthorized } from '../lib/authSession.js';
+import {
+  MIRROR_PROFILE_KEY,
+  POOL_RELEASE_RETRY_MS,
+  clearLedgerStorage,
+  listMirrorPoolProfiles,
+  profilesToWipe,
+  readStoredMirrorProfile,
+  recordProfileAuth,
+  removeMirrorPools,
+  type ListableStorage,
+  type PoolRoot,
+} from './mirror-session.js';
 import type {
   MirrorState,
   MirrorStatus,
@@ -17,10 +35,12 @@ import type {
   MirrorEntityRow,
   MirrorBudgetRow,
   MirrorCategoryRow,
+  MirrorAccountRow,
+  MirrorBalanceSnapshotRow,
+  MirrorLoanRow,
   SyncPayload,
 } from './types.js';
 
-const MIRROR_PROFILE_KEY = 'wilson_mirror_profile';
 const READY_TIMEOUT_MS = 4_000; // offline reload waits out worker/wasm boot
 const INIT_RETRY_MS = 30_000;
 const RPC_TIMEOUT_MS = 10_000;
@@ -103,13 +123,31 @@ function rpc(type: string, extra: Record<string, unknown> = {}, timeoutMs = RPC_
 
 let initPromise: Promise<MirrorState> | null = null;
 let lastFailedInitAt = 0;
+/** No login lets the app in yet, or the session ended: nothing opens, syncs or serves. */
+let locked = true;
+/** Bumped by every lock, so a sync pull that started under the old session never writes after the wipe. */
+let sessionEpoch = 0;
+/** Bumped by every lock, suspend and unlock call: an unlock that waited out a wipe applies only if none came after it. */
+let gateSeq = 0;
+
+function localStore(): Storage | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function sessionStore(): ListableStorage | null {
+  try {
+    return typeof sessionStorage === 'undefined' ? null : sessionStorage;
+  } catch {
+    return null;
+  }
+}
 
 function readStoredProfile(): string {
-  try {
-    return localStorage.getItem(MIRROR_PROFILE_KEY) ?? 'default';
-  } catch {
-    return 'default';
-  }
+  return readStoredMirrorProfile(localStore());
 }
 
 function persistProfile(profile: string): void {
@@ -150,8 +188,13 @@ async function doInit(): Promise<MirrorState> {
   return state;
 }
 
-/** Idempotently start the mirror. Resolves with the (possibly unavailable) state. */
+/**
+ * Idempotently start the mirror. Resolves with the (possibly unavailable) state. A wipe in flight finishes first,
+ * so a pool being deleted is never reopened.
+ */
 export function initMirror(): Promise<MirrorState> {
+  if (wiping) return wiping.then(() => initMirror());
+  if (locked) return Promise.resolve(state);
   if (initPromise) return initPromise;
   if (Date.now() - lastFailedInitAt < INIT_RETRY_MS) return Promise.resolve(state);
   initPromise = doInit().finally(() => {
@@ -175,12 +218,15 @@ async function ensureReady(): Promise<MirrorState> {
 // ../api.ts: a sync pull that fell back to mirror data would re-apply the
 // mirror to itself and could report "online" while the server is down.
 async function fetchJson<T>(path: string): Promise<T> {
-  const baseUrl = import.meta.env.DEV ? 'http://localhost:3141' : window.location.origin;
-  const headers: Record<string, string> = {};
-  const token = localStorage.getItem('wilson_auth_token');
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`${baseUrl}${path}`, { headers });
-  if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+  // Relative in dev, through vite's proxy, so the request is same-origin (see src/api.ts getBaseUrl).
+  const baseUrl = import.meta.env.DEV ? '' : window.location.origin;
+  const token = readAuthToken();
+  const res = await fetch(`${baseUrl}${path}`, { headers: bearerHeader(token) });
+  if (!res.ok) {
+    // Same as api(): a refused login sends the tab to the login view (and the sync stops here).
+    if (res.status === 401) reportUnauthorized(path, token);
+    throw new Error(`API ${res.status}: ${res.statusText}`);
+  }
   return (await res.json()) as T;
 }
 
@@ -201,6 +247,18 @@ const syncFetcher = {
   async fetchAllCategories(): Promise<MirrorCategoryRow[]> {
     return fetchJson<MirrorCategoryRow[]>('/api/categories');
   },
+  // Mirror v4, only ever called when the server's subagent is enabled. These are
+  // the same-origin-gated, column-projected routes (sync-routes.ts), not
+  // /api/accounts (SELECT *, which carries notes, plaid ids and account numbers).
+  async fetchAllAccounts(): Promise<MirrorAccountRow[]> {
+    return fetchJson<MirrorAccountRow[]>('/api/sync/accounts');
+  },
+  async fetchAllBalanceSnapshots(): Promise<MirrorBalanceSnapshotRow[]> {
+    return fetchJson<MirrorBalanceSnapshotRow[]>('/api/sync/balance-snapshots');
+  },
+  async fetchAllLoans(): Promise<MirrorLoanRow[]> {
+    return fetchJson<MirrorLoanRow[]>('/api/sync/loans');
+  },
 };
 
 /** The mirror, reached over worker RPC, as a SyncApplier for the sync engine. */
@@ -216,34 +274,60 @@ function rpcSyncTarget(): SyncApplier {
   };
 }
 
+/** Whether the server has auth on for its active profile (public route; read with the token like every pull). */
+async function authEnabledNow(): Promise<boolean> {
+  return (await fetchJson<{ authEnabled?: unknown }>('/api/auth/status')).authEnabled === true;
+}
+
+/**
+ * Whether the server's browser subagent is on. A failed request rejects (the sync
+ * then fails like any unreachable-server pull and the mirror keeps its last good
+ * set) rather than reading as "off", which would purge the stored balances.
+ */
+async function subagentEnabled(): Promise<boolean> {
+  return subagentEnabledFrom(await fetchJson<unknown>('/api/config/local-chat'));
+}
+
 let inFlightSync: Promise<void> | null = null;
 
 async function doSync(): Promise<void> {
+  if (locked) return;
+  const epoch = sessionEpoch;
   if (!state.available) {
     await initMirror();
     if (!state.available) return;
   }
+  // Checked right before each message to the worker (no await in between): a lock posts its wipe first, so
+  // nothing this pull sends can reopen or refill the pool after it.
+  const current = () => !locked && epoch === sessionEpoch;
   try {
     // Fetch everything BEFORE touching the pool: if any pull fails, the old
     // mirror stays intact and keeps serving its last good set.
-    const profile = await syncFetcher.fetchActiveProfile();
-    const [transactions, entities, budgets, categories] = await Promise.all([
-      syncFetcher.fetchAllTransactions(),
-      syncFetcher.fetchAllEntities(),
-      syncFetcher.fetchAllBudgets(),
-      syncFetcher.fetchAllCategories(),
-    ]);
+    // Balances are pulled only while the browser subagent is enabled, and a failing
+    // v4 fetch is isolated inside collectSyncPayload (the rest still syncs).
+    const authBefore = await authEnabledNow();
+    const netWorth = await subagentEnabled();
+    const payload = await collectSyncPayload(syncFetcher, { netWorth });
+    const profile = payload.profile;
+    // Asked again after the pull: the status route names no profile, so a server that switched its active profile
+    // mid-pull could otherwise flag the new profile with the old one's answer. Either "on" counts.
+    const authEnabled = authBefore || (await authEnabledNow());
+    if (!current()) return;
+    // The flag that locks this profile offline goes down before its rows do.
+    recordProfileAuth(localStore(), profile, authEnabled);
 
     // Per-profile keying: when the server's active profile differs from the
     // pool we have open, rekey to the new profile's pool right before applying
     // (the old profile's mirror stays intact on disk). applySync's meta gate
     // remains the safety net for any mismatch that reaches the store anyway.
     if (state.profile !== profile) {
+      if (!current()) return;
       const opened = (await rpc('setProfile', { profile })) as MirrorStatus;
       setMirrorState({ profile: opened.profile, seeded: opened.seeded, lastSyncedAt: opened.lastSyncedAt });
     }
 
-    await rpcSyncTarget()({ profile, transactions, entities, budgets, categories });
+    if (!current()) return;
+    await rpcSyncTarget()(payload);
 
     setMirrorState({ online: true, seeded: true, lastSyncedAt: new Date().toISOString() });
     persistProfile(profile);
@@ -251,6 +335,11 @@ async function doSync(): Promise<void> {
     // Network-level or worker-level failure: keep serving the last good set.
     setMirrorState({ online: false });
   }
+}
+
+/** The server's active profile (the same authed direct fetch a sync pull uses). */
+export function fetchActiveMirrorProfile(): Promise<string> {
+  return syncFetcher.fetchActiveProfile();
 }
 
 /** One sync pull (deduplicated while in flight). */
@@ -269,11 +358,126 @@ export function syncMirror(): Promise<void> {
  * when the mirror is unavailable / never seeded / does not handle the path.
  */
 export async function tryMirror(path: string): Promise<unknown | null> {
+  if (isMirrorExcluded(path)) return null; // live agent-access state is never served stale
+  if (locked) return null;
   const current = await ensureReady();
-  if (!current.available || !current.seeded) return null;
+  if (locked || !current.available || !current.seeded) return null;
   try {
     return (await rpc('serve', { path })) ?? null;
   } catch {
     return null;
   }
+}
+
+// ── Scoped tool port (model worker -> mirror) ────────────────────────────────
+
+/**
+ * Open a fresh, scoped tool port for one subagent run. One end of a new
+ * MessageChannel is transferred to the mirror worker (which serves ONLY
+ * `status` and `toolRead` on it, bound to `expectedProfile`); the other end is
+ * returned for the caller to hand to the model worker. The caller closes it
+ * when the run ends.
+ *
+ * Returns null when the mirror is unavailable or has never been seeded, or when
+ * the open profile is not the one the caller expects (a stale run must not read
+ * another profile's data).
+ */
+export function openToolPort(expectedProfile?: string): MessagePort | null {
+  if (locked || !worker || !state.available || !state.seeded || !state.profile) return null;
+  if (expectedProfile !== undefined && expectedProfile !== state.profile) return null;
+  const channel = new MessageChannel();
+  // Fire and forget: the worker's ack has no pending entry and is ignored.
+  worker.postMessage({ id: ++rpcId, type: 'attachPort', profile: state.profile }, [channel.port1]);
+  return channel.port2;
+}
+
+// ── Session lock ─────────────────────────────────────────────────────────────
+
+/**
+ * The gate let the app in (a login, or a profile without auth): the mirror may open, sync and serve. A wipe still in
+ * flight (Settings' logout, an earlier check) finishes first and the mirror stays locked until then, so nothing
+ * reopens or refills a pool being deleted. A lock or suspend that comes meanwhile wins. Resolves once settled.
+ */
+export async function unlockMirror(): Promise<void> {
+  const seq = ++gateSeq;
+  while (wiping) {
+    await wiping;
+    if (seq !== gateSeq) return;
+  }
+  if (seq === gateSeq) locked = false;
+}
+
+/**
+ * The gate shows a screen other than the app or a login one (the server answered with an error): nothing reads the
+ * mirror there, so it stops syncing and serving without being wiped. The session has not ended; unlockMirror()
+ * reopens it when the app comes back.
+ */
+export function suspendMirror(): void {
+  gateSeq++;
+  if (locked) return;
+  locked = true;
+  sessionEpoch++;
+}
+
+let wiping: Promise<void> | null = null;
+
+/** The OPFS root, or null where there is none (no OPFS, private mode). */
+async function opfsRoot(): Promise<PoolRoot | null> {
+  try {
+    return (await navigator.storage.getDirectory()) as unknown as PoolRoot;
+  } catch {
+    return null;
+  }
+}
+
+async function doWipe(): Promise<void> {
+  // A worker still opening its pool is let finish, so it holds the handles it must release.
+  if (initPromise) await initPromise.catch(() => undefined);
+  const local = localStore();
+  const root = await opfsRoot();
+  // Every pool on disk too, not only the profiles this browser recorded (0.8/0.9 recorded none).
+  const profiles = profilesToWipe(local, state.profile, await listMirrorPoolProfiles(root));
+  const w = worker;
+  let failed = profiles;
+  if (w) {
+    try {
+      failed = ((await rpc('wipe', { profiles }, SYNC_RPC_TIMEOUT_MS)) as { failed: string[] }).failed;
+    } catch {
+      // A worker that cannot answer is terminated below, which releases its handles.
+    }
+    w.terminate();
+    for (const [, entry] of pending) entry.reject(new Error('mirror locked'));
+    pending.clear();
+    worker = null;
+  }
+  initPromise = null;
+  lastFailedInitAt = 0;
+  setMirrorState({ available: false, profile: null, seeded: false, lastSyncedAt: null, online: false });
+  // No worker in this tab (another tab's owns the pool, or none ever opened), or it could not finish. A worker
+  // terminated just above lets go of its access handles a moment later, so its pools get a short backoff. No OPFS
+  // here (no root): there is no pool to remove.
+  if (failed.length > 0 && root) {
+    const result = await removeMirrorPools(root, failed, { retryDelaysMs: w ? POOL_RELEASE_RETRY_MS : [] });
+    if (result.failed.length > 0) console.warn('[mirror] pool still held (another tab wipes its own when it sees the logout):', result.failed.length);
+  }
+  clearLedgerStorage(local, sessionStore());
+}
+
+/**
+ * The login session ended (logout, a 401, another tab's logout) or the gate shows the login view: stop serving and
+ * delete this browser's copy of the ledger. Resolves once the wipe is done; never rejects. The mirror stays locked
+ * until unlockMirror().
+ */
+export function lockMirror(): Promise<void> {
+  locked = true;
+  sessionEpoch++;
+  gateSeq++;
+  if (!wiping) {
+    wiping = doWipe()
+      .catch((err) => console.warn('[mirror] wipe failed:', err instanceof Error ? err.message : err))
+      .finally(() => {
+        wiping = null;
+      });
+  }
+  return wiping;
 }

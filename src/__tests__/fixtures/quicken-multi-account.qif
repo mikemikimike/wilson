@@ -1,0 +1,56 @@
+!Option:AutoSwitch
+!Account
+NFixture Checking
+TBank
+^
+NFixture Card
+TCCard
+^
+!Clear:AutoSwitch
+!Type:Cat
+NFood
+DFood expenses
+E
+^
+!Account
+NFixture Checking
+TBank
+^
+!Type:Bank
+D 3/ 1'26
+T-5.00
+PCoffee
+^
+D 3/ 1'26
+T-5.00
+PCoffee
+^
+D 3/ 2'26
+T-150.00
+N1001
+PLandlord
+SHousing:Rent
+$-100.00
+SUtilities
+$-50.00
+^
+D 3/ 3'26
+T-200.00
+PCard payment
+L[Fixture Card]
+^
+!Account
+NFixture Card
+TCCard
+^
+!Type:CCard
+D 3/ 3'26
+T200.00
+PPayment received
+L[Fixture Checking]
+^
+D 3/ 4'26
+T-30.00
+N1001
+PBookstore
+^

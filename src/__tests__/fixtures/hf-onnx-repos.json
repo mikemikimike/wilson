@@ -1,0 +1,247 @@
+{
+  "_recorded": "2026-10-02 from https://huggingface.co/api/models/<repo> (siblings, onnx/ only) and <repo>/resolve/main/config.json (transformers.js_config); onnx-community/gemma-4-E2B-it-ONNX added 2026-10-04 the same way",
+  "repos": {
+    "HuggingFaceTB/SmolLM3-3B-ONNX": {
+      "siblings": [
+        "onnx/model.onnx",
+        "onnx/model.onnx_data",
+        "onnx/model_bnb4.onnx",
+        "onnx/model_bnb4.onnx_data",
+        "onnx/model_fp16.onnx",
+        "onnx/model_fp16.onnx_data",
+        "onnx/model_int8.onnx",
+        "onnx/model_int8.onnx_data",
+        "onnx/model_q4.onnx",
+        "onnx/model_q4.onnx_data",
+        "onnx/model_q4f16.onnx",
+        "onnx/model_q4f16.onnx_data",
+        "onnx/model_quantized.onnx",
+        "onnx/model_quantized.onnx_data",
+        "onnx/model_uint8.onnx",
+        "onnx/model_uint8.onnx_data"
+      ],
+      "transformers.js_config": {
+        "use_external_data_format": true,
+        "dtype": "q4",
+        "kv_cache_dtype": {
+          "q4f16": "float16",
+          "fp16": "float16"
+        }
+      }
+    },
+    "LiquidAI/LFM2.5-1.2B-Instruct-ONNX": {
+      "siblings": [
+        "onnx/model.onnx",
+        "onnx/model.onnx_data",
+        "onnx/model.onnx_data_1",
+        "onnx/model.onnx_data_2",
+        "onnx/model_fp16.onnx",
+        "onnx/model_fp16.onnx_data",
+        "onnx/model_fp16.onnx_data_1",
+        "onnx/model_q4.onnx",
+        "onnx/model_q4.onnx_data",
+        "onnx/model_q4f16.onnx",
+        "onnx/model_q4f16.onnx_data",
+        "onnx/model_q8.onnx",
+        "onnx/model_q8.onnx_data",
+        "onnx/model_quantized.onnx",
+        "onnx/model_quantized.onnx_data"
+      ],
+      "transformers.js_config": {
+        "use_external_data_format": {
+          "model.onnx": 3,
+          "model_fp16.onnx": 2,
+          "model_quantized": 1,
+          "model_q4.onnx": 1,
+          "model_q4f16.onnx": 1
+        },
+        "kv_cache_dtype": {
+          "q4f16": "float16",
+          "fp16": "float16"
+        }
+      }
+    },
+    "onnx-community/granite-4.0-350m-ONNX-web": {
+      "siblings": [
+        "onnx/model.onnx",
+        "onnx/model.onnx_data",
+        "onnx/model_fp16.onnx",
+        "onnx/model_fp16.onnx_data",
+        "onnx/model_q4.onnx",
+        "onnx/model_q4.onnx_data",
+        "onnx/model_q4f16.onnx",
+        "onnx/model_q4f16.onnx_data"
+      ],
+      "transformers.js_config": {
+        "use_external_data_format": {
+          "model.onnx": 1,
+          "model_fp16.onnx": 1,
+          "model_q4.onnx": 1,
+          "model_q4f16.onnx": 1
+        },
+        "kv_cache_dtype": {
+          "q4f16": "float16",
+          "fp16": "float16"
+        }
+      }
+    },
+    "onnx-community/granite-4.0-micro-ONNX-web": {
+      "siblings": [
+        "onnx/model_q4f16.onnx",
+        "onnx/model_q4f16.onnx_data",
+        "onnx/model_q4f16.onnx_data_1"
+      ],
+      "transformers.js_config": {
+        "dtype": "q4f16",
+        "use_external_data_format": {
+          "model_q4f16.onnx": 2
+        },
+        "kv_cache_dtype": {
+          "q4f16": "float16",
+          "fp16": "float16"
+        }
+      }
+    },
+    "onnx-community/Qwen2.5-1.5B-Instruct": {
+      "siblings": [
+        "onnx/model.onnx",
+        "onnx/model.onnx_data",
+        "onnx/model_bnb4.onnx",
+        "onnx/model_fp16.onnx",
+        "onnx/model_fp16.onnx_data",
+        "onnx/model_int8.onnx",
+        "onnx/model_q4.onnx",
+        "onnx/model_q4f16.onnx",
+        "onnx/model_quantized.onnx",
+        "onnx/model_uint8.onnx"
+      ],
+      "transformers.js_config": {
+        "use_external_data_format": {
+          "model.onnx": true,
+          "model_fp16.onnx": true
+        }
+      }
+    },
+    "onnx-community/Qwen3-0.6B-ONNX": {
+      "siblings": [
+        "onnx/model.onnx",
+        "onnx/model.onnx_data",
+        "onnx/model_bnb4.onnx",
+        "onnx/model_fp16.onnx",
+        "onnx/model_int8.onnx",
+        "onnx/model_q4.onnx",
+        "onnx/model_q4f16.onnx",
+        "onnx/model_quantized.onnx",
+        "onnx/model_uint8.onnx"
+      ],
+      "transformers.js_config": {
+        "kv_cache_dtype": {
+          "q4f16": "float16",
+          "fp16": "float16"
+        },
+        "use_external_data_format": {
+          "model.onnx": true
+        }
+      }
+    },
+    "onnx-community/Qwen3-1.7B-ONNX": {
+      "siblings": [
+        "onnx/model.onnx",
+        "onnx/model.onnx_data",
+        "onnx/model_bnb4.onnx",
+        "onnx/model_fp16.onnx",
+        "onnx/model_fp16.onnx_data",
+        "onnx/model_int8.onnx",
+        "onnx/model_q4.onnx",
+        "onnx/model_q4f16.onnx",
+        "onnx/model_quantized.onnx",
+        "onnx/model_uint8.onnx"
+      ],
+      "transformers.js_config": {
+        "kv_cache_dtype": {
+          "q4f16": "float16",
+          "fp16": "float16"
+        },
+        "use_external_data_format": {
+          "model.onnx": true,
+          "model_fp16.onnx": true
+        }
+      }
+    },
+    "onnx-community/gemma-4-E2B-it-ONNX": {
+      "siblings": [
+        "onnx/audio_encoder.onnx",
+        "onnx/audio_encoder.onnx_data",
+        "onnx/audio_encoder_fp16.onnx",
+        "onnx/audio_encoder_fp16.onnx_data",
+        "onnx/audio_encoder_q4.onnx",
+        "onnx/audio_encoder_q4.onnx_data",
+        "onnx/audio_encoder_q4f16.onnx",
+        "onnx/audio_encoder_q4f16.onnx_data",
+        "onnx/audio_encoder_quantized.onnx",
+        "onnx/audio_encoder_quantized.onnx_data",
+        "onnx/decoder_model_merged.onnx",
+        "onnx/decoder_model_merged.onnx_data",
+        "onnx/decoder_model_merged.onnx_data_1",
+        "onnx/decoder_model_merged.onnx_data_2",
+        "onnx/decoder_model_merged.onnx_data_3",
+        "onnx/decoder_model_merged.onnx_data_4",
+        "onnx/decoder_model_merged_fp16.onnx",
+        "onnx/decoder_model_merged_fp16.onnx_data",
+        "onnx/decoder_model_merged_fp16.onnx_data_1",
+        "onnx/decoder_model_merged_fp16.onnx_data_2",
+        "onnx/decoder_model_merged_q4.onnx",
+        "onnx/decoder_model_merged_q4.onnx_data",
+        "onnx/decoder_model_merged_q4f16.onnx",
+        "onnx/decoder_model_merged_q4f16.onnx_data",
+        "onnx/decoder_model_merged_quantized.onnx",
+        "onnx/decoder_model_merged_quantized.onnx_data",
+        "onnx/decoder_model_merged_quantized.onnx_data_1",
+        "onnx/embed_tokens.onnx",
+        "onnx/embed_tokens.onnx_data",
+        "onnx/embed_tokens.onnx_data_1",
+        "onnx/embed_tokens_fp16.onnx",
+        "onnx/embed_tokens_fp16.onnx_data",
+        "onnx/embed_tokens_fp16.onnx_data_1",
+        "onnx/embed_tokens_q4.onnx",
+        "onnx/embed_tokens_q4.onnx_data",
+        "onnx/embed_tokens_q4f16.onnx",
+        "onnx/embed_tokens_q4f16.onnx_data",
+        "onnx/embed_tokens_quantized.onnx",
+        "onnx/embed_tokens_quantized.onnx_data",
+        "onnx/embed_tokens_quantized.onnx_data_1",
+        "onnx/embed_tokens_quantized.onnx_data_2",
+        "onnx/vision_encoder.onnx",
+        "onnx/vision_encoder.onnx_data",
+        "onnx/vision_encoder_fp16.onnx",
+        "onnx/vision_encoder_fp16.onnx_data",
+        "onnx/vision_encoder_q4.onnx",
+        "onnx/vision_encoder_q4.onnx_data",
+        "onnx/vision_encoder_q4f16.onnx",
+        "onnx/vision_encoder_q4f16.onnx_data",
+        "onnx/vision_encoder_quantized.onnx",
+        "onnx/vision_encoder_quantized.onnx_data"
+      ],
+      "transformers.js_config": {
+        "use_external_data_format": {
+          "audio_encoder": 1,
+          "vision_encoder": 1,
+          "decoder_model_merged.onnx": 5,
+          "decoder_model_merged_fp16.onnx": 3,
+          "decoder_model_merged_quantized.onnx": 2,
+          "decoder_model_merged_q4.onnx": 1,
+          "decoder_model_merged_q4f16.onnx": 1,
+          "embed_tokens.onnx": 2,
+          "embed_tokens_fp16.onnx": 2,
+          "embed_tokens_quantized.onnx": 3,
+          "embed_tokens_q4.onnx": 1,
+          "embed_tokens_q4f16.onnx": 1
+        },
+        "kv_cache_dtype": {
+          "q4f16": "float16",
+          "fp16": "float16"
+        }
+      }
+    }
+  }
+}

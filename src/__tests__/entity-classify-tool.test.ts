@@ -24,6 +24,45 @@ describe('entity_classify tool', () => {
     llmSpy.mockRestore();
   });
 
+  describe('write rights and cancellation (#165)', () => {
+    let business: number;
+    const setup = () => {
+      business = createEntity(db, { name: 'Consulting LLC' });
+      insertTransactions(db, [{ date: '2026-02-15', description: 'Office supplies', amount: -40 }]);
+      const txn = getTransactions(db)[0];
+      return { id: txn.id };
+    };
+    const answer = (id: number) => ({
+      response: { content: '', structured: { transactions: [{ id, entityId: business, confidence: 0.95, reasoning: 'r' }] } },
+      metadata: {},
+    });
+
+    test('rights lost while the model answers: the answer is not applied and the run stops, not a failed batch', async () => {
+      const { id } = setup();
+      let allowed = true;
+      llmSpy.mockImplementation(async () => { allowed = false; return answer(id); });
+      await expect(entityClassifyTool.func({}, { mayWrite: () => allowed })).rejects.toThrow('cancelled');
+      expect(getTransactions(db)[0].entity_id).toBeNull();
+    });
+
+    test('cancelled while the model answers: nothing is assigned, and the signal reaches callLlm', async () => {
+      const { id } = setup();
+      const controller = new AbortController();
+      llmSpy.mockImplementation(async () => { controller.abort(); return answer(id); });
+      await expect(entityClassifyTool.func({}, { signal: controller.signal })).rejects.toThrow('cancelled');
+      expect((llmSpy.mock.calls[0][1] as { signal?: AbortSignal }).signal).toBe(controller.signal);
+      expect(getTransactions(db)[0].entity_id).toBeNull();
+    });
+
+    test('a dry run only reads, so lost write rights do not stop it', async () => {
+      const { id } = setup();
+      llmSpy.mockResolvedValue(answer(id));
+      const result = JSON.parse(await entityClassifyTool.func({ dryRun: true }, { mayWrite: () => false }));
+      expect(result.data.wouldClassify).toBe(1);
+      expect(getTransactions(db)[0].entity_id).toBeNull();
+    });
+  });
+
   test('requires at least two entities', async () => {
     // Migrations seed exactly one default 'Personal' entity
     const raw = await entityClassifyTool.func({});
@@ -171,6 +210,72 @@ describe('entity_classify tool', () => {
       expect((calls[1][1] as { model?: string }).model).toBe(getConfiguredModel().model);
       expect((calls[1][1] as { model?: string }).model).toBe('gpt-5.2');
     } finally {
+      saveConfig({});
+    }
+  });
+
+  test('local model: small batches with a maxTokens budget sized to the batch', async () => {
+    ensureTestProfile();
+    saveConfig({});
+    try {
+      createEntity(db, { name: 'Consulting LLC' });
+      insertTransactions(
+        db,
+        Array.from({ length: 25 }, (_, n) => ({ date: '2026-02-15', description: `Expense ${n}`, amount: -(n + 1) })),
+      );
+      initEntityClassifyTool(db);
+      setTaskOverride('entity-classification', 'transformers:onnx-community/granite-4.0-micro-ONNX-web');
+      llmSpy.mockResolvedValue({ response: { content: '', structured: { transactions: [] } }, metadata: {} });
+
+      await entityClassifyTool.func({});
+      const calls = llmSpy.mock.calls.filter(
+        (call: unknown[]) => (call[1] as { callType?: string })?.callType === 'entity-classification',
+      );
+      // 25 rows at 10 per batch = 3 calls, not 1
+      expect(calls).toHaveLength(3);
+      const budgets = calls.map((c: unknown[]) => (c[1] as { maxTokens?: number }).maxTokens);
+      expect(budgets[0]).toBeGreaterThan(512);
+      expect(budgets[2]).toBeLessThan(budgets[0] as number);
+    } finally {
+      setTaskOverride('entity-classification', null);
+      saveConfig({});
+    }
+  });
+
+  test('per-batch schema limits id and entityId; an id outside the batch is never assigned', async () => {
+    const business = createEntity(db, { name: 'Consulting LLC' });
+    insertTransactions(db, [{ date: '2026-02-15', description: 'Office supplies', amount: -40 }]);
+    initEntityClassifyTool(db);
+    const txn = getTransactions(db)[0];
+    const strayId = txn.id + 5000;
+    llmSpy.mockResolvedValue({
+      response: { content: '', structured: { transactions: [{ id: strayId, entityId: business, confidence: 0.99, reasoning: 'x' }] } },
+      metadata: {},
+    });
+    const result = JSON.parse((await entityClassifyTool.func({})) as string);
+    expect(result.data.classified).toBe(0);
+    expect(result.data.errors[0]).toContain(`ignored id ${strayId}`);
+    expect(getTransactions(db)[0].entity_id).not.toBe(business);
+
+    const schemaOf = () => (llmSpy.mock.calls.at(-1)![1] as { outputSchema: import('zod').ZodType }).outputSchema;
+    const check = (schema: import('zod').ZodType) => (id: number, entityId: number) =>
+      schema.safeParse({ transactions: [{ id, entityId, confidence: 0.9, reasoning: 'r' }] }).success;
+    // Unconstrained providers keep a loose schema: an unknown entityId reaches
+    // the review backstop instead of failing the batch.
+    const loose = check(schemaOf());
+    expect(loose(strayId, business + 9999)).toBe(true);
+
+    ensureTestProfile();
+    saveConfig({});
+    setTaskOverride('entity-classification', 'transformers:onnx-community/granite-4.0-micro-ONNX-web');
+    try {
+      await entityClassifyTool.func({});
+      const ok = check(schemaOf());
+      expect(ok(txn.id, business)).toBe(true);
+      expect(ok(strayId, business)).toBe(false);
+      expect(ok(txn.id, business + 9999)).toBe(false);
+    } finally {
+      setTaskOverride('entity-classification', null);
       saveConfig({});
     }
   });

@@ -123,6 +123,18 @@ const SAMPLE_TRANSACTIONS_CACHE: Array<SampleTransaction & { userPrompt: string 
 
 // ── Arms ────────────────────────────────────────────────────────────────────
 
+/**
+ * The server local arm's model: Qwen3 0.6B (~570 MB), the in-tab default
+ * before the in-tab model moved to Gemma 4 E2B (~3.6 GB). That arm is the
+ * local arm's fallback for a browser that cannot run WebGPU, and warms a Node
+ * pipeline on demand; warming 3.6 GB there for one single-row categorization
+ * would turn the fallback into a load timer. It is a separate path from the
+ * browser arm, which keeps the in-tab model (config.localRepo). Must be a
+ * catalogued transformers id; a test cross-checks.
+ */
+export const SHOWDOWN_SERVER_LOCAL_MODEL = 'transformers:onnx-community/Qwen3-0.6B-ONNX';
+const SHOWDOWN_SERVER_LOCAL_REPO = SHOWDOWN_SERVER_LOCAL_MODEL.replace(/^transformers:/, '');
+
 export interface ShowdownDeps {
   /** Default: the real callLlm. */
   callLlmImpl?: typeof callLlm;
@@ -247,8 +259,8 @@ export async function runShowdownCloudArm(
 
 /**
  * Server-side local arm: the transformers provider (spec-49 hybrid's server
- * path), used when the browser cannot run WebGPU. Model load time is measured
- * separately from the timed decision call.
+ * path) on SHOWDOWN_SERVER_LOCAL_MODEL, used when the browser cannot run
+ * WebGPU. Model load time is measured separately from the timed decision call.
  */
 export async function runShowdownLocalServerArm(
   slug: string,
@@ -258,18 +270,7 @@ export async function runShowdownLocalServerArm(
   const user = buildShowdownUserPrompt(sample);
   const payload = { system: SHOWDOWN_SYSTEM_PROMPT, user };
 
-  const cfg = getLocalChatModelConfig();
-  if (!cfg.enabled) {
-    return {
-      ok: false,
-      label: LOCAL_SERVER_LABEL,
-      model: '',
-      decisionMs: null,
-      traceId: null,
-      payload,
-      error: 'local model not configured',
-    };
-  }
+  const cfg = { id: SHOWDOWN_SERVER_LOCAL_MODEL, repo: SHOWDOWN_SERVER_LOCAL_REPO };
 
   let loadMs: number | undefined;
   let loadFresh: boolean | undefined;

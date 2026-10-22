@@ -1,7 +1,9 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { getProviderById } from '../providers.js';
 import { getModelsForProvider } from '../utils/model.js';
-import { getLocalChatModelConfig, LOCAL_CHAT_BUNDLE_DEFAULTS } from '../model/local-chat.js';
+import { getLocalChatModelConfig, LOCAL_CHAT_BUNDLE_DEFAULTS, LOCAL_SUBAGENT_DEFAULTS } from '../model/local-chat.js';
+import { PRELABEL_MODEL } from '../prelabel/config.js';
+import { parseToWorker } from '../dashboard/ui/src/prelabel/protocol.js';
 import { shouldAttemptLocal } from '../dashboard/ui/src/hybrid/core.js';
 
 /**
@@ -41,13 +43,39 @@ describe('local chat config', () => {
     expect(cfg.bundle).toEqual({ ...LOCAL_CHAT_BUNDLE_DEFAULTS });
   });
 
-  test('bundle defaults fit a 0.6B-class context window', () => {
+  test('config carries the catalog-pinned dtype so the browser loads the right ONNX file', () => {
+    const fastModel = getProviderById('transformers')!.fastModel!;
+    const catalogEntry = getModelsForProvider('transformers').find((m) => m.id === fastModel)!;
+    const cfg = getLocalChatModelConfig();
+
+    // Never left to a hardcoded browser default: the reported failure was the
+    // client forcing fp16 on a repo (granite-4.0-micro-ONNX-web) that only
+    // publishes q4f16.
+    expect(catalogEntry.device).toBe('webgpu');
+    expect(catalogEntry.dtype).toBeDefined();
+    expect(cfg.dtype).toBe(catalogEntry.dtype!);
+    // Gemma 4 E2B is pinned to q4: its q4f16 weights overflow in fp16 (ORT#26732).
+    expect(cfg.dtype).toBe('q4');
+  });
+
+  test('bundle defaults fit a small in-tab model context window', () => {
     // 6000 chars ≈ ~1500 tokens of transaction context — bounded, and well
-    // inside the window the 0.6B model can attend over alongside the rules.
-    expect(LOCAL_CHAT_BUNDLE_DEFAULTS.days).toBeGreaterThan(0);
+    // inside the window a small in-tab model can attend over alongside the rules.
     expect(LOCAL_CHAT_BUNDLE_DEFAULTS.limit).toBeGreaterThan(0);
     expect(LOCAL_CHAT_BUNDLE_DEFAULTS.maxChars).toBeGreaterThan(0);
     expect(LOCAL_CHAT_BUNDLE_DEFAULTS.maxChars).toBeLessThanOrEqual(6000);
+  });
+
+  test('the bundle window is calendar months, not a rolling day count', () => {
+    // The browser fetches from the 1st of last month through today (bundleWindow
+    // in hybrid/core.ts); a `days` knob would make "this month" ill-posed again.
+    expect('days' in LOCAL_CHAT_BUNDLE_DEFAULTS).toBe(false);
+  });
+
+  test('the fetch limit leaves room for two calendar months of rows, so computed totals are complete', () => {
+    // Totals are summed over every fetched row; hitting the limit marks them
+    // unreliable and dollar-total answers hand off to the server.
+    expect(LOCAL_CHAT_BUNDLE_DEFAULTS.limit).toBeGreaterThanOrEqual(500);
   });
 
   test('config is defensive when fastModel is absent (browser skips local)', () => {
@@ -57,7 +85,7 @@ describe('local chat config', () => {
     // the current enabled state and the fallback defaults shape here.
     const cfg = getLocalChatModelConfig();
     expect(typeof cfg.enabled).toBe('boolean');
-    expect(cfg.bundle.days).toBe(LOCAL_CHAT_BUNDLE_DEFAULTS.days);
+    expect(cfg.bundle.limit).toBe(LOCAL_CHAT_BUNDLE_DEFAULTS.limit);
     if (!getProviderById('transformers')?.fastModel) {
       expect(cfg.enabled).toBe(false);
       expect(cfg.repo).toBe('');
@@ -74,5 +102,92 @@ describe('shouldAttemptLocal decision matrix', () => {
   test('unavailable and failed go straight to the server path', () => {
     expect(shouldAttemptLocal('unavailable')).toBe(false);
     expect(shouldAttemptLocal('failed')).toBe(false);
+  });
+});
+
+describe('local chat config: browser subagent flag (spec section 11, slice 6)', () => {
+  const saved = process.env.WILSON_LOCAL_SUBAGENT;
+  const savedCompose = process.env.WILSON_LOCAL_SUBAGENT_COMPOSE;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.WILSON_LOCAL_SUBAGENT;
+    else process.env.WILSON_LOCAL_SUBAGENT = saved;
+    if (savedCompose === undefined) delete process.env.WILSON_LOCAL_SUBAGENT_COMPOSE;
+    else process.env.WILSON_LOCAL_SUBAGENT_COMPOSE = savedCompose;
+  });
+
+  test('defaults to off with maxSteps 3 and the template answer writer (Round 3)', () => {
+    delete process.env.WILSON_LOCAL_SUBAGENT;
+    delete process.env.WILSON_LOCAL_SUBAGENT_COMPOSE;
+    expect(getLocalChatModelConfig().subagent).toEqual({ enabled: false, maxSteps: 3, compose: 'template', openJevRouter: false, openJevPins: null });
+  });
+
+  test('WILSON_LOCAL_SUBAGENT_COMPOSE=model switches to the model writer (comparison arm); only the literal "model" does', () => {
+    process.env.WILSON_LOCAL_SUBAGENT_COMPOSE = 'model';
+    expect(getLocalChatModelConfig().subagent.compose).toBe('model');
+    for (const v of ['', 'Model', 'template', 'llm', ' model']) {
+      process.env.WILSON_LOCAL_SUBAGENT_COMPOSE = v;
+      expect(getLocalChatModelConfig().subagent.compose, JSON.stringify(v)).toBe('template');
+    }
+  });
+
+  test('WILSON_LOCAL_SUBAGENT=1 forces it on, and only the literal "1" does', () => {
+    process.env.WILSON_LOCAL_SUBAGENT = '1';
+    delete process.env.WILSON_LOCAL_SUBAGENT_COMPOSE;
+    expect(getLocalChatModelConfig().subagent).toEqual({ enabled: true, maxSteps: 3, compose: 'template', openJevRouter: false, openJevPins: null });
+    for (const v of ['0', '', 'true', 'yes', ' 1']) {
+      process.env.WILSON_LOCAL_SUBAGENT = v;
+      expect(getLocalChatModelConfig().subagent.enabled, JSON.stringify(v)).toBe(false);
+    }
+  });
+
+  test('the flag is independent of the model: a disabled local model stays disabled-shaped but carries the field', () => {
+    delete process.env.WILSON_LOCAL_SUBAGENT;
+    const cfg = getLocalChatModelConfig();
+    expect(cfg.subagent).toBeDefined();
+    expect(cfg.subagent.maxSteps).toBeLessThanOrEqual(4);
+  });
+});
+
+describe('local chat config: open-jev router flag (Round 4, R4-6)', () => {
+  const saved = process.env.WILSON_LOCAL_SUBAGENT_OPENJEV;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.WILSON_LOCAL_SUBAGENT_OPENJEV;
+    else process.env.WILSON_LOCAL_SUBAGENT_OPENJEV = saved;
+  });
+
+  test('subagent.openJevRouter defaults to false and ships no pins', () => {
+    delete process.env.WILSON_LOCAL_SUBAGENT_OPENJEV;
+    expect(LOCAL_SUBAGENT_DEFAULTS.openJevRouter).toBe(false);
+    const sub = getLocalChatModelConfig().subagent;
+    expect(sub.openJevRouter).toBe(false);
+    expect(sub.openJevPins).toBeNull();
+  });
+
+  test('WILSON_LOCAL_SUBAGENT_OPENJEV=1 turns it on, and only the literal "1" does', () => {
+    process.env.WILSON_LOCAL_SUBAGENT_OPENJEV = '1';
+    expect(getLocalChatModelConfig().subagent.openJevRouter).toBe(true);
+    for (const v of ['0', '', 'true', 'yes', ' 1']) {
+      process.env.WILSON_LOCAL_SUBAGENT_OPENJEV = v;
+      expect(getLocalChatModelConfig().subagent.openJevRouter, JSON.stringify(v)).toBe(false);
+    }
+  });
+
+  test('the flag does not enable the subagent by itself', () => {
+    process.env.WILSON_LOCAL_SUBAGENT_OPENJEV = '1';
+    const savedSub = process.env.WILSON_LOCAL_SUBAGENT;
+    delete process.env.WILSON_LOCAL_SUBAGENT;
+    expect(getLocalChatModelConfig().subagent.enabled).toBe(false);
+    if (savedSub !== undefined) process.env.WILSON_LOCAL_SUBAGENT = savedSub;
+  });
+
+  test('with the flag on the config carries the pre-labeler pins, minus the byte count, and the worker accepts them', () => {
+    process.env.WILSON_LOCAL_SUBAGENT_OPENJEV = '1';
+    const pins = getLocalChatModelConfig().subagent.openJevPins;
+    expect(pins).not.toBeNull();
+    const { approxDownloadBytes: _b, ...expected } = PRELABEL_MODEL;
+    void _b;
+    expect(pins).toEqual(expected as typeof pins);
+    expect(Object.keys(pins as object)).not.toContain('approxDownloadBytes');
+    expect(parseToWorker({ v: 1, type: 'init', pins, labelSetVersion: '', assetBase: '/assets/' })).not.toBeNull();
   });
 });

@@ -1,8 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  buildLocalUserMessage,
+  checkAnswerFigures,
   classifyLocalOutput,
+  dollarFiguresInCents,
+  stripThinking,
   NEED_MORE_SENTINEL,
   NEED_MORE_PHRASES,
+  NO_THINK_SWITCH,
 } from '../dashboard/ui/src/hybrid/core.js';
 
 /**
@@ -19,7 +24,7 @@ const qwenNativeToolCall = `${LT}tool_call>{"name": "query_transactions", "argum
 
 describe('classifyLocalOutput', () => {
   describe('tool-call shapes → handoff tool-call', () => {
-    test('repo marker form (mirrors parseToolCall in transformers.ts)', () => {
+    test('repo marker form (tagged form of parseToolCall)', () => {
       const v = classifyLocalOutput(`Let me check. ${repoToolCall}`);
       expect(v).toEqual({ kind: 'handoff', reason: 'tool-call' });
     });
@@ -99,5 +104,255 @@ describe('classifyLocalOutput', () => {
       // writing prose that mentions the format.
       expect(classifyLocalOutput('The tool_call format is used for tools.').kind).toBe('answer');
     });
+  });
+
+  describe('reasoning-model <think> blocks', () => {
+    const think = (body: string) => `${LT}think>${body}${LT}/think>`;
+
+    test('a closed think block is stripped from the answer', () => {
+      const v = classifyLocalOutput(`${think('\nThe user wants the top category…\n')}\n\nDining — $390.75.`);
+      expect(v).toEqual({ kind: 'answer', text: 'Dining — $390.75.' });
+    });
+
+    test('the empty block Qwen3 emits under /no_think is stripped', () => {
+      expect(classifyLocalOutput(`${think('\n\n')}\n\nYou spent $54.21.`)).toEqual({ kind: 'answer', text: 'You spent $54.21.' });
+    });
+
+    test('an unterminated think block (token cap hit mid-reasoning) is no answer, not a half-thought', () => {
+      const v = classifyLocalOutput(`${LT}think>\nOkay, let's see. The user is asking what they spent the most on`);
+      expect(v).toEqual({ kind: 'handoff', reason: 'no-answer' });
+    });
+
+    test('a sentinel inside the reasoning does not count — only the visible answer is classified', () => {
+      expect(classifyLocalOutput(`${think(`maybe ${NEED_MORE_SENTINEL}?`)} Groceries: $295.85.`).kind).toBe('answer');
+    });
+
+    test('stripThinking leaves think-free text untouched', () => {
+      expect(stripThinking('Your top category was Dining.')).toBe('Your top category was Dining.');
+    });
+  });
+});
+
+describe('paraphrased NEED_MORE_DATA replies hand off (slice-8 defect)', () => {
+  const paraphrases = [
+    // the slice-8 failures, verbatim
+    'Need more data.',
+    // sentinel spelling variants
+    'need more data',
+    'NEED MORE DATA',
+    'Need_More_Data',
+    'need-more-data',
+    '**Need more data**',
+    '`NEED_MORE_DATA`',
+    'Need   more\ndata.',
+    // first person / other subjects
+    'I need more data.',
+    'I need more information.',
+    'I need more information to answer that.',
+    'I would need more details to answer.',
+    'I still need some additional information.',
+    'We need additional data.',
+    'This needs more context.',
+    'More data is needed.',
+    'More information is needed to answer this.',
+    'Additional data is required.',
+    'Further context is required to answer.',
+    // insufficiency
+    'Not enough data.',
+    'Not enough information to answer.',
+    "There isn't enough data to answer that.",
+    'There is insufficient information to say.',
+    'Insufficient data.',
+    'The data is insufficient.',
+    'The information provided is incomplete.',
+    'The results are missing the details needed.',
+    'No relevant data was provided.',
+    'There is no sufficient information here.',
+    // results do not contain / answer
+    'The results do not contain enough information.',
+    "The lookup results don't include that information.",
+    'The provided results do not answer the question.',
+    "The data doesn't show that.",
+    'The results do not specify the period.',
+    // cannot answer
+    "I can't answer that from the results.",
+    'I cannot determine that from the provided data.',
+    "I'm unable to answer this question.",
+    'Unable to determine.',
+    "I couldn't tell from these results.",
+    'It is not possible to determine that.',
+    "I don't know.",
+    "I'm not sure.",
+    'That information is not available.',
+    'No information available.',
+  ];
+  for (const text of paraphrases) {
+    test(JSON.stringify(text), () => {
+      expect(classifyLocalOutput(text)).toEqual({ kind: 'handoff', reason: 'outside-bundle' });
+    });
+  }
+
+  test('still hands off when the paraphrase follows a think block', () => {
+    const think = (body: string) => `${LT}think>${body}${LT}/think>`;
+    expect(classifyLocalOutput(`${think('\nhmm\n')}\n\nNeed more data.`).kind).toBe('handoff');
+  });
+
+  test('a lead-in does not hide it', () => {
+    expect(classifyLocalOutput('Sorry, I need more information about that period.').kind).toBe('handoff');
+    expect(classifyLocalOutput('Hmm. Not enough data to say $5.00.').kind).toBe('handoff');
+    expect(classifyLocalOutput('Need more data. The average is $3,677.25.').kind).toBe('handoff');
+  });
+});
+
+describe('real answers that merely mention data/information/need stay answers', () => {
+  const real = [
+    'Based on the data, you spent $54.21 on groceries.',
+    'Your data shows Dining at $390.75.',
+    'Using your transaction data, net worth is $222,050.25.',
+    'The data covers January to June: $400.00 spent.',
+    'According to the data, your net profit is $17,249.25.',
+    'You do not need more data to see this: groceries were $88.50.',
+    "You don't need additional information; rent was $1,800.00.",
+    'Information on your 3 accounts: net worth is $222,050.25.',
+    'Needs: groceries $88.50, utilities $130.50.',
+    'You need to pay $130.50 for utilities by the 10th.',
+    'Needed spend this month is $190.75.',
+    'Insufficient funds fees were $12.00.',
+    'The provided results show $3,677.25 average monthly net.',
+    'More data points: you spent $41.25 on dining and $88.50 on groceries.',
+    'Data from July: spending was $190.75.',
+    'You spent $190.75 in July 2026, compared to $190.75 in June 2026.',
+    'I found 2 Adobe charges totaling $119.50.',
+    'Your information is up to date. Net worth: $222,050.25.',
+    'Not enough room in savings? Savings are $12,000.25.',
+    'No change: July spending of $190.75 matches June.',
+    'Dining is the top category at $347.25.',
+    'You are on track: cash of $27,282.50 in three months.',
+  ];
+  for (const text of real) {
+    test(JSON.stringify(text), () => {
+      expect(classifyLocalOutput(text)).toEqual({ kind: 'answer', text });
+    });
+  }
+});
+
+describe('buildLocalUserMessage', () => {
+  test('ends the user turn with the Qwen3 no-think soft switch', () => {
+    expect(buildLocalUserMessage('ctx', 'Top category?').endsWith(`Question: Top category? ${NO_THINK_SWITCH}`)).toBe(true);
+  });
+});
+
+/**
+ * Answer check (bundle mode): a $ figure in a local answer must match, to the
+ * cent, a figure the app put in the bundle (a computed total, a weekly-summary
+ * figure, or one shown transaction amount). Anything else hands off exactly
+ * like NEED_MORE_DATA does: { kind: 'handoff', reason: 'outside-bundle' }.
+ */
+describe('dollarFiguresInCents', () => {
+  test('parses $ figures to absolute cents, normalising commas and missing cents', () => {
+    expect(dollarFiguresInCents('You spent $159.50 on dining and $1,234 on rent.')).toEqual([15950, 123400]);
+    expect(dollarFiguresInCents('Down -$21.55 (or $ 21.5) from last week.')).toEqual([2155, 2150]);
+    expect(dollarFiguresInCents('**$258.60**')).toEqual([25860]);
+  });
+
+  test('a money-shaped bare number (two decimals) counts too; percents, counts and dates do not', () => {
+    expect(dollarFiguresInCents('Dining came to 215.50 this month.')).toEqual([21550]);
+    expect(dollarFiguresInCents('Up 18.25% across 12 purchases since 2026-10-01.')).toEqual([]);
+  });
+
+  test('no figures → empty', () => {
+    expect(dollarFiguresInCents('Dining is your top category.')).toEqual([]);
+  });
+
+  test('a bare number with a currency word is money ("215 dollars", "215.5 USD", "USD 215")', () => {
+    expect(dollarFiguresInCents('You spent 215 dollars on dining')).toEqual([21500]);
+    expect(dollarFiguresInCents('That is 40 bucks.')).toEqual([4000]);
+    expect(dollarFiguresInCents('215.5 USD')).toEqual([21550]);
+    expect(dollarFiguresInCents('USD 215 so far')).toEqual([21500]);
+  });
+
+  test('a bare number with one decimal is money ("came to 215.5")', () => {
+    expect(dollarFiguresInCents('Dining came to 215.5')).toEqual([21550]);
+  });
+
+  test('a bare whole number right after a spend verb is money; counts stay counts', () => {
+    expect(dollarFiguresInCents('You spent 215 on dining this month.')).toEqual([21500]);
+    expect(dollarFiguresInCents('Dining came to 215.')).toEqual([21500]);
+    expect(dollarFiguresInCents('You spent 3 times more at the diner.')).toEqual([]);
+    expect(dollarFiguresInCents('a total of 12 purchases')).toEqual([]);
+    expect(dollarFiguresInCents('You made 12 purchases in 2 weeks.')).toEqual([]);
+  });
+
+  test('a k / m / million suffix scales the figure ("$1.2k" is $1,200.00, not $1.20)', () => {
+    expect(dollarFiguresInCents('$1.2k')).toEqual([120000]);
+    expect(dollarFiguresInCents('about $3M')).toEqual([300000000]);
+    expect(dollarFiguresInCents('$2 million')).toEqual([200000000]);
+    // "m" that starts a word is not a suffix.
+    expect(dollarFiguresInCents('$5 more than last week')).toEqual([500]);
+  });
+});
+
+describe('checkAnswerFigures', () => {
+  // Oct 18 seed: computed totals dining $159.50, groceries $258.60; one shown row $37.20.
+  const allowed = [15950, 25860, 41810, 3720];
+
+  test('regression: Gemma\'s summed-rows dining answer ($215.50) hands off', () => {
+    expect(checkAnswerFigures('You spent $215.50 on dining this month.', allowed)).toEqual({
+      kind: 'handoff',
+      reason: 'outside-bundle',
+    });
+  });
+
+  test('regression: Gemma\'s groceries answer ($322.30) hands off', () => {
+    expect(checkAnswerFigures('Groceries this month: $322.30.', allowed).kind).toBe('handoff');
+  });
+
+  test('quoting the computed total verbatim is an answer', () => {
+    const text = 'You spent $159.50 on dining this month.';
+    expect(checkAnswerFigures(text, allowed)).toEqual({ kind: 'answer', text });
+  });
+
+  test('matches to the cent after normalising ($159.5 == $159.50; $1,234.00 == 123400)', () => {
+    expect(checkAnswerFigures('Dining: $159.5', allowed).kind).toBe('answer');
+    expect(checkAnswerFigures('Rent: $1,234.00', [123400]).kind).toBe('answer');
+    expect(checkAnswerFigures('Dining: $159.51', allowed).kind).toBe('handoff');
+  });
+
+  test('one wrong figure among right ones hands off', () => {
+    expect(checkAnswerFigures('Dining $159.50, groceries $322.30.', allowed).kind).toBe('handoff');
+  });
+
+  test('a single shown transaction amount is allowed (e.g. "your largest dining charge")', () => {
+    expect(checkAnswerFigures('Your last diner visit was $37.20.', allowed).kind).toBe('answer');
+  });
+
+  test('an answer with no figures passes through unchanged', () => {
+    const text = 'Groceries is your top category this month.';
+    expect(checkAnswerFigures(text, allowed)).toEqual({ kind: 'answer', text });
+  });
+
+  test('with nothing allowed (totals unreliable, no rows) any figure hands off', () => {
+    expect(checkAnswerFigures('You spent $258.60.', []).kind).toBe('handoff');
+  });
+
+  test('a wrong total written without $ or with one decimal hands off', () => {
+    expect(checkAnswerFigures('You spent 215 dollars on dining', allowed).kind).toBe('handoff');
+    expect(checkAnswerFigures('Dining came to 215.5', allowed).kind).toBe('handoff');
+    expect(checkAnswerFigures('215.5 USD', allowed).kind).toBe('handoff');
+  });
+
+  test('"$1.2k" no longer passes as a $1.20 row', () => {
+    expect(checkAnswerFigures('You spent $1.2k on fees.', [120]).kind).toBe('handoff');
+  });
+
+  test('threshold question: a figure from the question may be echoed beside a bundle figure', () => {
+    const text = 'No, you spent $159.50, under $200.';
+    expect(checkAnswerFigures(text, allowed, { queryCents: [20000] })).toEqual({ kind: 'answer', text });
+    // Without the query figures, $200 is not the app's, so it hands off.
+    expect(checkAnswerFigures(text, allowed).kind).toBe('handoff');
+  });
+
+  test('an answer that only echoes the question\'s figure is not grounded and hands off', () => {
+    expect(checkAnswerFigures('Yes, you spent $215.50 on dining.', allowed, { queryCents: [21550] }).kind).toBe('handoff');
   });
 });

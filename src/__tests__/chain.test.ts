@@ -1,9 +1,11 @@
-import { describe, expect, test, beforeEach, afterAll, mock } from 'bun:test';
+import { describe, expect, test, beforeEach, afterAll, mock, spyOn } from 'bun:test';
 import { z } from 'zod';
 import { ensureTestProfile } from './helpers.js';
 import { defineTool } from '../tools/define-tool.js';
 import type { LlmResponse, ProviderAdapter } from '../model/types.js';
 import type { ChainDef } from '../orchestration/types.js';
+import { interactionStore } from '../utils/interaction-store.js';
+import { omitIterationToolResults } from '../agent/iteration-prompt-format.js';
 
 // --- Mocks: control the adapter, not callLlm ---
 
@@ -19,8 +21,15 @@ const mockAdapterCall = mock(async (options?: { userPrompt?: string }): Promise<
   return response;
 });
 
+// Capture the real getAdapter so the mock can fall through to it once this file is done:
+// bun shares module mocks across files, and a permanent fake adapter would answer every
+// later file's callLlm (e.g. transformers-structured-output.test.ts).
+const { getAdapter: realGetAdapter } = await import('../model/providers/index.js');
+let useMockAdapter = true;
+
 mock.module('../model/providers/index.js', () => ({
-  getAdapter: mock((): ProviderAdapter => ({ call: mockAdapterCall })),
+  getAdapter: mock((providerId: string): ProviderAdapter =>
+    useMockAdapter ? { call: mockAdapterCall } : realGetAdapter(providerId)),
 }));
 
 // NOTE: Do NOT mock trace-store.js or interaction-store.js here.
@@ -55,6 +64,7 @@ afterAll(() => {
   // populated would make later files (e.g. tool-registry.test.ts) receive
   // this file's leftover fake tools instead of the real registry.
   mockToolsByNames = [];
+  useMockAdapter = false;
 });
 
 function makeResponse(content: string, toolCalls: LlmResponse['toolCalls'] = []): LlmResponse {
@@ -113,6 +123,7 @@ describe('runChain', () => {
       description: 'Spending summary',
       schema: {} as any,
       func: async () => { toolCalled = true; return '{"total": 500}'; },
+      mutates: false, // read-only: runs without an approval request
     }];
 
     const chain: ChainDef = {
@@ -137,6 +148,7 @@ describe('runChain', () => {
       description: 'Test',
       schema: {} as any,
       func: async () => 'test result',
+      mutates: false,
     }];
 
     const chain: ChainDef = {
@@ -212,7 +224,9 @@ describe('runChain', () => {
       makeResponse('Could not edit: invalid arguments.'),
     ];
 
-    const result = await runChain(chain, 'Edit transaction abc');
+    // edit_transaction writes, so the step asks for approval; approve it so
+    // the call reaches the schema guard.
+    const result = await runChain(chain, 'Edit transaction abc', { requestToolApproval: async () => 'allow-once' });
     expect(funcCalls).toBe(0); // record never touched by garbage args
     expect(result).toBe('Could not edit: invalid arguments.');
 
@@ -220,5 +234,31 @@ describe('runChain', () => {
     expect(receivedPrompts.length).toBe(2);
     expect(receivedPrompts[1]).toContain("Invalid arguments for tool 'edit_transaction'");
     expect(receivedPrompts[1]).toContain('id'); // offending field named
+  });
+
+  test('calls are recorded as chain calls under one run id; the recorded feedback prompt is cut by the judge\'s omit rule', async () => {
+    const record = spyOn(interactionStore, 'recordInteraction');
+    try {
+      const secret = 'MERCHANT_SECRET_TAIL '.repeat(60);
+      mockToolsByNames = [{ name: 'spending_summary', description: 'x', schema: {} as any, func: async () => secret, mutates: false }];
+      const chain: ChainDef = { name: 'rec-chain', description: 'x', steps: [{ id: 'a', tools: ['spending_summary'] }] };
+      adapterResponses = [
+        makeResponse('', [{ id: 'tc1', name: 'spending_summary', args: {} }]),
+        makeResponse('done'),
+      ];
+      await runChain(chain, 'How much?');
+      const records = record.mock.calls.map((c) => c[0]);
+      expect(records.length).toBe(2);
+      expect(records.every((r) => r.callType === 'chain')).toBe(true);
+      expect(new Set(records.map((r) => r.runId)).size).toBe(1);
+      expect(records[0].runId.startsWith('chain-')).toBe(true);
+      expect(records.map((r) => r.sequenceNum)).toEqual([1, 2]);
+      expect(records[1].userPrompt).toContain('MERCHANT_SECRET_TAIL'); // the store keeps the full prompt
+      const cut = omitIterationToolResults(records[1].userPrompt).text;
+      expect(cut).not.toContain('MERCHANT_SECRET_TAIL');
+      expect(cut).toContain('tool results omitted');
+    } finally {
+      record.mockRestore();
+    }
   });
 });

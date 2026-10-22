@@ -42,7 +42,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 }
 
 const TINY_MODEL = 'Xenova/llama2.c-stories15M'; // ~60MB — machinery proof only
-const REAL_MODEL = 'onnx-community/Qwen3-0.6B-ONNX'; // the dashboard's fastModel
+const REAL_MODEL = 'onnx-community/Qwen3-0.6B-ONNX'; // the dashboard's fastModel when this spike was written
 
 // Same-origin ort binaries (scripts/copy-ort-web-assets.ts output), main
 // thread, no CDN — exactly the shipped configuration.

@@ -1,29 +1,32 @@
 import {
   RequiresConnectionError,
   isNetworkError,
+  mirroredHttpErrorMessage,
   resolveFetchOutcome,
 } from './store/offline-writes';
 // mirror-client deliberately does NOT import this module: its sync pulls must
 // bypass the mirror fallback, so it uses its own authed fetch. This import only
 // brings tryMirror, which is called at fetch time, never at module-eval time.
 import { tryMirror } from './store/mirror-client';
+import { bearerHeader, readAuthToken, reportUnauthorized } from './lib/authSession';
 
-const AUTH_KEY = 'wilson_auth_token';
-
+/**
+ * Relative in dev too: the page on :5173 talks to the dashboard through vite's proxy (see
+ * vite.config.ts), so every request is same-origin and the server's Origin / Host gate sees
+ * what a production page would send. Run the server with WILSON_DASHBOARD_DEV=1.
+ */
 export function getBaseUrl(): string {
-  if (import.meta.env.DEV) return 'http://localhost:3141';
+  if (import.meta.env.DEV) return '';
   return window.location.origin;
 }
 
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const token = localStorage.getItem(AUTH_KEY);
+  const token = readAuthToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options?.headers as Record<string, string>),
+    ...bearerHeader(token),
   };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
 
   let res: Response;
   try {
@@ -42,7 +45,13 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
       const isWrite = method !== 'GET';
       const mirrored = isWrite ? null : await tryMirror(path).catch(() => null);
       const outcome = resolveFetchOutcome({ isWrite, networkError: true, mirrored });
-      if (outcome === 'return-mirror') return mirrored as T;
+      if (outcome === 'return-mirror') {
+        // A mirrored 400 (the drill endpoints' shared BadRequest) fails the
+        // same way the online request would.
+        const httpError = mirroredHttpErrorMessage(mirrored);
+        if (httpError) throw new Error(httpError);
+        return mirrored as T;
+      }
       if (outcome === 'throw-requires-connection') {
         throw new RequiresConnectionError();
       }
@@ -51,6 +60,8 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
+    // A 401 means this tab has no valid login any more: the gate swaps the app for the login view.
+    if (res.status === 401) reportUnauthorized(path, token);
     const body = await res.text().catch(() => '');
     throw new Error(`API ${res.status}: ${body || res.statusText}`);
   }
@@ -60,15 +71,17 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
 
 /**
  * fetch with the auth token attached, returning the raw Response. Used by the
- * hybrid chat client, which needs Response objects rather than parsed JSON.
+ * hybrid chat client and the file downloads, which need Response objects
+ * rather than parsed JSON. A 401 is reported like api()'s; the caller still
+ * gets the Response.
  */
-export function authedFetch(path: string, options?: RequestInit): Promise<Response> {
-  const token = localStorage.getItem(AUTH_KEY);
+export async function authedFetch(path: string, options?: RequestInit): Promise<Response> {
+  const token = readAuthToken();
   const headers: Record<string, string> = {
     ...(options?.headers as Record<string, string> | undefined),
+    ...bearerHeader(token),
   };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  return fetch(`${getBaseUrl()}${path}`, { ...options, headers });
+  const res = await fetch(`${getBaseUrl()}${path}`, { ...options, headers });
+  if (res.status === 401) reportUnauthorized(path, token);
+  return res;
 }
