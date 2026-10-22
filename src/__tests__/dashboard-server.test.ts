@@ -244,7 +244,7 @@ describe('dashboard server', () => {
           Authorization: `Bearer ${adminToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ category: 'Updated' }),
+        body: JSON.stringify({ category: 'Education' }),
       });
       expect(res.status).toBe(200);
       const data = await res.json();

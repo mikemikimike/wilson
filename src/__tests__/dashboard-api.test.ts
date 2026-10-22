@@ -175,12 +175,11 @@ describe('apiUpdateTransaction', () => {
     // Get first transaction ID
     const rows = db.prepare('SELECT id FROM transactions LIMIT 1').all() as { id: number }[];
     const id = rows[0].id;
-    const result = await apiUpdateTransaction(db, id, { category: 'Updated Category' });
-    expect(result.success).toBe(true);
-    expect(result.id).toBe(id);
+    const result = await apiUpdateTransaction(db, id, { category: 'Education' });
+    expect(result).toEqual({ success: true, id });
     // Verify the update persisted
     const row = db.prepare('SELECT category FROM transactions WHERE id = @id').get({ id }) as { category: string };
-    expect(row.category).toBe('Updated Category');
+    expect(row.category).toBe('Education');
   });
 
   test('carries the user_verified flag', async () => {
@@ -395,8 +394,7 @@ describe('apiDeleteTransaction', () => {
     const rows = db.prepare('SELECT id FROM transactions LIMIT 1').all() as { id: number }[];
     const id = rows[0].id;
     const result = apiDeleteTransaction(db, id);
-    expect(result.success).toBe(true);
-    expect(result.id).toBe(id);
+    expect(result).toEqual({ success: true, id });
     // Verify deletion
     const row = db.prepare('SELECT id FROM transactions WHERE id = @id').get({ id });
     expect(row).toBeFalsy();
