@@ -31,6 +31,7 @@ import {
   insertChatMessage,
   updateTransaction,
   deleteTransaction,
+  getTransactionById,
   insertTransactions,
   checkImported,
   checkExternalId,
@@ -68,6 +69,8 @@ import {
   getBudgetCountdown,
 } from '../db/daily-queries.js';
 import { checkAlerts, groupedAlertMoney } from '../alerts/engine.js';
+import { findHiddenField, lookupCategory, transactionEditShape } from '../mcp/tool-catalog.js';
+import { sanitizeUntrustedText } from '../mcp/output.js';
 import { getActiveGoals, getAllGoals, getGoalById, getGoalSnapshots, resolveGoalTarget, updateGoalStatus, upsertGoal, type GoalRow, type GoalSnapshotRow } from '../db/goal-queries.js';
 import { getActiveMemories, addMemory, deactivateMemory, type MemoryInsert } from '../db/memory-queries.js';
 import {
@@ -313,14 +316,48 @@ export function apiTransactions(db: Database, params: URLSearchParams) {
   return getTransactions(db, filters, { rules: DASHBOARD_RULES, page: { limit, offset } });
 }
 
-export async function apiUpdateTransaction(db: Database, id: number, updates: TransactionUpdate) {
-  const success = updateTransaction(db, id, updates);
+/**
+ * The fields `update_transaction` lets an agent change, held to the same rules, plus the two only the dashboard sets:
+ * the entity picker and the verified flag. Anything else is refused, never stored (breaker H1).
+ */
+const TransactionPatchBody = z
+  .object({
+    ...transactionEditShape,
+    entity_id: z.number().int().positive().nullable().optional(),
+    user_verified: z.union([z.literal(0), z.literal(1), z.boolean()]).optional(),
+  })
+  .strict()
+  .refine((b) => Object.values(b).some((v) => v !== undefined), {
+    message: 'give at least one of date, description, amount, category, notes, entity_id or user_verified',
+  });
+
+/** PATCH /api/transactions/:id (admin-only route). 400 on a bad body, 404 for a missing transaction. */
+export async function apiUpdateTransaction(db: Database, id: number, body: unknown): Promise<WriteResult<{ id: number }>> {
+  const parsed = TransactionPatchBody.safeParse(body);
+  if (!parsed.success) return { success: false, error: zodMessage(parsed.error), status: 400 };
+  const hidden = findHiddenField(parsed.data);
+  if (hidden) return { success: false, error: `${hidden} contains invisible or control characters`, status: 400 };
+  if (!getTransactionById(db, id)) return { success: false, error: `transaction #${id} not found`, status: 404 };
+
+  const { user_verified, ...fields } = parsed.data;
+  const updates: TransactionUpdate = { ...fields };
+  if (user_verified !== undefined) updates.user_verified = Number(user_verified);
+  if (fields.category !== undefined) {
+    const category = lookupCategory(db, fields.category);
+    if (!category) return { success: false, error: `unknown category "${sanitizeUntrustedText(fields.category, 40)}"`, status: 400 };
+    updates.category = category.name;
+  }
+  if (fields.entity_id != null && !getEntityById(db, fields.entity_id)) {
+    return { success: false, error: `entity #${fields.entity_id} not found`, status: 400 };
+  }
+
+  if (!updateTransaction(db, id, updates)) return { success: false, error: `transaction #${id} not found`, status: 404 };
   // Description is part of the embed text — refresh the stored vector.
   // Never fails the edit (degrade, never error).
-  if (success && updates.description !== undefined) {
+  if (updates.description !== undefined) {
     await embedTransactionIds(db, [id]);
   }
-  return { success, id };
+  return { success: true, id };
 }
 
 // ── Categorization review queue ─────────────────────────────────────────────
@@ -517,9 +554,9 @@ export async function apiSemanticSearch(
   return { results, indexed, total, model };
 }
 
-export function apiDeleteTransaction(db: Database, id: number) {
-  const success = deleteTransaction(db, id);
-  return { success, id };
+export function apiDeleteTransaction(db: Database, id: number): WriteResult<{ id: number }> {
+  if (!deleteTransaction(db, id)) return { success: false, error: `transaction #${id} not found`, status: 404 };
+  return { success: true, id };
 }
 
 // ── Export ───────────────────────────────────────────────────────────────────

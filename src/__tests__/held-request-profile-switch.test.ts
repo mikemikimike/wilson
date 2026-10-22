@@ -143,7 +143,7 @@ describe('held write across a profile switch', () => {
         method: 'PATCH',
         path: `/api/transactions/${aTxnId}`,
         headers: { Authorization: `Bearer ${token}` },
-        payload: JSON.stringify({ category: 'Raced' }),
+        payload: JSON.stringify({ category: 'Education' }),
       });
       await held.arrived;
       expect((await switchTo(PROFILE_B, token)).status).toBe(200);
@@ -158,11 +158,11 @@ describe('held write across a profile switch', () => {
         method: 'PATCH',
         path: `/api/transactions/${aTxnId}`,
         headers: { Authorization: `Bearer ${token}` },
-        payload: JSON.stringify({ category: 'Raced' }),
+        payload: JSON.stringify({ category: 'Education' }),
       });
       await held.arrived;
       expect((await held.finish()).status).toBe(200);
-      expect(aCategory()).toBe('Raced');
+      expect(aCategory()).toBe('Education');
     });
 
     test('after the handoff build: a profile switch while buildHandoffContext awaits refuses the run (409)', async () => {
@@ -227,7 +227,7 @@ describe('held write across a profile switch', () => {
       const held = await openHeldRequest(server, dbA, {
         method: 'PATCH',
         path: `/api/transactions/${aTxnId}`,
-        payload: JSON.stringify({ category: 'Raced' }),
+        payload: JSON.stringify({ category: 'Education' }),
       });
       await held.arrived;
       expect((await switchTo(PROFILE_B)).status).toBe(200);

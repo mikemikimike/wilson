@@ -786,14 +786,15 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
             if (authEnabled && currentUser && !canWrite(currentUser.role)) {
               return Response.json({ error: 'Forbidden' }, { status: 403, headers });
             }
-            const body = await req.json() as Record<string, unknown>;
-            return Response.json(await apiUpdateTransaction(activeDb, id, body), { headers });
+            const result = await apiUpdateTransaction(activeDb, id, await readJsonBody(req));
+            return Response.json(result, { status: result.success ? 200 : result.status, headers });
           }
           if (req.method === 'DELETE') {
             if (authEnabled && currentUser && !canWrite(currentUser.role)) {
               return Response.json({ error: 'Forbidden' }, { status: 403, headers });
             }
-            return Response.json(apiDeleteTransaction(activeDb, id), { headers });
+            const result = apiDeleteTransaction(activeDb, id);
+            return Response.json(result, { status: result.success ? 200 : result.status, headers });
           }
         }
 

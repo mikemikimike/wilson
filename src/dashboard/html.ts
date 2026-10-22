@@ -901,13 +901,30 @@ export function getDashboardHtml(port: number): string {
     var cb = el('button','btn-sm','Cancel'); cb.addEventListener('click',function(){loadTransactions();});
     cells[4].appendChild(sb); cells[4].appendChild(cb);
   }
+  // A refused edit (400 bad input, 404 missing row) must not reload the table and silently show the old value.
+  async function txnWriteError(res) {
+    if (res.ok) return null;
+    var msg = '';
+    try { var data = await res.json(); if (data && typeof data.error === 'string') msg = data.error; } catch(e) {}
+    return msg || ('HTTP ' + res.status);
+  }
   async function saveTxn(id, u) {
-    try { await authFetch(BASE+'/api/transactions/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(u)}); loadTransactions(); loadOverview(); }
+    try {
+      var res = await authFetch(BASE+'/api/transactions/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(u)});
+      var err = await txnWriteError(res);
+      if (err) { alert('Error: '+err); return; }
+      loadTransactions(); loadOverview();
+    }
     catch(e) { alert('Error: '+e.message); }
   }
   async function deleteTxn(id) {
     if (!confirm('Delete this transaction?')) return;
-    try { await authFetch(BASE+'/api/transactions/'+id,{method:'DELETE'}); loadTransactions(); loadOverview(); }
+    try {
+      var res = await authFetch(BASE+'/api/transactions/'+id,{method:'DELETE'});
+      var err = await txnWriteError(res);
+      if (err) { alert('Error: '+err); return; }
+      loadTransactions(); loadOverview();
+    }
     catch(e) { alert('Error: '+e.message); }
   }
 
