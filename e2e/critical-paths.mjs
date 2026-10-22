@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AgentBrowser, E2E_DIR, AGENT_BROWSER_VERSION } from './lib/ab.mjs';
-import { OVERFLOW_JS, VITALS_JS, sleep, waitFor } from './lib/page.mjs';
+import { LAYOUT_AUDIT_JS, OVERFLOW_JS, VITALS_JS, sleep, waitFor } from './lib/page.mjs';
 import { MOBILE4G, percentile, sandboxDown, sandboxFile, sandboxUp, serverLogErrors, summarize, throttlePage } from './lib/support.mjs';
 import { PATHS } from './paths.mjs';
 
@@ -260,6 +260,7 @@ async function main() {
       lcpP75MsMobile: { value: perfM?.lcp?.p75 ?? null, profile: results.perf?.mobile?.profile ?? null, target: `< ${TARGETS.lcpP75MsMobile4g}`, pass: perfM?.lcp?.p75 != null ? perfM.lcp.p75 < TARGETS.lcpP75MsMobile4g : null },
       clsP75: { desktop: perfD?.cls?.p75 ?? null, mobile: perfM?.cls?.p75 ?? null, target: `< ${TARGETS.clsP75}`, pass: perfD?.cls?.p75 != null ? Math.max(perfD.cls.p75, perfM?.cls?.p75 ?? 0) < TARGETS.clsP75 : null },
       horizontalScrollAt360: { tabsWithPageScroll: results.perf?.overflow360 ? Object.entries(results.perf.overflow360).filter(([, v]) => v.pageScroll).map(([k]) => k) : null, pass: results.perf?.overflow360 ? Object.values(results.perf.overflow360).every((v) => !v.pageScroll) : null },
+      layoutAt360: layoutVerdict(results.perf?.layout360),
     },
     errors: { console: results.errors.console.length, page: results.errors.page.length, http5xx: results.errors.http5xx.length, server: results.errors.server.length },
     webmcp: { tools: allTools.size, covered: Object.values(results.coverage.webmcpTools).filter(Boolean).length },
@@ -284,7 +285,7 @@ function tabsTouched(def) {
 }
 
 async function samplePerf() {
-  const out = { samplesPerTab: SAMPLES, method: 'full reload per sample (about:blank -> base/#tab), buffered PerformanceObserver (LCP, layout-shift), navigation + paint timing', desktop: null, mobile: null, overflow360: null };
+  const out = { samplesPerTab: SAMPLES, method: 'full reload per sample (about:blank -> base/#tab), buffered PerformanceObserver (LCP, layout-shift), navigation + paint timing', desktop: null, mobile: null, overflow360: null, layout360: null };
   const run = async (label, viewport, throttle) => {
     await ab.must(['set', 'viewport', String(viewport[0]), String(viewport[1])]);
     let th = null;
@@ -340,14 +341,28 @@ async function samplePerf() {
   await ab.must(['open', 'about:blank']);
   await ab.must(['open', `${sb.base}/#overview`]);
   out.overflow360 = {};
+  out.layout360 = {};
   for (const tab of TABS) {
     await ab.eval(`(() => { location.hash = ${JSON.stringify('#' + tab)}; return true; })()`);
     try { await waitFor(ab, `(document.querySelector('main')?.innerText ?? '').toLowerCase().includes(${JSON.stringify(TAB_READY[tab])})`, { timeout: 20_000 }); } catch { /* measured anyway */ }
     await sleep(500);
     out.overflow360[tab] = await ab.eval(OVERFLOW_JS);
+    out.layout360[tab] = await ab.eval(LAYOUT_AUDIT_JS);
   }
   await ab.must(['set', 'viewport', '1280', '900']);
   return out;
+}
+
+/** NN-10 layout audit verdict: offenders per tab (rule, selector, size) from LAYOUT_AUDIT_JS at 360x800. */
+function layoutVerdict(byTab) {
+  const base = { rules: 'offscreen (right edge past viewport outside an overflow-x scroller), clipped (overflow hidden + scrollWidth > clientWidth on text), narrowtext (<120 px wide, >4 lines), smalltarget (<24x24 interactive)' };
+  if (!byTab) return { ...base, value: null, offenders: null, pass: null };
+  const offenders = {};
+  const value = {};
+  for (const [tab, r] of Object.entries(byTab)) {
+    if (r?.offenders?.length) { offenders[tab] = r.offenders; value[tab] = r.offenders.length; }
+  }
+  return { ...base, value, offenders, pass: Object.keys(offenders).length === 0 };
 }
 
 function printSummary(r) {
@@ -364,6 +379,12 @@ function printSummary(r) {
   log(`NN-10 LCP p75 mobile ${n.lcpP75MsMobile.value} ms (target ${n.lcpP75MsMobile.target}) ${v(n.lcpP75MsMobile)}`);
   log(`NN-10 CLS p75 desktop ${n.clsP75.desktop} / mobile ${n.clsP75.mobile} (target ${n.clsP75.target}) ${v(n.clsP75)}`);
   log(`NN-10 no horizontal scroll at 360 px: ${v(n.horizontalScrollAt360)}${n.horizontalScrollAt360.tabsWithPageScroll?.length ? ` (${n.horizontalScrollAt360.tabsWithPageScroll.join(', ')})` : ''}`);
+  const L = n.layoutAt360;
+  log(`NN-10 phone layout audit at 360 px: ${v(L)}`);
+  for (const [tab, offs] of Object.entries(L.offenders ?? {})) {
+    log(`       ${tab}: ${offs.length} offender(s)`);
+    for (const o of offs.slice(0, 12)) log(`         [${o.rule}] ${o.selector} ${o.w}x${o.h}${o.text ? ` "${o.text}"` : ''}`);
+  }
   log(`errors: console ${s.errors.console}, page ${s.errors.page}, http 5xx ${s.errors.http5xx}, server log ${s.errors.server}`);
   log(`WebMCP: ${s.webmcp.covered}/${s.webmcp.tools} tools exercised`);
   log(`results: ${path.join(RESULTS, 'latest.json')}`);
