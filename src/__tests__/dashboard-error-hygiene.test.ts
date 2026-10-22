@@ -94,4 +94,62 @@ describe('dashboard error hygiene', () => {
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: 'Internal server error' });
   });
+  // Every JSON write route, every typed field: an object, array, number or string where another type is
+  // expected is a 400 with a plain message, never a 500 (or a silent coercion into a write).
+  type Kind = 'string' | 'number' | 'boolean' | 'array';
+  const WRONG: Record<Kind, unknown[]> = {
+    string: [{}, [], 5],
+    number: [{}, [], 'x'],
+    boolean: [{}, [], 'x', 5],
+    array: [{}, 'x', 5],
+  };
+  const FAKE_ROW = { date: '2026-01-15', description: 'FAKE Coffee (dummy)', amount: -4.5 };
+  const WRITE_ROUTES: { method: string; path: string; base: Record<string, unknown>; fields: [string, Kind][] }[] = [
+    { method: 'POST', path: '/api/auth/setup', base: { username: 'fake-admin', password: 'dummy-pass' }, fields: [['username', 'string'], ['password', 'string']] },
+    { method: 'POST', path: '/api/auth/login', base: { username: 'fake-admin', password: 'dummy-pass' }, fields: [['username', 'string'], ['password', 'string']] },
+    { method: 'POST', path: '/api/auth/users', base: { username: 'fake-viewer', password: 'dummy-pass', role: 'viewer' }, fields: [['username', 'string'], ['password', 'string'], ['role', 'string']] },
+    { method: 'PATCH', path: '/api/auth/config', base: {}, fields: [['auth_enabled', 'boolean']] },
+    { method: 'POST', path: '/api/profiles/switch', base: { name: 'test' }, fields: [['name', 'string']] },
+    { method: 'PUT', path: '/api/budgets/Groceries', base: { monthlyLimit: 100 }, fields: [['monthlyLimit', 'number']] },
+    { method: 'PATCH', path: '/api/transactions/1', base: { notes: 'FAKE note' }, fields: [['description', 'string'], ['amount', 'number'], ['category', 'string'], ['notes', 'string'], ['entity_id', 'number']] },
+    { method: 'POST', path: '/api/reviews/1/correct', base: { category: 'Groceries' }, fields: [['category', 'string']] },
+    { method: 'PATCH', path: '/api/goals/1', base: { status: 'active' }, fields: [['targetAmount', 'number'], ['targetDate', 'string'], ['status', 'string']] },
+    { method: 'POST', path: '/api/entities', base: { name: 'FAKE Entity' }, fields: [['name', 'string'], ['description', 'string'], ['color', 'string']] },
+    { method: 'PUT', path: '/api/entities/1', base: { name: 'FAKE Entity' }, fields: [['name', 'string'], ['description', 'string'], ['color', 'string']] },
+    { method: 'POST', path: '/api/import', base: { filename: 'FAKE.csv', transactions: [FAKE_ROW] }, fields: [['filename', 'string'], ['bank', 'string'], ['fileHash', 'string'], ['transactions', 'array']] },
+    { method: 'POST', path: '/api/demo/trace/step', base: { step: 'import', filename: 'FAKE.csv', fileHash: 'dummy', transactions: [FAKE_ROW] }, fields: [['step', 'string'], ['filename', 'string'], ['fileHash', 'string'], ['transactions', 'array']] },
+    { method: 'POST', path: '/api/demo/autobook/candidates', base: { description: 'FAKE Coffee', importedIds: [1] }, fields: [['description', 'string'], ['importedIds', 'array']] },
+    { method: 'POST', path: '/api/memories', base: { memoryType: 'context', content: 'FAKE memory' }, fields: [['memoryType', 'string'], ['content', 'string'], ['category', 'string']] },
+    { method: 'PUT', path: '/api/settings/custom-prompt', base: { prompt: 'FAKE prompt' }, fields: [['prompt', 'string']] },
+    { method: 'POST', path: '/api/chat', base: { query: 'FAKE question' }, fields: [['query', 'string'], ['sessionId', 'string'], ['mentions', 'array']] },
+    { method: 'POST', path: '/api/models', base: { task: 'categorization', model: null }, fields: [['task', 'string'], ['model', 'string']] },
+    { method: 'POST', path: '/api/chat/local', base: { query: 'FAKE q', answer: 'FAKE a' }, fields: [['query', 'string'], ['answer', 'string'], ['sessionId', 'string']] },
+    { method: 'POST', path: '/api/demo/showdown/cloud', base: {}, fields: [['slug', 'string']] },
+    { method: 'POST', path: '/api/demo/showdown/local', base: {}, fields: [['slug', 'string']] },
+    { method: 'POST', path: '/api/demo/showdown/browser-trace', base: { model: 'FAKE-model', decisionMs: 5 }, fields: [['model', 'string'], ['decisionMs', 'number'], ['ok', 'boolean'], ['error', 'string']] },
+  ];
+
+  test('a wrong-typed field on any JSON write route is a 400 with a plain message, never a 500', async () => {
+    const failures: string[] = [];
+    for (const route of WRITE_ROUTES) {
+      for (const [field, kind] of route.fields) {
+        for (const bad of WRONG[kind]) {
+          // A fresh server per probe: a probe that wrongly succeeds (an admin created, auth enabled) must not
+          // change what the next probe sees.
+          const { db, base } = await start();
+          insertTransactions(db, [FAKE_ROW]);
+          db.prepare("INSERT INTO entities (name, slug) VALUES ('FAKE Entity', 'fake-entity')").run();
+          const res = await send(base, route.method, route.path, JSON.stringify({ ...route.base, [field]: bad }));
+          const text = await res.text();
+          const label = `${route.method} ${route.path} ${field}=${JSON.stringify(bad)}`;
+          if (res.status !== 400) failures.push(`${label} -> ${res.status} ${text.slice(0, 120)}`);
+          else if (/TypeError|SQLITE|constraint|is not a function|Internal server error/i.test(text)) failures.push(`${label} -> leaky ${text.slice(0, 120)}`);
+          closeAll();
+          for (const s of servers) { try { stopDashboardServer(s); } catch { /* */ } }
+          servers.length = 0;
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  }, 60_000);
 });

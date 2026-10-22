@@ -1,3 +1,5 @@
+import type { z } from 'zod';
+
 // A request the client got wrong: the dashboard server answers it with `status`
 // and `message` verbatim. Anything else that escapes a route is a bug or an
 // environment fault, so the server logs it and answers a generic 500 instead of
@@ -25,4 +27,22 @@ export async function jsonBody<T = Record<string, unknown>>(req: Request): Promi
     throw new HttpError(400, 'invalid JSON body');
   }
   return value as T;
+}
+
+/** The first few zod issues as one plain line ("name: Invalid input: expected string, received object"). */
+export function zodMessage(error: z.ZodError): string {
+  return error.issues
+    .slice(0, 3)
+    .map((issue) => (issue.path.length > 0 ? `${issue.path.join('.')}: ${issue.message}` : issue.message))
+    .join('; ');
+}
+
+/**
+ * Check a parsed body's field types against `schema`; a mismatch (an object, array or number where a string is
+ * expected, and so on) is a 400 with zod's plain message, never a TypeError or SQLite bind 500.
+ */
+export function checkBody<T>(schema: z.ZodType<T>, value: unknown): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw new HttpError(400, zodMessage(parsed.error));
+  return parsed.data;
 }
