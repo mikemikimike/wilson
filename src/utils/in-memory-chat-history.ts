@@ -145,6 +145,12 @@ export class InMemoryChatHistory {
     const otherOwner = ownerUserId !== this.contextOwner;
     const otherSession = ownerUserId !== null && sessionId !== null && sessionId !== this.sessionId;
     if (otherOwner || otherSession) this.clear();
+    if (otherOwner) {
+      // The current session is the previous owner's: the next turn without a sessionId gets a fresh one of its own.
+      this.sessionId = null;
+      this.sessionTitled = false;
+      this.sessionOwner = ownerUserId;
+    }
     this.contextOwner = ownerUserId;
   }
 

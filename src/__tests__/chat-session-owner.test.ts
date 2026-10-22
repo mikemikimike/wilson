@@ -224,6 +224,17 @@ describe('chat sessions belong to the user who started them (auth on)', () => {
     expect(third.prompt).toContain('ADMIN-Q2');
   });
 
+  // @invariant NN-04
+  test('an auth-off turn after a viewer\'s turn starts its own session, not the viewer\'s', async () => {
+    const viewer = await ask(viewerToken, 'VIEWER-Q1 hello');
+    disableAuth(db);
+    const anon = await ask('', 'ANON-SECRET-Q1 what did I spend on rent?');
+    expect(anon.sid).not.toBe(viewer.sid);
+    expect(anon.prompt).not.toContain('VIEWER-Q1');
+    enableAuth(db);
+    expect(getChatHistoryBySession(db, viewer.sid).map((r) => r.query).join('\n')).not.toContain('ANON-SECRET-Q1');
+  });
+
   test('auth off: in-memory context carries across turns as before', async () => {
     disableAuth(db);
     await ask('', 'ANON-Q1 first');
