@@ -7,7 +7,7 @@ const DATE_PATTERNS = /^(date|transaction\s*date|trans\s*date|posted?\s*date)$/i
 // Quicken's "Transaction Report" CSV labels its description column
 // "Payee/Security" (it covers investment-security transactions too).
 const DESCRIPTION_PATTERNS = /^(description|merchant|payee(\s*\/\s*security)?|memo|name|transaction\s*description)$/i;
-const AMOUNT_PATTERNS = /^(amount|debit|credit|transaction\s*amount)$/i;
+const AMOUNT_PATTERNS = /^(amount|transaction\s*amount)$/i;
 const DEBIT_PATTERNS = /^(debit|withdrawal|payment)$/i;
 const CREDIT_PATTERNS = /^(credit|deposit)$/i;
 // Some exports (e.g. Quicken's combined "Transaction Report" CSV) cover
@@ -81,7 +81,9 @@ export function parseGenericCSV(content: string): ParsedTransaction[] {
     );
   }
 
-  const hasSeparateDebitCredit = !!(debitCol || creditCol) && !amountCol;
+  // A full Debit+Credit pair wins over a stray amount-like column (NN-07: credits
+  // must not be dropped); a lone debit/credit-ish column only counts without an amount.
+  const hasSeparateDebitCredit = !!((debitCol && creditCol) || ((debitCol || creditCol) && !amountCol));
 
   // First pass: parse raw amounts to detect sign convention
   const rawTransactions: { date: string; description: string; amount: number; accountName?: string }[] = [];
@@ -97,9 +99,18 @@ export function parseGenericCSV(content: string): ParsedTransaction[] {
     if (hasSeparateDebitCredit) {
       const debit = debitCol ? parseAmount(row[debitCol] || '0') : 0;
       const credit = creditCol ? parseAmount(row[creditCol] || '0') : 0;
-      // Debit = negative (expense), credit = positive (income)
-      amount = isNaN(debit) ? 0 : -Math.abs(debit);
-      amount += isNaN(credit) ? 0 : Math.abs(credit);
+      const hasSplitValue =
+        (debitCol && (row[debitCol] ?? '').trim() !== '' && !isNaN(debit)) ||
+        (creditCol && (row[creditCol] ?? '').trim() !== '' && !isNaN(credit));
+      if (!hasSplitValue && amountCol) {
+        // Split cells blank/non-numeric on this row: use the Amount column as-is.
+        amount = parseAmount(row[amountCol] ?? '0');
+        if (isNaN(amount)) continue;
+      } else {
+        // Debit = negative (expense), credit = positive (income)
+        amount = isNaN(debit) ? 0 : -Math.abs(debit);
+        amount += isNaN(credit) ? 0 : Math.abs(credit);
+      }
     } else {
       amount = parseAmount(row[amountCol!] ?? '0');
       if (isNaN(amount)) continue;
