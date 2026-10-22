@@ -225,12 +225,8 @@ describe('NN-07 amount sign: negative = expense, positive = income/credit, for e
     });
   }
 
-  // FINDING: generic.ts:10 AMOUNT_PATTERNS also matches the literal headers "Debit" and "Credit", so a CSV with
-  // "Debit,Credit" columns takes the Debit column as a single signed amount (generic.ts:65, :84 hasSeparateDebitCredit
-  // is false) and every credit row, whose Debit cell is empty, parses to NaN and is silently dropped (generic.ts:101).
-  // The existing generic-parser test sidesteps it with Withdrawal/Deposit headers. Expected-fail until fixed; when
-  // this starts passing, `test.failing` fails and it should become a plain case above.
-  test.failing('generic.ts: literal "Debit" / "Credit" columns keep the credit row (FINDING: credit dropped)', () => {
+  // Fixed by fix/gf-csv-debit-credit: literal Debit/Credit headers are read as separate debit and credit columns.
+  test('generic.ts: literal "Debit" / "Credit" columns keep the credit row', () => {
     const txns = parseGenericCSV([
       'Date,Description,Debit,Credit',
       '2026-02-15,FAKE HARDWARE (dummy),42.00,',
@@ -240,10 +236,8 @@ describe('NN-07 amount sign: negative = expense, positive = income/credit, for e
     expect(find(txns, 'FAKE DEPOSIT (dummy)').amount).toBeGreaterThan(0);
   });
 
-  // FINDING: generic.ts:113-114 negates EVERY amount of an already-signed file when more than 60% of its rows are
-  // positive (meant for banks that export expenses as positive). A signed statement that is mostly deposits/refunds,
-  // e.g. a savings account, comes out inverted: deposits become expenses. Expected-fail until fixed.
-  test.failing('generic.ts: a credit-heavy signed CSV keeps its signs (FINDING: whole file negated)', () => {
+  // Fixed by fix/gf-csv-sign-flip: a file that already carries negative amounts is never sign-flipped.
+  test('generic.ts: a credit-heavy signed CSV keeps its signs', () => {
     const txns = parseGenericCSV([
       'Date,Description,Amount',
       '2026-02-01,FAKE TRANSFER FEE (dummy),-5.00',

@@ -8,6 +8,7 @@ import { startDashboardServer, stopDashboardServer } from '../dashboard/server.j
 import { setInitialProfile, closeAll } from '../dashboard/db-manager.js';
 import { createUser, enableAuth, getUserByUsername, verifyLogin } from '../dashboard/auth.js';
 import { setGlobalStateFile } from '../mcp/global-state.js';
+import { createChatSession } from '../db/queries.js';
 import type { Database } from '../db/compat-sqlite.js';
 
 /**
@@ -23,7 +24,8 @@ import type { Database } from '../db/compat-sqlite.js';
  *    their own, but never the privileged variant: each `self` row with a `viewerVariant` sends the write-tool version
  *    and asserts 403.
  *  - `public` and `allowed` rows say WHY a viewer (or nobody) may call them.
- *  - `finding` rows are routes a viewer can mutate today: `test.failing` until fixed (see the FINDING comments).
+ *  - `finding` rows are routes a viewer can mutate today: `test.failing` until fixed (none open; the last, POST
+ *    /api/chat/local, was fixed by fix/gf-chat-owner and is now a `self` row).
  * Every non-public row is also sent with no token and must be 401.
  * The static guard at the bottom parses the route modules and fails when a mutating route exists that is not in
  * ROUTES (or ROUTES names one that no longer exists), so a new route cannot skip this sweep.
@@ -82,11 +84,12 @@ const ROUTES: RouteRow[] = [
   // ── chat & demos ──
   { file: S, method: 'POST', pattern: '/api/chat', path: '/api/chat', kind: 'allowed', reason: 'A viewer may chat; the run is theirs and every write tool is denied inside it for a non-writer (#156, server.ts:1109-1115)' },
   {
-    file: S, method: 'POST', pattern: '/api/chat/local', path: '/api/chat/local', body: { query: 'FAKE viewer question (dummy)', answer: 'FAKE forged assistant answer (dummy)' },
-    // FINDING: server.ts:1155-1162 has no canWrite check. A viewer can write rows into the profile's SHARED chat
-    // history (chat_sessions/chat_messages, api.ts:886-891), including an arbitrary `answer` recorded as the assistant's
-    // reply, and that history is "later replayed into prompts" (api.ts:877) of the admin's agent runs.
-    kind: 'finding', note: 'viewer writes a forged assistant answer into shared chat history',
+    file: S, method: 'POST', pattern: '/api/chat/local', path: '/api/chat/local', body: { query: 'FAKE viewer question (dummy)', answer: 'FAKE viewer local answer (dummy)' },
+    // Fixed by fix/gf-chat-owner: a recorded local answer lands only in the caller's own chat session (auth.ts
+    // mayUseChatSession); writing into another user's session (here the admin's) is 403.
+    kind: 'self', reason: 'Records into the caller\'s own chat session only (api.ts apiRecordLocalChatMessage)',
+    viewerVariant: { body: { query: 'FAKE viewer question (dummy)', answer: 'FAKE forged assistant answer (dummy)', sessionId: '{adminChatSessionId}' } },
+    control: { body: { query: 'FAKE admin question (dummy)', answer: 'FAKE admin local answer (dummy)', sessionId: '{adminChatSessionId}' } },
   },
   { file: S, method: 'POST', pattern: '/api/demo/showdown/cloud', path: '/api/demo/showdown/cloud', kind: 'allowed', reason: 'Demo arm: no DB write (sends a fixture sample to the configured cloud model; not sent here)' },
   { file: S, method: 'POST', pattern: '/api/demo/showdown/local', path: '/api/demo/showdown/local', kind: 'allowed', reason: 'Demo arm: no DB write (runs a fixture sample on the local model; not sent here)' },
@@ -212,7 +215,7 @@ async function send(method: string, path: string, token: string | null, body?: u
     'X-Wilson-Agent-Session': crypto.randomUUID(),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${base}${fill(path)}`, { method, headers, body: method === 'DELETE' && body === undefined ? undefined : JSON.stringify(body ?? {}) });
+  const res = await fetch(`${base}${fill(path)}`, { method, headers, body: method === 'DELETE' && body === undefined ? undefined : fill(JSON.stringify(body ?? {})) });
   return { status: res.status, text: await res.text() };
 }
 
@@ -227,6 +230,7 @@ beforeAll(async () => {
   adminToken = (await verifyLogin(db, 'admin1', 'password123'))!.token;
   viewerToken = (await verifyLogin(db, 'viewer1', 'password123'))!.token;
   vars.adminId = String(getUserByUsername(db, 'admin1')!.id);
+  vars.adminChatSessionId = createChatSession(db, getUserByUsername(db, 'admin1')!.id);
   setInitialProfile('test', db);
   server = (await startDashboardServer(db, 0)).server;
   base = `http://localhost:${server.port}`;

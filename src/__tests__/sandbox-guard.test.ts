@@ -59,16 +59,22 @@ describe('NN-08 HOME guard (scripts/webmcp-live-seed-guard.ts)', () => {
     }
   });
 
-  test('accepts a scratch HOME under /private/tmp (control: the refusals above are not vacuous)', () => {
-    const r = run(GUARD, '/private/tmp/claude-501/wilson-sandbox/guard-control-never-created');
+  test('accepts an existing scratch HOME under /private/tmp (control: the refusals above are not vacuous)', () => {
+    // The guard resolves HOME with realpath, so it must exist (sandbox:up creates it before seeding).
+    const home = join(SANDBOX_ROOT, `guard-control-${process.pid}`);
+    mkdirSync(home, { recursive: true });
+    scratch.push(home);
+    const r = run(GUARD, home);
     expect(r.code).toBe(0);
   });
 
-  // FINDING: webmcp-live-seed-guard.ts:11 tests `home.includes('/private/tmp/')`, a substring, not "resolves under
-  // /private/tmp". A HOME that merely contains that text passes: `/private/tmp/../../Users/jdfiscus` resolves to the
-  // real home, and `/Users/jdfiscus/private/tmp/x` sits inside it. Only the side-effect-free guard module is run with
-  // these values. Expected-fail until the guard resolves the path and checks the prefix.
-  test.failing('refuses a HOME that only contains "/private/tmp/" but resolves elsewhere (FINDING: substring check)', () => {
+  test('refuses a scratch HOME that does not exist yet (realpath cannot resolve it)', () => {
+    const r = run(GUARD, '/private/tmp/claude-501/wilson-sandbox/guard-control-never-created');
+    expect(r.code).toBe(1);
+  });
+
+  // Fixed by fix/gf-seed-guard: the guard realpath-resolves HOME and checks the /private/tmp/ prefix (was a substring check).
+  test('refuses a HOME that only contains "/private/tmp/" but resolves elsewhere', () => {
     for (const home of ['/private/tmp/../../Users/jdfiscus', `${REAL_HOME}/private/tmp/x`]) {
       const r = run(GUARD, home);
       expect({ home, code: r.code }).toEqual({ home, code: 1 });
