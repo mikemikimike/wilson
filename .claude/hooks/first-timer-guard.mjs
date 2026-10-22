@@ -49,9 +49,14 @@ const SUBCOMMANDS = {
 export function words(cmd) {
   if (/[;&|<>`$\\\n\r]/.test(cmd)) return null;
   const out = [];
-  const re = /\s*(?:"([^"]*)"|'([^']*)'|([^\s"']+))/y;
+  // Each word must end at whitespace or the end: the shell joins `"-"x` into one word `-x`, so adjacency is refused.
+  const re = /\s*(?:"([^"]*)"|'([^']*)'|([^\s"']+))(?=\s|$)/y;
   let m;
-  while (re.lastIndex < cmd.length && (m = re.exec(cmd))) out.push(m[1] ?? m[2] ?? m[3]);
+  while (re.lastIndex < cmd.length && (m = re.exec(cmd))) {
+    // Unquoted words must not expand into something else after this check: braces, globs, ~, ! history, # comments, zsh =cmd.
+    if (m[3] !== undefined && (/[{}*?[\]~!]/.test(m[3]) || /^[#=]/.test(m[3]))) return null;
+    out.push(m[1] ?? m[2] ?? m[3]);
+  }
   return re.lastIndex >= cmd.trimEnd().length ? out : null;
 }
 
@@ -74,7 +79,8 @@ export function check(tool_name, tool_input) {
   const [sub, ...args] = w.slice(3);
   const ok = SUBCOMMANDS[sub];
   if (!ok) return `agent-browser "${sub ?? ''}" is not something a first-time visitor does.`;
-  if (sub !== 'snapshot' && sub !== 'screenshot' && args.some((x) => x.startsWith('--'))) return 'no extra -- options.';
+  // No options smuggled in as arguments (--flag or -x); a typed negative amount like "-23.45" is fine.
+  if (sub !== 'snapshot' && sub !== 'screenshot' && args.some((x) => /^--|^-[A-Za-z]/.test(x))) return 'no extra options.';
   return ok(args) ? null : `agent-browser ${sub}: arguments not allowed (${args.join(' ').slice(0, 120)}).`;
 }
 

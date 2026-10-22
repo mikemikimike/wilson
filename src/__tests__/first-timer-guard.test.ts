@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeAll, afterAll } from 'bun:test';
+import { describe, expect, test, beforeAll, afterAll, setDefaultTimeout } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -33,6 +33,7 @@ function hook(tool_name: string, tool_input: Record<string, unknown>, env: Recor
 const bash = (command: string, env?: Record<string, string>) => hook('Bash', { command }, env).code;
 
 describe('first-timer guard hook', () => {
+  setDefaultTimeout(30_000); // each test spawns ~15 hook processes
   test('allows a person\'s browser actions on the sandbox port', () => {
     for (const c of [
       `${AB} open http://localhost:51234`,
@@ -61,7 +62,25 @@ describe('first-timer guard hook', () => {
       `${AB} fill @e3 "a" > /tmp/x`,
       'e2e/node_modules/.bin/agent-browser open http://localhost:51234', // no session
       'e2e/node_modules/.bin/agent-browser --session e2e open http://localhost:51234', // someone else's session
+      // Shell expansion after the check: braces, globs, ~, history, comments.
+      `${AB} click {@e1,--executable-path=/bin/sh}`,
+      `${AB} upload @e7 ${FT}/files/*`,
+      `${AB} click @e[1]`,
+      `${AB} fill @e3 ~/.ssh/id_rsa`,
+      `${AB} click !!`,
+      `${AB} click @e1 #comment`,
+      `${AB} click =sh`,
+      // Quote adjacency: the shell joins these into one word (-x, --headed), so they must not split into harmless parts.
+      `${AB} click @e1 "-"x`,
+      `${AB} fill @e3 "-"-headed`,
+      `${AB} open "http://localhost:51234"@evil.example`,
+      // Options smuggled as arguments.
+      `${AB} click @e1 -x`,
+      `${AB} fill @e3 --headed`,
     ]) expect({ c, code: bash(c) }).toEqual({ c, code: 2 });
+    // The same characters are literal inside quotes, and a typed negative amount is fine.
+    expect(bash(`${AB} fill @e3 "{a,b} * ~ 50%?"`)).toBe(0);
+    expect(bash(`${AB} fill @e3 "-23.45"`)).toBe(0);
   });
 
   test('blocks agent-browser powers a visitor does not have', () => {
