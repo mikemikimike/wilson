@@ -1,4 +1,5 @@
 import type { Database } from '../db/compat-sqlite.js';
+import { MAX_CATEGORY_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_TEXT_FIELD_LENGTH, MAX_FILENAME_LENGTH } from '../db/field-limits.js';
 import { createHash } from 'crypto';
 import { z } from 'zod';
 import {
@@ -1433,6 +1434,25 @@ export interface ImportResult {
   error?: string;
 }
 
+/**
+ * Per-field caps for /api/import rows, shared with the agent tool validators (src/db/field-limits.ts)
+ * so imported values stay editable through update_transaction / categorize_transaction.
+ * description 200, category and category_detailed 64, other text fields 200, filename 255.
+ */
+export const IMPORT_MAX_DESCRIPTION = MAX_DESCRIPTION_LENGTH;
+export const IMPORT_MAX_CATEGORY = MAX_CATEGORY_LENGTH;
+export const IMPORT_MAX_TEXT_FIELD = MAX_TEXT_FIELD_LENGTH; // bank, merchant_name, payment_channel, external_id, account_last4
+export const IMPORT_MAX_FILENAME = MAX_FILENAME_LENGTH;
+const IMPORT_MIN_YEAR = 1900;
+const IMPORT_MAX_YEAR = 2100;
+
+/** Real calendar date (see isRealCalendarDate) within a sane statement-year range. */
+function isImportDate(s: string): boolean {
+  if (!isRealCalendarDate(s)) return false;
+  const y = Number(s.slice(0, 4));
+  return y >= IMPORT_MIN_YEAR && y <= IMPORT_MAX_YEAR;
+}
+
 function failedImport(error: string): ImportResult {
   return { status: 'failed', transactionsImported: 0, transactionsSkipped: 0, error, message: error };
 }
@@ -1449,6 +1469,15 @@ export async function apiImport(db: Database, body: ImportRequestBody): Promise<
   // 1. Validate the payload
   if (!body.filename || typeof body.filename !== 'string' || body.filename.trim() === '') {
     return failedImport('filename is required');
+  }
+  if (body.filename.length > IMPORT_MAX_FILENAME) {
+    return failedImport(`filename must be at most ${IMPORT_MAX_FILENAME} characters`);
+  }
+  if (body.bank !== undefined && body.bank !== null) {
+    if (typeof body.bank !== 'string') return failedImport('bank must be a string');
+    if (body.bank.length > IMPORT_MAX_TEXT_FIELD) {
+      return failedImport(`bank must be at most ${IMPORT_MAX_TEXT_FIELD} characters`);
+    }
   }
   if (!body.transactions) {
     return failedImport('transactions is required');
@@ -1470,11 +1499,36 @@ export async function apiImport(db: Database, body: ImportRequestBody): Promise<
       || typeof row.amount !== 'number' || !Number.isFinite(row.amount)) {
       return failedImport(`transactions[${i + 1}] must include date, description, and amount`);
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date)) {
-      return failedImport(`transactions[${i + 1}].date must be YYYY-MM-DD`);
+    const n = i + 1;
+    if (!isImportDate(row.date)) {
+      return failedImport(`transactions[${n}].date must be a real YYYY-MM-DD date`);
+    }
+    if (row.authorized_date !== undefined && (typeof row.authorized_date !== 'string' || !isImportDate(row.authorized_date))) {
+      return failedImport(`transactions[${n}].authorized_date must be a real YYYY-MM-DD date`);
+    }
+    if (row.description.length > IMPORT_MAX_DESCRIPTION) {
+      return failedImport(`transactions[${n}].description must be at most ${IMPORT_MAX_DESCRIPTION} characters`);
     }
     if (row.external_id !== undefined && (typeof row.external_id !== 'string' || row.external_id === '')) {
-      return failedImport(`transactions[${i + 1}].external_id must be a string`);
+      return failedImport(`transactions[${n}].external_id must be a string`);
+    }
+    for (const f of ['external_id', 'bank', 'merchant_name', 'category', 'category_detailed', 'payment_channel', 'account_last4'] as const) {
+      const v = row[f];
+      if (v === undefined) continue;
+      if (typeof v !== 'string') return failedImport(`transactions[${n}].${f} must be a string`);
+      const cap = f === 'category' || f === 'category_detailed' ? IMPORT_MAX_CATEGORY : IMPORT_MAX_TEXT_FIELD;
+      if (v.length > cap) {
+        return failedImport(`transactions[${n}].${f} must be at most ${cap} characters`);
+      }
+    }
+    // Categories render in dashboard filters; markup characters have no place in a category name.
+    for (const f of ['category', 'category_detailed'] as const) {
+      if (row[f] !== undefined && /[<>]/.test(row[f]!)) {
+        return failedImport(`transactions[${n}].${f} must not contain HTML`);
+      }
+    }
+    if (row.pending !== undefined && typeof row.pending !== 'boolean') {
+      return failedImport(`transactions[${n}].pending must be a boolean`);
     }
   }
 
