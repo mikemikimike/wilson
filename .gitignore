@@ -12,3 +12,12 @@ src/dashboard/ui/dist-hybrid/
 
 # open-jev latency harness (scratch build + browser profile)
 scripts/openjev-latency/.build/
+
+# bun run verify reports
+.verify/
+
+# e2e critical-path suite (agent-browser install, run outputs, reel build)
+e2e/node_modules/
+e2e/results/
+e2e/reel/node_modules/
+e2e/reel/build/

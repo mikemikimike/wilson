@@ -1,0 +1,10 @@
+{
+  "name": "wilson-e2e-reel",
+  "private": true,
+  "type": "module",
+  "description": "HyperFrames composition: e2e/results/latest.json + per-path webm -> one summary MP4. Run: node e2e/reel/build.mjs",
+  "scripts": {
+    "check": "npx --yes hyperframes@0.8.123 check",
+    "render": "npx --yes hyperframes@0.8.123 render"
+  }
+}

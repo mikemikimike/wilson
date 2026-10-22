@@ -1,0 +1,9 @@
+{
+  "name": "wilson-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Critical-path browser suite for the Wilson dashboard (agent-browser). Run from the repo root: bun run e2e",
+  "devDependencies": {
+    "agent-browser": "0.39.1"
+  }
+}

@@ -211,7 +211,16 @@ async function runAll(files: string[]): Promise<Map<string, TestRun>> {
 
 /** Files whose text counts as "a test references it". */
 const e2eFile = join(ROOT, 'e2e', 'critical-paths.mjs');
-const e2eText = existsSync(e2eFile) ? read(e2eFile) : null;
+// The suite keeps its path table in e2e/paths.mjs; scan every top-level e2e module.
+const e2eText = existsSync(e2eFile)
+  ? readdirSync(join(ROOT, 'e2e')).filter((f) => f.endsWith('.mjs')).map((f) => read(join(ROOT, 'e2e', f))).join('\n')
+  : null;
+/** Last suite run, if any: e2e/results/latest.json (written by `bun run e2e`). */
+const e2eLatest = (() => {
+  const f = join(ROOT, 'e2e', 'results', 'latest.json');
+  if (!existsSync(f)) return null;
+  try { return JSON.parse(read(f)) as { summary?: { passed?: number; failed?: number; skipped?: number; nn10?: Record<string, { pass?: boolean; value?: unknown }> }; paths?: Array<{ id: string; status?: string; result?: string }>; coverage?: { tabs?: Record<string, string[]> }; meta?: { finishedAt?: string; startedAt?: string } }; } catch { return null; }
+})();
 const allTestText = [...testText.values()].join('\n');
 
 /** Mutating routes, same extraction as src/__tests__/write-route-authz-sweep.test.ts (keep the two in step). */
@@ -322,10 +331,17 @@ function tabCoverage(): CoverageSection {
   if (!/const TAB_IDS\s*=/.test(tabBar) && /TAB_IDS[^;]*from '@webmcp-session'/.test(tabBar)) source = read(join(ROOT, 'src', 'dashboard', 'webmcp-session.ts'));
   const list = source.match(/TAB_IDS\s*=\s*\[([^\]]*)\]/)?.[1] ?? '';
   const ids = [...list.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const ran = e2eLatest?.coverage?.tabs;
+  const status = new Map((e2eLatest?.paths ?? []).map((p) => [p.id, p.status ?? p.result]));
   const items = ids.map((id) => {
+    // Prefer the last run: a tab is covered when a path that visited it passed.
+    if (ran) {
+      const passed = (ran[id] ?? []).filter((p) => /^pass/.test(String(status.get(p) ?? 'pass')));
+      return { name: id, covered: passed.length > 0, where: passed.length ? `last e2e run: ${passed.join(', ')}` : undefined };
+    }
     const re = new RegExp(`(?:tab|covers)\\s*:\\s*(?:\\[[^\\]]*)?['"\`]${id}['"\`]`);
     const covered = e2eText !== null && re.test(e2eText);
-    return { name: id, covered, where: covered ? 'e2e/critical-paths.mjs' : undefined };
+    return { name: id, covered, where: covered ? 'e2e (not run yet)' : undefined };
   });
   return { title: 'Dashboard UI tabs covered by e2e/critical-paths.mjs', short: 'tabs (e2e)', items, note: e2eText === null ? 'e2e/critical-paths.mjs not found: every tab counts as uncovered' : undefined };
 }
@@ -365,15 +381,11 @@ function webMcpCoverage(): CoverageSection {
 // ── Main ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 function nn10Status(): string {
-  const f = join(ROOT, 'e2e', 'results', 'latest.json');
-  if (!existsSync(f)) return 'not run (no e2e/results/latest.json)';
-  try {
-    const j = JSON.parse(read(f)) as Record<string, unknown>;
-    const s = j.status ?? j.result ?? (typeof j.ok === 'boolean' ? (j.ok ? 'pass' : 'fail') : undefined) ?? (typeof j.passed === 'boolean' ? (j.passed ? 'pass' : 'fail') : undefined);
-    return `latest.json: ${s ?? 'present'}${j.finishedAt || j.date ? ` (${String(j.finishedAt ?? j.date)})` : ''}`;
-  } catch {
-    return 'latest.json unreadable';
-  }
+  if (!e2eLatest) return 'not run (no readable e2e/results/latest.json)';
+  const s = e2eLatest.summary ?? {};
+  const targets = Object.entries(s.nn10 ?? {}).map(([k, v]) => `${k} ${v.pass ? 'pass' : `FAIL (${JSON.stringify(v.value)})`}`);
+  const when = e2eLatest.meta?.finishedAt ?? e2eLatest.meta?.startedAt;
+  return `paths ${s.passed ?? '?'} pass / ${s.failed ?? '?'} fail / ${s.skipped ?? '?'} skipped; ${targets.join('; ') || 'no NN-10 targets recorded'}${when ? ` (${when})` : ''}`;
 }
 
 const icon = (s: Status | undefined) => (s === 'pass' ? '✅' : s === 'external' ? '⚠️ ' : '❌');
