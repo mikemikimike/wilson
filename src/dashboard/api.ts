@@ -78,7 +78,7 @@ import {
   searchTransactionsSemantic,
   type SemanticTransactionFilters,
 } from '../db/embedding-queries.js';
-import { DEFAULT_EMBEDDING_MODEL, embedTexts } from '../utils/embeddings.js';
+import { DEFAULT_EMBEDDING_MODEL, embedTexts, isEmbeddingModelCached } from '../utils/embeddings.js';
 import { getLocalChatModelConfig } from '../model/local-chat.js';
 import { getModelPanel, setTaskOverride, validateTaskModel, type OverridableTask } from '../model/task-models.js';
 import { resolveProvider } from '../providers.js';
@@ -353,9 +353,10 @@ export async function apiUpdateTransaction(db: Database, id: number, body: unkno
 
   if (!updateTransaction(db, id, updates)) return { success: false, error: `transaction #${id} not found`, status: 404 };
   // Description is part of the embed text — refresh the stored vector.
-  // Never fails the edit (degrade, never error).
+  // Fire-and-forget: never fails or delays the edit (embedTransactionIds
+  // never throws and logs its own failures).
   if (updates.description !== undefined) {
-    await embedTransactionIds(db, [id]);
+    void embedTransactionIds(db, [id]);
   }
   return { success: true, id };
 }
@@ -474,6 +475,8 @@ export interface SemanticSearchResponse {
   /** Total transaction count. */
   total: number;
   model: string;
+  /** False when the embedding model is not downloaded yet — search did not run; `wilson --index` fetches it. */
+  modelReady: boolean;
 }
 
 /**
@@ -498,10 +501,13 @@ export async function apiSemanticSearch(
   const missing = countMissingTransactionTargets(db, DEFAULT_EMBEDDING_MODEL);
   const indexed = Math.max(0, total - missing);
   const model = DEFAULT_EMBEDDING_MODEL;
+  // The local engine is used only once the model is on disk — a search never
+  // triggers the model download (NN-01); the UI tells the user to run --index.
+  const modelReady = embed !== undefined || isEmbeddingModelCached(model);
 
   const q = (params.get('q') ?? '').trim();
-  if (!q) {
-    return { results: [], indexed, total, model };
+  if (!q || !modelReady) {
+    return { results: [], indexed, total, model, modelReady };
   }
 
   const parsedLimit = parseInt(params.get('limit') ?? '25', 10);
@@ -551,7 +557,7 @@ export async function apiSemanticSearch(
     }
   }
 
-  return { results, indexed, total, model };
+  return { results, indexed, total, model, modelReady };
 }
 
 export function apiDeleteTransaction(db: Database, id: number): WriteResult<{ id: number }> {
@@ -1524,8 +1530,9 @@ export async function apiImport(db: Database, body: ImportRequestBody): Promise<
   }));
   const { count, ids } = insertTransactions(db, txns);
 
-  // Embed-on-write: index the new rows immediately (never fails the import).
-  await embedTransactionIds(db, ids);
+  // Embed-on-write: index the new rows in the background — never fails or
+  // delays the import (embedTransactionIds never throws).
+  void embedTransactionIds(db, ids);
 
   // Date range (mirrors CLI step 9: lexicographic sort works for YYYY-MM-DD)
   const dates = newRows.map((t) => t.date).sort();
