@@ -708,6 +708,9 @@ export async function handleChatMessage(
   // summarize/relevance consumers follow chatHistory's model.
   refreshChatModel();
 
+  // The in-memory conversation follows the session owner too (not only the DB rows): a turn by another user, or in
+  // another session, starts from an empty history, so nobody's turns reach another user's agent prompt.
+  chatHistory.scopeContext(user?.id ?? null, sessionId ?? null);
   if (sessionId) {
     chatHistory.setSessionId(sessionId);
     logger.debug(`Dashboard chat: switched to session ${sessionId}`);
