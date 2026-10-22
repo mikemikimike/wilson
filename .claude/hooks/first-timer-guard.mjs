@@ -19,7 +19,8 @@ const localUrl = (u) => {
   const m = /^https?:\/\/(?:localhost|127\.0\.0\.1):(\d{2,5})(?:\/[\w./?=&%#:+-]*)?$/.exec(u);
   return !!m && m[1] === sandboxPort();
 };
-const file = (dir, ext) => new RegExp(`^${FT_ROOT}/${dir}/[\\w.-]+${ext}$`);
+// A plain file name in that folder: no subfolders, and not starting with a dot (so no `..`).
+const file = (dir, ext) => new RegExp(`^${FT_ROOT}/${dir}/\\w[\\w.-]*${ext}$`);
 const SHOT = file('shots', '\\.png');
 const UPLOAD = file('files', '');
 const DOWNLOAD = file('downloads', '');
@@ -53,8 +54,9 @@ export function words(cmd) {
   const re = /\s*(?:"([^"]*)"|'([^']*)'|([^\s"']+))(?=\s|$)/y;
   let m;
   while (re.lastIndex < cmd.length && (m = re.exec(cmd))) {
-    // Unquoted words must not expand into something else after this check: braces, globs, ~, ! history, # comments, zsh =cmd.
-    if (m[3] !== undefined && (/[{}*?[\]~!]/.test(m[3]) || /^[#=]/.test(m[3]))) return null;
+    // Unquoted words are allowlisted so nothing can expand after this check (zsh braces, globs, qualifiers like
+    // (e:…:), ^ and # patterns, ~, ! history, =cmd). Anything else (a URL with ? & #, text with spaces) goes in quotes.
+    if (m[3] !== undefined && !/^[A-Za-z0-9@._:\/%,+-][A-Za-z0-9@._:\/%,+=-]*$/.test(m[3])) return null;
     out.push(m[1] ?? m[2] ?? m[3]);
   }
   return re.lastIndex >= cmd.trimEnd().length ? out : null;
@@ -71,7 +73,6 @@ export function check(tool_name, tool_input) {
   const cmd = String(tool_input?.command ?? '').trim();
   const w = words(cmd);
   if (!w) return 'no pipes, chaining, redirects, $, backticks, backslashes or newlines.';
-  if (w.some((x) => x.includes('..'))) return 'no ".." in arguments.';
   if (w[0] === 'curl') return w.length === 3 && w[1] === '-sI' && localUrl(w[2]) ? null : 'curl: only `curl -sI http://localhost:<sandbox port>/...`.';
   if (w[0] !== AB || w[1] !== '--session' || w[2] !== SESSION) {
     return `only \`${AB} --session ${SESSION} <command> ...\` or \`curl -sI http://localhost:<port>\`.`;

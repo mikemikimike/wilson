@@ -37,7 +37,7 @@ describe('first-timer guard hook', () => {
   test('allows a person\'s browser actions on the sandbox port', () => {
     for (const c of [
       `${AB} open http://localhost:51234`,
-      `${AB} open http://127.0.0.1:51234/#transactions`,
+      `${AB} open 'http://127.0.0.1:51234/#transactions'`,
       `${AB} snapshot -i`,
       `${AB} click @e12`,
       `${AB} fill @e3 "firsttimer+1@example.com"`,
@@ -70,6 +70,10 @@ describe('first-timer guard hook', () => {
       `${AB} click !!`,
       `${AB} click @e1 #comment`,
       `${AB} click =sh`,
+      `${AB} click @e1(e:sh:)`,
+      `${AB} click ^@e1`,
+      `${AB} click @e1#`,
+      `${AB} open http://localhost:51234/?a=1`, // unquoted ? must be quoted
       // Quote adjacency: the shell joins these into one word (-x, --headed), so they must not split into harmless parts.
       `${AB} click @e1 "-"x`,
       `${AB} fill @e3 "-"-headed`,
@@ -81,6 +85,8 @@ describe('first-timer guard hook', () => {
     // The same characters are literal inside quotes, and a typed negative amount is fine.
     expect(bash(`${AB} fill @e3 "{a,b} * ~ 50%?"`)).toBe(0);
     expect(bash(`${AB} fill @e3 "-23.45"`)).toBe(0);
+    expect(bash(`${AB} open 'http://localhost:51234/?a=1#tx'`)).toBe(0);
+    expect(bash(`${AB} click "div.a .. span"`)).toBe(0); // a selector with .. is not a path
   });
 
   test('blocks agent-browser powers a visitor does not have', () => {
@@ -119,6 +125,8 @@ describe('first-timer guard hook', () => {
       `${AB} upload @e7 /Users/jdfiscus/.openaccountant/profiles/default/data.db`,
       `${AB} upload @e7 ${FT}/shots/../files/x.csv`,
       `${AB} download @e9 /Users/jdfiscus/Desktop/x.csv`,
+      `${AB} upload @e7 ${FT}/files/..`,
+      `${AB} download @e9 ${FT}/downloads/.hidden`,
     ]) expect({ c, code: bash(c) }).toEqual({ c, code: 2 });
   });
 

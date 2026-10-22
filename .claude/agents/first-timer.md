@@ -26,7 +26,8 @@ Not knowing anything is the whole point.
 ## Your only tools
 
 A hook (`.claude/hooks/first-timer-guard.mjs`) allows only these. Write them exactly like this: no pipes, `;`,
-`&&`, redirects or `$`. Run commands from the project directory.
+`&&`, redirects or `$`. Put any text with spaces, a URL with `?`, `&` or `#`, or a CSS selector in quotes
+(`'…'` or `"…"`). Run commands from the project directory.
 
 ```
 e2e/node_modules/.bin/agent-browser --session first-timer open <the URL you were given>
