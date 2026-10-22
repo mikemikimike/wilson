@@ -128,6 +128,17 @@ describe('PATCH/DELETE /api/transactions/:id over HTTP', () => {
     expect(row(db, id).amount).toBe(-12);
   });
 
+  test('a free-text category is a 400 with a plain message and writes nothing', async () => {
+    const { db, id, base } = await start();
+    const before = row(db, id);
+    const res = await patch(base, id, JSON.stringify({ category: 'Coffee stuff' }));
+    expect(res.status).toBe(400);
+    const data = await res.json() as { success: boolean; error: string };
+    expect(data.success).toBe(false);
+    expect(data.error).toBe('unknown category "Coffee stuff"');
+    expect(row(db, id)).toEqual(before);
+  });
+
   test('malformed JSON and a missing entity are 400s, not 500s', async () => {
     const { id, base } = await start();
     expect((await patch(base, id, '{bad')).status).toBe(400);
