@@ -1,3 +1,4 @@
+// @invariant NN-06
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { renderChatMarkdownHtml, renderLocalChatMarkdownHtml } from '../dashboard/ui/src/lib/chatMarkdown.html.js';

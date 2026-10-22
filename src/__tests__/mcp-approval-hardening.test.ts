@@ -1,3 +1,4 @@
+// @invariant NN-03 NN-04
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';

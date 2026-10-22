@@ -1,3 +1,4 @@
+// @invariant NN-01
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
 import {
   classifyProvider,

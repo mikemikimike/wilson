@@ -1,3 +1,4 @@
+// @invariant NN-04
 import { describe, expect, test, afterEach } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';

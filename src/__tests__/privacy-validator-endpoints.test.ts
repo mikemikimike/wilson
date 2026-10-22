@@ -1,3 +1,4 @@
+// @invariant NN-01
 import { describe, expect, test, afterAll, afterEach, mock, beforeEach } from 'bun:test';
 import * as transformers from '../model/providers/transformers.js';
 import { scopedSpy } from './scoped-spy.js';

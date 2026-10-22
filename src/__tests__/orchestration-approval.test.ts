@@ -1,3 +1,4 @@
+// @invariant NN-03
 import { describe, expect, test, beforeEach, afterEach, spyOn } from 'bun:test';
 import * as llmModule from '../model/llm.js';
 import type { LlmResult } from '../model/llm.js';

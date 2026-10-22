@@ -1,3 +1,4 @@
+// @invariant NN-05 TM-8.7
 /**
  * S3 (critic C1): the interim request gate on every /api/prelabel route
  * (specs/open-jev-labeler.md §9.0). HTTP-level, auth off.

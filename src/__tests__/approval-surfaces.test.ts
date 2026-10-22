@@ -1,3 +1,4 @@
+// @invariant NN-03
 import { describe, expect, test, beforeEach, afterEach, afterAll } from 'bun:test';
 import type { Database } from '../db/compat-sqlite.js';
 import type { LlmResponse } from '../model/types.js';

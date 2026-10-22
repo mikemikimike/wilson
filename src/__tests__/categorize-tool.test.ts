@@ -1,3 +1,4 @@
+// @invariant NN-03
 import { describe, expect, test, beforeEach, afterEach, spyOn } from 'bun:test';
 import type { Database } from '../db/compat-sqlite.js';
 import { initCategorizeTool, categorizeTool } from '../tools/categorize/categorize.js';

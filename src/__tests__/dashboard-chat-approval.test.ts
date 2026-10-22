@@ -1,3 +1,4 @@
+// @invariant NN-03
 import { describe, expect, test } from 'bun:test';
 import { pickPendingChatOperation, summarizeArgs, type ChatOperationLike } from '../dashboard/ui/src/lib/chatApproval';
 

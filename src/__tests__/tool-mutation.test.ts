@@ -1,3 +1,4 @@
+// @invariant NN-03
 import { describe, expect, test } from 'bun:test';
 import type { ToolDef } from '../model/types.js';
 import { isMutatingCall, mayMutate, sessionApprovalScope } from '../tools/mutation.js';

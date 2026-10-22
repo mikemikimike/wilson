@@ -1,3 +1,4 @@
+// @invariant NN-03
 import { describe, expect, test, afterEach } from 'bun:test';
 import { createTestDb, seedTestData } from './helpers.js';
 import { bfetch, count, firstTxnId, grantTools, makeUser, testScope } from './mcp-helpers.js';
