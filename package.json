@@ -17,7 +17,11 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test --isolate",
     "test:watch": "bun test --watch",
-    "test:coverage": "bun test --coverage"
+    "test:coverage": "bun test --coverage",
+    "sandbox:up": "bun run scripts/sandbox/up.ts",
+    "sandbox:down": "bun run scripts/sandbox/down.ts",
+    "verify": "bun run scripts/verify/run.ts",
+    "e2e": "node e2e/critical-paths.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.58",
