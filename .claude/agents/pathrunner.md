@@ -42,7 +42,7 @@ Read before running anything:
 
 ## Targets to judge against
 
-Take numbers from **CLAUDE.md NN-10**: mutations p95 < 300 ms, LCP p75 < 2000 ms on the `mobile4g` profile, CLS p75 < 0.1, no horizontal scroll at 360 px. NN-10 says these are pack defaults until Jd sets targets; read the table again each run in case it changed. Where NN-10 is silent, use these defaults **and say so in the report**:
+Take numbers from **CLAUDE.md NN-10**: mutations p95 < 300 ms, LCP p75 < 2000 ms on the `mobile4g` profile, CLS p75 < 0.1, no horizontal scroll at 360 px plus a clean phone layout audit (no off-screen, clipped, crushed or sub-24 px elements). NN-10 says these are pack defaults until Jd sets targets; read the table again each run in case it changed. Where NN-10 is silent, use these defaults **and say so in the report**:
 
 | Metric | Default target |
 |---|---|
@@ -84,6 +84,7 @@ Mutations: n=<count>, p50 <ms>, p95 <ms>, max <ms> -> <verdict>
 
 ### Target misses
 - <metric> on <page>: <value> vs <target> (source: NN-10 | pack default) - likely cause `path:line`
+- Phone layout audit (`summary.nn10.layoutAt360`, 360x800, every tab): per tab list each offender as `[rule] selector WxH "text"` (rules: offscreen, clipped, narrowtext, smalltarget). Any offender is an NN-10 miss; do not hide the ones that look deliberate, say which you think are.
 
 ### Errors seen
 Console: <n> · HTTP 5xx: <n> · Server: <n> (quote up to 5)

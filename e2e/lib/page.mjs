@@ -169,6 +169,74 @@ export const OVERFLOW_JS = `(() => {
 })()`;
 
 /**
+ * NN-10 phone layout audit. Run at 360x800 on a settled tab. Returns { viewport, count, offenders: [{rule, selector, w, h, text}] }.
+ *   offscreen   (a) right edge past the viewport while NOT inside an intentional horizontal scroller (an ancestor that opts in:
+ *               class overflow-x-auto|scroll or overflow-auto|scroll, inline overflow-x, or data-hscroll; a plain
+ *               overflow-y-auto does NOT count even though it computes overflow-x to auto). Only the outermost offender of a subtree is reported. Fixed elements skipped.
+ *   clipped     (b) overflow-x hidden/clip with scrollWidth > clientWidth + 1 on an element that contains text
+ *               (covers text-overflow ellipsis: "S." style truncation).
+ *   narrowtext  (c) a text block narrower than 120 px whose text wraps to more than 4 lines.
+ *   smalltarget (d) an interactive target smaller than 24x24 px (inline links inside running text are exempt, as in
+ *               WCAG 2.5.8; visually-hidden 1px controls are skipped).
+ */
+export const LAYOUT_AUDIT_JS = `(() => {
+  const vw = document.documentElement.clientWidth;
+  const out = [];
+  const visible = (r, cs) => r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none';
+  const sel = (el) => {
+    const one = (e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + (typeof e.className === 'string' && e.className.trim() ? '.' + e.className.trim().split(/\\s+/).slice(0, 3).join('.') : '');
+    const parts = [];
+    for (let e = el, i = 0; e && e !== document.body && i < 3; e = e.parentElement, i++) parts.unshift(one(e));
+    return parts.join(' > ').slice(0, 200);
+  };
+  const txt = (el) => (el.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40);
+  const push = (rule, el, r, extra) => out.push({ rule, selector: sel(el), w: Math.round(r.width), h: Math.round(r.height), text: txt(el), ...extra });
+  const all = [...document.querySelectorAll('body *')];
+  // A deliberate horizontal scroller opts in: overflow-x(-auto|-scroll) / overflow-(auto|scroll) class, inline overflow-x,
+  // or data-hscroll. Computed overflow-x alone is not enough: overflow-y:auto makes overflow-x compute to auto too, and
+  // every tab body is flex-1 overflow-y-auto.
+  const optsIn = (p) => {
+    const c = typeof p.className === 'string' ? p.className : '';
+    if (/(^|\\s)(?:[a-z0-9-]+:)*overflow-(?:x-)?(?:auto|scroll)(?=\\s|$)/.test(c)) return true;
+    const ox = p.style && p.style.overflowX;
+    return p.hasAttribute('data-hscroll') || ox === 'auto' || ox === 'scroll';
+  };
+  const inHScroller = (el) => { for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) { const o = getComputedStyle(p).overflowX; if ((o === 'auto' || o === 'scroll') && optsIn(p)) return true; } return false; };
+  const offSet = new Set();
+  for (const el of all) {
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'script' || tag === 'style' || (el.closest('svg') && tag !== 'svg')) continue;
+    const cs = getComputedStyle(el), r = el.getBoundingClientRect();
+    if (!visible(r, cs) || cs.position === 'fixed') continue;
+    if (r.right > vw + 1 && !inHScroller(el)) {
+      offSet.add(el);
+      if (!el.parentElement || !offSet.has(el.parentElement)) push('offscreen', el, r, { right: Math.round(r.right) });
+    }
+    if ((cs.overflowX === 'hidden' || cs.overflowX === 'clip') && el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 1 && txt(el)) {
+      push('clipped', el, r, { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
+    }
+    const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim().length > 1);
+    if (own) {
+      const block = cs.display === 'inline' ? el.parentElement : el;
+      const br = block.getBoundingClientRect();
+      if (br.width < 120 && br.width > 0) {
+        const rg = document.createRange(); rg.selectNodeContents(el);
+        const lines = new Set([...rg.getClientRects()].filter((x) => x.width > 0).map((x) => Math.round(x.top / 4)));
+        if (lines.size > 4) push('narrowtext', el, br, { lines: lines.size });
+      }
+    }
+    const interactive = tag === 'button' || tag === 'select' || tag === 'textarea' || (tag === 'a' && el.hasAttribute('href')) || (tag === 'input' && el.type !== 'hidden') || /^(button|tab|link|checkbox|switch|menuitem|option)$/.test(el.getAttribute('role') || '');
+    if (interactive && (r.width < 24 || r.height < 24) && !(r.width <= 1 && r.height <= 1) && cs.opacity !== '0') {
+      const inline = tag === 'a' && cs.display === 'inline' && el.parentElement && (el.parentElement.innerText || '').trim().length > (el.innerText || '').trim().length + 3;
+      if (!inline) push('smalltarget', el, r, {});
+    }
+  }
+  const seen = new Set();
+  const offenders = out.filter((o) => { const k = o.rule + o.selector + o.w + 'x' + o.h; if (seen.has(k)) return false; seen.add(k); return true; });
+  return { viewport: vw, count: offenders.length, offenders: offenders.slice(0, 60) };
+})()`;
+
+/**
  * Clear a text input with real keystrokes. (agent-browser `fill <sel> ''` empties the value without an input event,
  * so React keeps the old filter; a person's Backspace does fire one.)
  */
