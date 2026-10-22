@@ -713,10 +713,21 @@ export interface ChatSessionRow {
   title: string | null;
 }
 
-export function createChatSession(db: Database): string {
-  const id = crypto.randomUUID();
+/**
+ * Session ids are minted only here. A session started by a dashboard user with auth on carries its owner in the id
+ * (`<uuid>.u<userId>`), so ownership needs no schema change (migration v34 is reserved); one started with auth off
+ * or by the CLI is a bare uuid and has no owner. Read the owner with chatSessionOwnerId, never by parsing elsewhere.
+ */
+export function createChatSession(db: Database, ownerUserId: number | null = null): string {
+  const id = ownerUserId === null ? crypto.randomUUID() : `${crypto.randomUUID()}.u${ownerUserId}`;
   db.prepare(`INSERT INTO chat_sessions (id) VALUES (@id)`).run({ id });
   return id;
+}
+
+/** The dashboard user who started a session (see createChatSession), or null for an ownerless one. */
+export function chatSessionOwnerId(sessionId: string): number | null {
+  const m = /\.u(\d+)$/.exec(sessionId);
+  return m ? Number(m[1]) : null;
 }
 
 export function updateSessionTitle(db: Database, sessionId: string, title: string): void {
@@ -727,10 +738,23 @@ export function getChatSessionById(db: Database, id: string): ChatSessionRow | n
   return db.prepare(`SELECT * FROM chat_sessions WHERE id = @id`).get({ id }) as ChatSessionRow | null;
 }
 
-export function getChatSessions(db: Database, limit: number = 50): ChatSessionRow[] {
+/**
+ * Newest sessions first. With `scope`, only those a dashboard user may use: the ones it started, plus ownerless
+ * ones when `includeOwnerless` (an admin). Same id convention as createChatSession / chatSessionOwnerId.
+ */
+export function getChatSessions(
+  db: Database, limit: number = 50, scope?: { ownerUserId: number; includeOwnerless: boolean },
+): ChatSessionRow[] {
+  if (!scope) {
+    return db.prepare(`
+      SELECT * FROM chat_sessions ORDER BY started_at DESC LIMIT @limit
+    `).all({ limit }) as ChatSessionRow[];
+  }
   return db.prepare(`
-    SELECT * FROM chat_sessions ORDER BY started_at DESC LIMIT @limit
-  `).all({ limit }) as ChatSessionRow[];
+    SELECT * FROM chat_sessions
+    WHERE id GLOB @owned OR (@includeOwnerless = 1 AND id NOT GLOB '*.u[0-9]*')
+    ORDER BY started_at DESC LIMIT @limit
+  `).all({ limit, owned: `*.u${scope.ownerUserId}`, includeOwnerless: scope.includeOwnerless ? 1 : 0 }) as ChatSessionRow[];
 }
 
 export function getChatHistoryBySession(db: Database, sessionId: string): ChatHistoryRow[] {

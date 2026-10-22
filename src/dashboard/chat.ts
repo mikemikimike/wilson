@@ -23,7 +23,7 @@ import { resolveProvider } from '../providers.js';
 import { isChatProviderLocal } from './local-handoff.js';
 import { modelLocality } from '../model/locality.js';
 import { formatCategorizeSummary, parseCategorizeResult } from '../tools/categorize/summary.js';
-import { canWrite, getUser, onAuthEnabled, onWriteRevoked, type DashboardUser } from './auth.js';
+import { canWrite, getUser, mayUseChatSession, onAuthEnabled, onWriteRevoked, type DashboardUser } from './auth.js';
 import { ensureHandoffSecret, setHandoffReplayDb } from '../training/handoff-tag.js';
 
 /** The dashboard user a chat run belongs to (auth on); null when auth is off. */
@@ -647,17 +647,17 @@ export async function handleChatMessage(
   const readOnlyUser = user !== null && !canWrite(user.role);
   const expansion = expandSlashCommand(query);
   if ('direct' in expansion) {
-    return { answer: expansion.direct, sessionId: sessionId ?? chatHistory?.getSessionId() ?? null };
+    return { answer: expansion.direct, sessionId: callerSessionId(sessionId, user) };
   }
   if ('action' in expansion && readOnlyUser) {
-    return { answer: viewerCannotWrite(user!, '/categorize'), sessionId: sessionId ?? chatHistory?.getSessionId() ?? null };
+    return { answer: viewerCannotWrite(user!, '/categorize'), sessionId: callerSessionId(sessionId, user) };
   }
   if ('action' in expansion) {
     // "/categorize" is a run like any other message: one at a time, owned by whoever typed it, and cancellable
     // (deactivation of its owner, auth switched on under an anonymous run, a replaced session).
     if (activeChatRun) {
       logger.warn(`Dashboard chat: refused /categorize while another run is active`);
-      return { answer: CHAT_BUSY_MESSAGE, sessionId: sessionId ?? chatHistory?.getSessionId() ?? null, busy: true };
+      return { answer: CHAT_BUSY_MESSAGE, sessionId: callerSessionId(sessionId, user), busy: true };
     }
     const controller = new AbortController();
     const runDb = chatDb;
@@ -684,7 +684,7 @@ export async function handleChatMessage(
     const outcome = await categorizing;
     return {
       answer: outcome.answer,
-      sessionId: sessionId ?? chatHistory?.getSessionId() ?? null,
+      sessionId: callerSessionId(sessionId, user),
       ...(outcome.failed ? { failed: true as const } : {}),
     };
   }
@@ -699,7 +699,7 @@ export async function handleChatMessage(
   // the shared runner or history (model refresh, session switch).
   if (activeChatRun) {
     logger.warn(`Dashboard chat: refused a concurrent message while another run is active`);
-    return { answer: CHAT_BUSY_MESSAGE, sessionId: sessionId ?? chatHistory.getSessionId() ?? null, busy: true };
+    return { answer: CHAT_BUSY_MESSAGE, sessionId: callerSessionId(sessionId, user), busy: true };
   }
 
   // Per-message resolution: a chat-model change (panel write, TUI /model
@@ -711,6 +711,9 @@ export async function handleChatMessage(
   if (sessionId) {
     chatHistory.setSessionId(sessionId);
     logger.debug(`Dashboard chat: switched to session ${sessionId}`);
+  } else if (user && !callerSessionId(undefined, user)) {
+    // No session named and the current one is another user's: this user's turn starts a session of their own.
+    chatHistory.startSession(user.id);
   }
 
   logger.info(`Dashboard chat query`, { query: query.slice(0, 200), sessionId: sessionId ?? chatHistory.getSessionId() });
@@ -793,6 +796,16 @@ export async function handleChatMessage(
   } finally {
     clearTimeout(deadline);
   }
+}
+
+/**
+ * The session a reply names: the one the caller sent or, if none, the server's current session only when the caller
+ * may use it (auth.ts mayUseChatSession). A user is never handed, and never appends to, another user's session.
+ */
+function callerSessionId(sessionId: string | undefined, user: ChatUser | null): string | null {
+  if (sessionId) return sessionId;
+  const current = chatHistory?.getSessionId() ?? null;
+  return current && (!user || (chatDb !== null && mayUseChatSession(chatDb, current, user))) ? current : null;
 }
 
 /** Answer for a write a read-only dashboard user asked for (#156). */

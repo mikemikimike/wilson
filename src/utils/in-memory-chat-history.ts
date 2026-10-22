@@ -77,6 +77,8 @@ export class InMemoryChatHistory {
   private lastDbId: number | null = null;
   private sessionId: string | null = null;
   private sessionTitled: boolean = false;
+  /** Dashboard user the next lazily-created session belongs to (startSession); null = ownerless. */
+  private sessionOwner: number | null = null;
 
   constructor(model: string = DEFAULT_MODEL, maxTurns: number = DEFAULT_HISTORY_LIMIT) {
     this.model = model;
@@ -97,7 +99,7 @@ export class InMemoryChatHistory {
   private ensureSession(): void {
     if (this.sessionId || !this.db) return;
     try {
-      this.sessionId = createChatSession(this.db);
+      this.sessionId = createChatSession(this.db, this.sessionOwner);
     } catch {
       this.sessionId = null;
     }
@@ -117,6 +119,15 @@ export class InMemoryChatHistory {
   setSessionId(sessionId: string): void {
     this.sessionId = sessionId;
     this.sessionTitled = true; // existing sessions already have titles
+  }
+
+  /**
+   * Start a new session owned by a dashboard user (auth on), created lazily on the next message like the first one.
+   */
+  startSession(ownerUserId: number): void {
+    this.sessionId = null;
+    this.sessionTitled = false;
+    this.sessionOwner = ownerUserId;
   }
 
   /**

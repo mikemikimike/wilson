@@ -37,7 +37,7 @@ import { initChatSession, handleChatMessage, getCategorizeProgress, nextChatMode
 import {
   isAuthEnabled, enableAuth, disableAuth, lanAuthReady, hasActiveAdmin,
   listUsers, getUserCount, deactivateUser, LastAdminError, hashPassword, insertUser, createFirstAdmin,
-  verifyLogin, validateToken, revokeToken, cleanExpiredSessions, canWrite,
+  verifyLogin, validateToken, revokeToken, cleanExpiredSessions, canWrite, mayUseChatSession,
   type DashboardUser,
 } from './auth.js';
 import {
@@ -1062,17 +1062,23 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
 
         // ── Chat ────────────────────────────────────────────────────
 
+        // With auth on a chat session is its starter's alone (auth.ts mayUseChatSession): read and append
+        // only your own, so nobody can put words, or a forged assistant answer, into another user's history.
+        const chatUser = authEnabled && currentUser ? currentUser : null;
         if (path === '/api/chat/history') {
-          return Response.json(apiChatHistory(activeDb), { headers });
+          return Response.json(apiChatHistory(activeDb, chatUser), { headers });
         }
         if (path === '/api/chat/progress') {
           return Response.json({ progress: getCategorizeProgress() }, { headers });
         }
         if (path === '/api/chat/sessions') {
-          return Response.json(apiChatSessions(activeDb), { headers });
+          return Response.json(apiChatSessions(activeDb, chatUser), { headers });
         }
         const sessionMatch = path.match(/^\/api\/chat\/sessions\/(.+)$/);
         if (sessionMatch) {
+          if (chatUser && !mayUseChatSession(activeDb, sessionMatch[1], chatUser)) {
+            return Response.json({ error: 'Forbidden' }, { status: 403, headers });
+          }
           return Response.json(apiChatSessionHistory(activeDb, sessionMatch[1]), { headers });
         }
 
@@ -1081,6 +1087,9 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           // The body was read and auth re-checked centrally (readBodyThenRecheck).
           if (!body.query) {
             return Response.json({ error: 'query is required' }, { status: 400, headers });
+          }
+          if (body.sessionId && chatUser && (typeof body.sessionId !== 'string' || !mayUseChatSession(activeDb, body.sessionId, chatUser))) {
+            return Response.json({ error: 'Forbidden' }, { status: 403, headers });
           }
           // Recorded verbatim in the interaction store and later normalised by training/judge reads: bound it here.
           if (typeof body.query !== 'string' || body.query.length > MAX_CHAT_QUERY_CHARS) {
@@ -1154,9 +1163,9 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
 
         if (path === '/api/chat/local' && req.method === 'POST') {
           const body = await req.json() as { query?: string; answer?: string; sessionId?: string };
-          const result = apiRecordLocalChatMessage(activeDb, body);
+          const result = apiRecordLocalChatMessage(activeDb, body, chatUser);
           if ('error' in result) {
-            return Response.json(result, { status: 400, headers });
+            return Response.json({ error: result.error }, { status: result.forbidden ? 403 : 400, headers });
           }
           return Response.json(result, { headers });
         }
