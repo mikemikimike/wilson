@@ -129,6 +129,7 @@ import {
   type BrowserTraceBody,
 } from '../demo/showdown.js';
 import { getSampleBySlug } from '../demo/samples.js';
+import { canWrite, mayUseChatSession, type DashboardUser } from './auth.js';
 import { getPrivacyExhibit, getPrivacyLedger, startPrivacyRun } from '../demo/privacy.js';
 import { discoverSkills } from '../skills/registry.js';
 import { csvText } from '../utils/spreadsheet-safe.js';
@@ -747,18 +748,20 @@ export function apiLogs(db: Database, params: URLSearchParams) {
 
 // ── Chat ────────────────────────────────────────────────────────────────────
 
-export function apiChatHistory(db: Database) {
+/** `user` (auth on) sees only the turns of sessions it may use (auth.ts mayUseChatSession); null sees all. */
+export function apiChatHistory(db: Database, user: Pick<DashboardUser, 'id' | 'role'> | null = null) {
   try {
     const rows = getRecentChatHistory(db, 50);
-    return rows.reverse();
+    return rows.filter((r) => !user || (r.session_id !== null && mayUseChatSession(db, r.session_id, user))).reverse();
   } catch {
     return [];
   }
 }
 
-export function apiChatSessions(db: Database) {
+/** `user` (auth on) lists only its own sessions (plus ownerless ones for an admin); null lists all. */
+export function apiChatSessions(db: Database, user: Pick<DashboardUser, 'id' | 'role'> | null = null) {
   try {
-    return getChatSessions(db, 50);
+    return getChatSessions(db, 50, user ? { ownerUserId: user.id, includeOwnerless: canWrite(user.role) } : undefined);
   } catch {
     return [];
   }
@@ -863,12 +866,14 @@ export interface LocalChatRecordBody {
  * `summary` stays null: the LLM-summary pass is a server-agent behavior.
  *
  * OPERATOR VETO CANDIDATE: this is the only new write path added for hybrid
- * chat (browser-originated history append, same auth posture as POST /api/chat).
+ * chat (browser-originated history append, same auth posture as POST /api/chat:
+ * with auth on, only into a session the caller started).
  */
 export function apiRecordLocalChatMessage(
   db: Database,
   body: LocalChatRecordBody,
-): { success: true; sessionId: string } | { error: string } {
+  user: Pick<DashboardUser, 'id' | 'role'> | null = null,
+): { success: true; sessionId: string } | { error: string; forbidden?: true } {
   const query = typeof body?.query === 'string' ? body.query.trim() : '';
   const answer = typeof body?.answer === 'string' ? body.answer.trim() : '';
   if (!query || !answer) {
@@ -884,7 +889,12 @@ export function apiRecordLocalChatMessage(
 
   const supplied = typeof body?.sessionId === 'string' && body.sessionId ? body.sessionId : null;
   const existing = supplied ? getChatSessionById(db, supplied) : null;
-  const sessionId = existing ? existing.id : createChatSession(db);
+  // The answer is the browser's and cannot be verified, so with auth on it lands only in the caller's own
+  // session (auth.ts mayUseChatSession); a new one is the caller's.
+  if (existing && !mayUseChatSession(db, existing.id, user)) {
+    return { error: 'Forbidden', forbidden: true };
+  }
+  const sessionId = existing ? existing.id : createChatSession(db, user?.id ?? null);
   if (!existing) {
     updateSessionTitle(db, sessionId, query.slice(0, 100));
   }

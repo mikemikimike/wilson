@@ -6,6 +6,7 @@ import {
   expirePendingOperationsForUser,
   isDashboardAuthEnabled,
 } from '../mcp/store.js';
+import { chatSessionOwnerId, getChatSessionById } from '../db/queries.js';
 
 export interface DashboardUser {
   id: number;
@@ -23,6 +24,19 @@ export interface DashboardUser {
  */
 export function canWrite(role: DashboardUser['role']): boolean {
   return role === 'admin';
+}
+
+/**
+ * Whether a dashboard user may read or append to chat session `sessionId`. Auth off (`user` null): any session.
+ * Auth on: a session is its starter's alone, so nobody writes into, or reads, another user's history (a viewer may
+ * chat, #156, but only in their own sessions). An ownerless session (started with auth off) is the admins'. An id
+ * with no session row is nobody's: a caller cannot plant turns under an id the server never minted.
+ */
+export function mayUseChatSession(db: Database, sessionId: string, user: Pick<DashboardUser, 'id' | 'role'> | null): boolean {
+  if (!user) return true;
+  if (!getChatSessionById(db, sessionId)) return false;
+  const owner = chatSessionOwnerId(sessionId);
+  return owner === null ? canWrite(user.role) : owner === user.id;
 }
 
 // ── Config ──────────────────────────────────────────────────────────────────
