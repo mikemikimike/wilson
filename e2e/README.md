@@ -68,7 +68,7 @@ broken journey.
 - **360 px**: page-level horizontal scroll per tab (the NN-10 check) plus a list of elements that overflow the viewport
   (reported only), and the **layout audit** (`LAYOUT_AUDIT_JS` in `lib/page.mjs`, 360x800, every tab, fails NN-10 as
   `summary.nn10.layoutAt360` with `offenders` per tab in `latest.json`): (a) `offscreen`, right edge past the viewport
-  outside an `overflow-x: auto|scroll` ancestor; (b) `clipped`, `overflow-x: hidden|clip` with `scrollWidth >
+  outside an ancestor that opts into horizontal scrolling (class `overflow-x-auto|scroll` / `overflow-auto|scroll`, inline `overflow-x`, or `data-hscroll`; a plain `overflow-y-auto` tab body does not count, because CSS computes its overflow-x to `auto`, which hid every tab-content overflow before). Calibrate with `node e2e/lib/layout-audit.calibrate.mjs`; (b) `clipped`, `overflow-x: hidden|clip` with `scrollWidth >
   clientWidth + 1` on an element with text (includes ellipsis truncation); (c) `narrowtext`, a text block under 120 px
   wide wrapping to more than 4 lines; (d) `smalltarget`, an interactive element under 24x24 px (inline links in running
   text and 1 px visually-hidden controls are exempt). Added after issue #180: the old check passed while Overview was

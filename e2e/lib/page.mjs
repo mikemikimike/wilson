@@ -170,8 +170,9 @@ export const OVERFLOW_JS = `(() => {
 
 /**
  * NN-10 phone layout audit. Run at 360x800 on a settled tab. Returns { viewport, count, offenders: [{rule, selector, w, h, text}] }.
- *   offscreen   (a) right edge past the viewport while NOT inside an intentional horizontal scroller (an ancestor with
- *               overflow-x auto/scroll). Only the outermost offender of a subtree is reported. Fixed elements skipped.
+ *   offscreen   (a) right edge past the viewport while NOT inside an intentional horizontal scroller (an ancestor that opts in:
+ *               class overflow-x-auto|scroll or overflow-auto|scroll, inline overflow-x, or data-hscroll; a plain
+ *               overflow-y-auto does NOT count even though it computes overflow-x to auto). Only the outermost offender of a subtree is reported. Fixed elements skipped.
  *   clipped     (b) overflow-x hidden/clip with scrollWidth > clientWidth + 1 on an element that contains text
  *               (covers text-overflow ellipsis: "S." style truncation).
  *   narrowtext  (c) a text block narrower than 120 px whose text wraps to more than 4 lines.
@@ -191,7 +192,16 @@ export const LAYOUT_AUDIT_JS = `(() => {
   const txt = (el) => (el.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40);
   const push = (rule, el, r, extra) => out.push({ rule, selector: sel(el), w: Math.round(r.width), h: Math.round(r.height), text: txt(el), ...extra });
   const all = [...document.querySelectorAll('body *')];
-  const inHScroller = (el) => { for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) { const o = getComputedStyle(p).overflowX; if (o === 'auto' || o === 'scroll') return true; } return false; };
+  // A deliberate horizontal scroller opts in: overflow-x(-auto|-scroll) / overflow-(auto|scroll) class, inline overflow-x,
+  // or data-hscroll. Computed overflow-x alone is not enough: overflow-y:auto makes overflow-x compute to auto too, and
+  // every tab body is flex-1 overflow-y-auto.
+  const optsIn = (p) => {
+    const c = typeof p.className === 'string' ? p.className : '';
+    if (/(^|\\s)(?:[a-z0-9-]+:)*overflow-(?:x-)?(?:auto|scroll)(?=\\s|$)/.test(c)) return true;
+    const ox = p.style && p.style.overflowX;
+    return p.hasAttribute('data-hscroll') || ox === 'auto' || ox === 'scroll';
+  };
+  const inHScroller = (el) => { for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) { const o = getComputedStyle(p).overflowX; if ((o === 'auto' || o === 'scroll') && optsIn(p)) return true; } return false; };
   const offSet = new Set();
   for (const el of all) {
     const tag = el.tagName.toLowerCase();
