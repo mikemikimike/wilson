@@ -187,7 +187,7 @@ async function runOne(file: string): Promise<TestRun> {
     ms: Math.round(performance.now() - t0),
     pass: num(/^\s*(\d+) pass$/m),
     fail: num(/^\s*(\d+) fail$/m),
-    tail: all.split('\n').filter((l) => /^\(fail\)|error:/.test(l)).slice(0, 8).join('\n'),
+    tail: all.split('\n').filter((l) => l.startsWith('(fail)') || l.includes('error:')).slice(0, 8).join('\n'),
   };
 }
 
