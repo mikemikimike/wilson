@@ -38,6 +38,12 @@ If `src/dashboard/ui/dist` is missing: `cd src/dashboard/ui && npm ci && bun run
 | `E2E_CHROME` | system Chrome | Path to the Chrome binary agent-browser launches. |
 | `E2E_SANDBOX_NAME` | `e2e` | Sandbox name (keep the default unless two runs must coexist). |
 
+## Exit code
+
+`1` when any path fails or any NN-10 verdict in `summary.nn10` is FAIL (mutation p95, mobile LCP p75, CLS p75,
+360 px horizontal scroll, 360 px layout audit). A verdict of n/a (not measured, e.g. `E2E_PERF=0`) does not fail the
+run. `0` otherwise.
+
 ## Output
 
 `e2e/results/` (gitignored):

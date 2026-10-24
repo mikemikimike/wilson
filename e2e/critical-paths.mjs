@@ -268,7 +268,10 @@ async function main() {
   results.meta.finishedAt = now();
   fs.writeFileSync(path.join(RESULTS, 'latest.json'), JSON.stringify(results, null, 2));
   printSummary(results);
-  return counts.failed > 0 ? 1 : 0;
+  // NN-10 is a gate: any FAIL verdict fails the run. n/a (not measured, e.g. E2E_PERF=0) does not.
+  const nn10Failed = Object.entries(results.summary.nn10).filter(([, x]) => x?.pass === false).map(([k]) => k);
+  if (nn10Failed.length) log(`NN-10 FAIL: ${nn10Failed.join(', ')} (exit 1)`);
+  return counts.failed > 0 || nn10Failed.length > 0 ? 1 : 0;
 }
 
 function withDeps(ids) {
