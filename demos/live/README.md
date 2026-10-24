@@ -12,6 +12,7 @@ node demos/live/webmcp-live.mjs check           # preflight, ~5 s: scripted huma
 
 node demos/live/webmcp-live.mjs up              # terminal 1: seed (first run), dashboard :3141, Chrome with WebMCP + CDP 9333
 node demos/live/webmcp-live.mjs stage           # terminal 2, on stage: ⏎ advances each step
+node demos/live/webmcp-live.mjs reset           # between runs: access back ON, 0 grants, same Chrome (no restart)
 ```
 
 `--fresh` on `up`/`check` reseeds the scratch HOME. Override with `WILSON_LIVE_DIR`, `WILSON_LIVE_PORT`, `WILSON_LIVE_CDP`.
@@ -31,6 +32,8 @@ call never reaches the page, so it adds no audit row.
 ## Notes
 
 - Verified on Chrome 156 (system Chrome, `--enable-features=WebMCPTesting`) with 0.10.0, Oct 22 2026.
-- Turning access back ON needs no confirmation, but every grant was revoked: re-grant before a second run.
+- Turning access back ON needs no confirmation, but every grant was revoked: re-grant before a second run. `reset` does
+  OFF → ON for you (also clearing grants left by a half-finished run), so the next `stage` starts from 0 tools.
+- Ctrl-C on `up` stops the dashboard and Chrome and frees :3141 and :9333.
 - Never run `agent-browser close` against the `wilson-live` session: it closes the shared Chrome.
 - Keep the Chrome window visible on stage; the confirmation-card poller only runs while the tab is visible.

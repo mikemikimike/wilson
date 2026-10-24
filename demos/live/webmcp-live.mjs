@@ -8,6 +8,7 @@
 //   node demos/live/webmcp-live.mjs up [--fresh]   # sandbox: seed, dashboard, Chrome (WebMCP + CDP); Ctrl-C stops it
 //   node demos/live/webmcp-live.mjs stage          # on stage, in a second terminal: Enter advances each step
 //   node demos/live/webmcp-live.mjs check [--fresh]  # preflight: up + scripted human + asserts, then stops (exit 0/1)
+//   node demos/live/webmcp-live.mjs reset          # between runs: access back ON with 0 grants, same Chrome
 //
 // Run from the repo root. One-time: `cd demos/live && npm install` (pins agent-browser 0.38.2).
 // Never run `agent-browser close` against this session: it kills the shared Chrome.
@@ -120,6 +121,8 @@ async function up() {
   fs.rmSync(assertScratch(UDD), { recursive: true, force: true });
   browserCtx = await chromium.launchPersistentContext(UDD, {
     channel: 'chrome', headless: false, viewport: null,
+    // Our own signal handler owns shutdown; Playwright's would exit first and orphan the dashboard on :PORT.
+    handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
     args: ['--enable-features=WebMCPTesting', `--remote-debugging-port=${CDP}`, '--no-first-run', '--no-default-browser-check', '--start-maximized'],
   });
   const page = browserCtx.pages()[0] ?? (await browserCtx.newPage());
@@ -131,12 +134,13 @@ async function up() {
 
 async function down() {
   // Only tear down what this process started (`stage` starts nothing and must not touch `up`'s Chrome).
+  // Children first and synchronously, so the dashboard dies even if closing Chrome hangs.
+  for (const ch of children.splice(0)) if (ch.exitCode === null) ch.kill('SIGTERM');
   if (browserCtx) {
     try { await browserCtx.close(); } catch {}
     fs.rmSync(UDD, { recursive: true, force: true });
     browserCtx = null;
   }
-  for (const ch of children.splice(0)) try { ch.kill('SIGTERM'); } catch {}
 }
 
 // ── the human side, scripted (check only) ──────────────────────────────────────
@@ -221,15 +225,33 @@ async function stage() {
   await pause('the agent tries again');
   show(`agent-browser webmcp invoke get_spending_summary --params '${JSON.stringify(SUMMARY_ARGS)}'`);
   const after = invoke('get_spending_summary', SUMMARY_ARGS);
-  console.log(after.ok ? c.red('  it still answered (Access is not off?)') : c.red(`  ✗ ${after.code}`));
+  console.log(after.ok ? c.red('  it still answered (Access is not off?)') : `\n  ${c.red(c.bold(`✗ REFUSED  ${after.code}`))}`);
   show('agent-browser webmcp list');
-  console.log(c.dim(`  (${listTools().length} tools)`));
+  const left = listTools().length;
+  console.log(left ? c.red(`  ${left} tools still exposed`) : c.dim('  (none, the tool is no longer exposed)'));
+  console.log(c.dim(`\n  another run: node demos/live/webmcp-live.mjs reset`));
   rl.close();
+}
+
+// ── between runs: back to a fresh tab without restarting `up` ──────────────────
+
+async function reset() {
+  const { chromium } = await import('playwright');
+  // Attach to `up`'s Chrome and never close it: the process exits and only the CDP socket drops.
+  const browser = await chromium.connectOverCDP(`http://localhost:${CDP}`);
+  const page = browser.contexts().flatMap((ctx) => ctx.pages()).find((p) => p.url().startsWith(URL_));
+  if (!page) throw new Error(`no dashboard tab at ${URL_}; is \`up\` running?`);
+  await page.bringToFront();
+  // OFF then ON revokes any grant left over from a half-finished run.
+  await setAccess(page, false);
+  await setAccess(page, true);
+  await until(() => listTools().length === 0, 10_000, 'tools to clear');
+  console.log(`${c.green('RESET')} access ON, 0 tools granted; run \`stage\` again`);
 }
 
 // ── main ───────────────────────────────────────────────────────────────────────
 
-const main = { up: async () => { await up(); await new Promise(() => {}); }, stage, check }[mode];
-if (!main) { console.error(`unknown mode ${mode}: use up | stage | check`); process.exit(2); }
+const main = { up: async () => { await up(); await new Promise(() => {}); }, stage, check, reset }[mode];
+if (!main) { console.error(`unknown mode ${mode}: use up | stage | check | reset`); process.exit(2); }
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { await down(); process.exit(130); });
 main().then(() => process.exit(0), async (e) => { console.error(c.red(`✗ ${e.message}`)); await down(); process.exit(1); });
