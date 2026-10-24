@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   AreaChart,
   Area,
@@ -12,7 +12,12 @@ import { useApi } from '@/hooks/useApi';
 import { ChartCard } from '@/charts/ChartCard';
 import { ChartTooltip } from '@/charts/ChartTooltip';
 import { chartTokens } from '@/charts/tokens';
+import { Dialog } from '@/components/Dialog';
+import { NewAccountForm } from '@/components/NewAccountForm';
 import { formatDate, money, moneyCompact } from '@/format';
+import { addAccountEntry } from '@/lib/accountCreate';
+import type { WriteAuthStatus } from '@/lib/transactionEditing';
+import { invalidateMentionSources } from '@/hooks/useMentionSources';
 import type { Account, NetWorthResponse, NetWorthTrendPoint } from '@/types';
 
 /** Display names keyed by the trend point's dataKey. */
@@ -132,12 +137,41 @@ function AccountCard({ account }: { account: Account }) {
   );
 }
 
+/** The "Add account" button (#199). Disabled with a tooltip for a viewer, like the Transactions tab's Import (#190). */
+function AddAccountButton({ auth, onClick }: { auth: WriteAuthStatus | null; onClick: () => void }) {
+  const entry = addAccountEntry(auth);
+  return (
+    // The tooltip sits on a wrapper: some browsers show no title on a disabled button.
+    <span title={entry.title}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={entry.disabled}
+        aria-label={entry.title ? `${entry.label}. ${entry.title}` : undefined}
+        className="bg-green-700 hover:bg-green-600 disabled:bg-surface-raised disabled:text-text-muted disabled:cursor-not-allowed text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors cursor-pointer border-none"
+      >
+        {entry.label}
+      </button>
+    </span>
+  );
+}
+
 export function AccountsTab() {
-  const { data: netWorth, loading: nwLoading } = useApi<NetWorthResponse>('/api/net-worth');
+  const { data: netWorth, loading: nwLoading, refetch: refetchNetWorth } = useApi<NetWorthResponse>('/api/net-worth');
   const { data: trend, loading: trendLoading } = useApi<NetWorthTrendPoint[]>(
     '/api/net-worth/trend?months=12',
   );
-  const { data: accounts, loading: acctLoading } = useApi<Account[]>('/api/accounts');
+  const { data: accounts, loading: acctLoading, refetch: refetchAccounts } = useApi<Account[]>('/api/accounts');
+  // Write controls follow the role (NN-04): a viewer sees "Add account" disabled; the server refuses them anyway.
+  const { data: authStatus } = useApi<WriteAuthStatus>('/api/auth/status');
+  const [addOpen, setAddOpen] = useState(false);
+
+  function handleCreated() {
+    setAddOpen(false);
+    refetchAccounts();
+    refetchNetWorth();
+    invalidateMentionSources();
+  }
 
   const grouped = useMemo(() => {
     if (!accounts) return {};
@@ -150,7 +184,8 @@ export function AccountsTab() {
     return groups;
   }, [accounts]);
 
-  const loading = nwLoading || trendLoading || acctLoading;
+  // Skeleton on first load only, so refetching after "Add account" doesn't blank the tab.
+  const loading = (nwLoading && !netWorth) || (trendLoading && !trend) || (acctLoading && !accounts);
 
   if (loading) {
     return (
@@ -183,21 +218,37 @@ export function AccountsTab() {
 
       {/* Accounts grouped by type */}
       {Object.keys(grouped).length > 0 ? (
-        Object.entries(grouped).map(([type, accts]) => (
-          <div key={type}>
-            <h3 className="text-xs text-text-secondary uppercase tracking-wide mb-2">{type}</h3>
-            <div className="space-y-2">
-              {accts.map((acct) => (
-                <AccountCard key={acct.id} account={acct} />
-              ))}
-            </div>
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-text">Accounts</h2>
+            <AddAccountButton auth={authStatus} onClick={() => setAddOpen(true)} />
           </div>
-        ))
+          {Object.entries(grouped).map(([type, accts]) => (
+            <div key={type}>
+              <h3 className="text-xs text-text-secondary uppercase tracking-wide mb-2">{type}</h3>
+              <div className="space-y-2">
+                {accts.map((acct) => (
+                  <AccountCard key={acct.id} account={acct} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </>
       ) : (
-        <div className="bg-surface-raised border border-border rounded-lg p-4">
-          <p className="text-sm text-text-muted">No accounts found.</p>
+        <div className="bg-surface-raised border border-border rounded-lg p-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm text-text">No accounts yet.</p>
+            <p className="text-xs text-text-muted mt-0.5">
+              Add the accounts you import statements for, so transactions can be assigned to them.
+            </p>
+          </div>
+          <AddAccountButton auth={authStatus} onClick={() => setAddOpen(true)} />
         </div>
       )}
+
+      <Dialog open={addOpen} onClose={() => setAddOpen(false)} title="Add account">
+        {addOpen && <NewAccountForm onCreated={handleCreated} onCancel={() => setAddOpen(false)} />}
+      </Dialog>
     </div>
   );
 }

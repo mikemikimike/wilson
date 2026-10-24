@@ -1,9 +1,11 @@
 // csv-parse (via the statement parsers) needs the Buffer global; this chunk is the only one that loads it.
 import '@/buffer-shim';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useApi } from '@/hooks/useApi';
 import { api } from '@/api';
 import { Dialog } from '@/components/Dialog';
+import { NewAccountForm } from '@/components/NewAccountForm';
+import { NEW_ACCOUNT_OPTION } from '@/lib/accountCreate';
 import { formatAmount, formatDate } from '@/format';
 import {
   parseStatementContent,
@@ -71,8 +73,16 @@ export function ImportStatementDialog({
   const { data: authStatus } = useApi<AuthStatus>('/api/auth/status');
   const canCommit = canCommitImport(authStatus);
   // Optional: which account the imported rows belong to (#187). '' = none (auto-link by last4 still runs).
-  const { data: accounts } = useApi<Account[]>(open ? '/api/accounts' : null, [open]);
+  const { data: fetchedAccounts } = useApi<Account[]>(open ? '/api/accounts' : null, [open]);
   const [accountId, setAccountId] = useState('');
+  // Accounts made here with "New account…" (#199), listed at once without waiting for a refetch.
+  const [createdAccounts, setCreatedAccounts] = useState<Account[]>([]);
+  const accounts = useMemo(() => {
+    if (!fetchedAccounts) return null;
+    const known = new Set(fetchedAccounts.map((a) => a.id));
+    return [...fetchedAccounts, ...createdAccounts.filter((a) => !known.has(a.id))];
+  }, [fetchedAccounts, createdAccounts]);
+  const creatingAccount = accountId === NEW_ACCOUNT_OPTION;
 
   const [parsing, setParsing] = useState(false);
   const [parseError, setParseError] = useState('');
@@ -92,6 +102,7 @@ export function ImportStatementDialog({
       setCommitError('');
       setDragOver(false);
       setAccountId('');
+      setCreatedAccounts([]);
     }
   }, [open]);
 
@@ -147,7 +158,7 @@ export function ImportStatementDialog({
           filename: parsed.filename,
           bank: parsed.statement.bank,
           fileHash: parsed.fileHash,
-          accountId: accountId === '' ? null : Number(accountId),
+          accountId: accountId === '' || creatingAccount ? null : Number(accountId),
           transactions: parsed.statement.transactions.map((t) => ({
             date: t.date,
             description: t.description,
@@ -195,7 +206,7 @@ export function ImportStatementDialog({
             </button>
             <button
               onClick={handleCommit}
-              disabled={!parsed || !canCommit || committing}
+              disabled={!parsed || !canCommit || committing || creatingAccount}
               className="bg-green-700 hover:bg-green-600 disabled:bg-green-900/40 disabled:text-text-muted text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed border-none"
             >
               {committing ? 'Importing…' : 'Import to database'}
@@ -327,7 +338,7 @@ export function ImportStatementDialog({
             </span>
           </div>
 
-          {canCommit && accounts && accounts.length > 0 && (
+          {canCommit && accounts && (
             <label className="flex items-center justify-between gap-3 text-sm">
               <span className="text-text-muted">
                 Account <span className="text-xs">(optional)</span>
@@ -344,8 +355,22 @@ export function ImportStatementDialog({
                     {a.account_number_last4 ? ` ··${a.account_number_last4}` : ''}
                   </option>
                 ))}
+                <option value={NEW_ACCOUNT_OPTION}>New account…</option>
               </select>
             </label>
+          )}
+
+          {canCommit && creatingAccount && (
+            <div className="border border-border rounded-md p-3">
+              <NewAccountForm
+                compact
+                onCreated={(account) => {
+                  setCreatedAccounts((prev) => [...prev, account]);
+                  setAccountId(String(account.id));
+                }}
+                onCancel={() => setAccountId('')}
+              />
+            </div>
           )}
 
           <button

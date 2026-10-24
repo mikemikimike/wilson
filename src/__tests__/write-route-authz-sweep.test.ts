@@ -76,6 +76,7 @@ const ROUTES: RouteRow[] = [
   { file: S, method: 'POST', pattern: '/api/entities', path: '/api/entities', body: { name: 'FAKE viewer entity (dummy)' }, kind: 'refuse', control: { body: { name: 'FAKE admin entity (dummy)' } } },
   { file: S, method: 'PUT', pattern: '/api/entities/:id', path: '/api/entities/1', body: { name: 'x' }, kind: 'refuse', control: { path: '/api/entities/9999' } },
   { file: S, method: 'DELETE', pattern: '/api/entities/:id', path: '/api/entities/1', kind: 'refuse', control: { path: '/api/entities/9999' } },
+  { file: S, method: 'POST', pattern: '/api/accounts', path: '/api/accounts', body: { name: 'FAKE viewer account (dummy)', accountSubtype: 'checking' }, kind: 'refuse', control: { body: { name: 'FAKE admin account (dummy)', accountSubtype: 'checking' } } },
   // ── import, memories, settings, models ──
   { file: S, method: 'POST', pattern: '/api/import', path: '/api/import', body: { filename: 'v.csv', bank: 'generic', transactions: [{ date: '2026-02-01', description: 'FAKE viewer import (dummy)', amount: -1 }] }, kind: 'refuse', control: { body: {} } },
   { file: S, method: 'POST', pattern: '/api/import', path: '/api/import', body: { filename: 'v2.csv', bank: 'generic', accountId: 1, transactions: [{ date: '2026-02-02', description: 'FAKE viewer import with account (dummy)', amount: -1 }] }, kind: 'refuse', control: { body: {} } },

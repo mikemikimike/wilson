@@ -2,6 +2,7 @@ import type { Database } from '../db/compat-sqlite.js';
 import { MAX_CATEGORY_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_TEXT_FIELD_LENGTH, MAX_FILENAME_LENGTH } from '../db/field-limits.js';
 import { createHash } from 'crypto';
 import { z } from 'zod';
+import { ACCOUNT_SUBTYPES, getAccountTypeForSubtype, type AccountSubtype } from '../tools/net-worth/account-types.js';
 import {
   importStep,
   embeddingStep,
@@ -53,6 +54,7 @@ import {
 import {
   getAccounts,
   getAccountById,
+  insertAccount,
   getNetWorthSummary,
   getNetWorthTrend,
   getAccountTransactionSummary,
@@ -745,6 +747,33 @@ export function apiGoalSnapshots(db: Database, goalId: number, params: URLSearch
 
 export function apiAccounts(db: Database) {
   return getAccounts(db, { active: true });
+}
+
+export const ACCOUNT_NAME_MAX = 80;
+
+// POST /api/accounts (#199). Same insert as the CLI's `account add` (account-manage.ts): the subtype picks the type.
+const CreateAccountBody = z.object({
+  name: z.string(),
+  accountSubtype: z.enum(ACCOUNT_SUBTYPES as unknown as [AccountSubtype, ...AccountSubtype[]]),
+  institution: z.string().max(ACCOUNT_NAME_MAX).nullable().optional(),
+  accountNumberLast4: z.string().regex(/^\d{4}$/, 'must be exactly 4 digits').nullable().optional(),
+});
+
+export function apiCreateAccount(db: Database, body: Record<string, unknown>) {
+  const fields = checkBody(CreateAccountBody, body);
+  // Control and zero-width characters would make a name that looks blank or spoofs another account.
+  const name = fields.name.replace(/[\p{Cc}\p{Cf}]/gu, '').trim();
+  if (!name) throw new HttpError(400, 'name is required');
+  if (name.length > ACCOUNT_NAME_MAX) throw new HttpError(400, `name must be at most ${ACCOUNT_NAME_MAX} characters`);
+  const institution = fields.institution?.replace(/[\p{Cc}\p{Cf}]/gu, '').trim() || undefined;
+  const id = insertAccount(db, {
+    name,
+    account_type: getAccountTypeForSubtype(fields.accountSubtype),
+    account_subtype: fields.accountSubtype,
+    institution,
+    account_number_last4: fields.accountNumberLast4 ?? undefined,
+  });
+  return { success: true, account: getAccountById(db, id) };
 }
 
 export function apiNetWorth(db: Database) {

@@ -12,7 +12,7 @@ import {
   apiDemoShowdownSamples, apiDemoShowdownCloud, apiDemoShowdownLocal, apiDemoShowdownBrowserTrace,
   apiUpdateTransaction, apiDeleteTransaction,
   apiTraces, apiTraceStats,
-  apiAccounts, apiNetWorth, apiNetWorthTrend, apiAccountTransactions, apiSpendingByInstitution,
+  apiAccounts, apiCreateAccount, apiNetWorth, apiNetWorthTrend, apiAccountTransactions, apiSpendingByInstitution,
   apiInteractions, apiInteractionDetail, apiRunInteractions,
   apiAnnotateInteraction, apiAnnotationStats,
   apiDailySpending, apiStreak, apiWeeklySummary, apiBudgetCountdown,
@@ -1080,6 +1080,13 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
 
         if (path === '/api/spending-by-institution') {
           return Response.json(apiSpendingByInstitution(activeDb, url.searchParams), { headers });
+        }
+        if (path === '/api/accounts' && req.method === 'POST') {
+          if (authEnabled && currentUser && !canWrite(currentUser.role)) {
+            return Response.json({ error: 'Forbidden' }, { status: 403, headers });
+          }
+          const body = await jsonBody<Record<string, unknown>>(req);
+          return Response.json(apiCreateAccount(activeDb, body), { status: 201, headers });
         }
         if (path === '/api/accounts') {
           return Response.json(apiAccounts(activeDb), { headers });

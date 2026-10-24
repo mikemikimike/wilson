@@ -1,8 +1,11 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { navigateToTab } from '@/hooks/useUrlState';
-import { dismissImportToast, getImportToast, subscribeImportToast } from '@/lib/importToast';
-
-const AUTO_DISMISS_MS = 10_000;
+import {
+  IMPORT_NOTICE_AUTO_DISMISS_MS,
+  dismissImportToast,
+  getImportToast,
+  subscribeImportToast,
+} from '@/lib/importToast';
 
 /**
  * Fixed overlay (no layout shift) shown after an import. Sits above the bottom-left 'Agent access' launcher
@@ -13,7 +16,7 @@ export function ImportToast() {
   const id = toast?.id;
   useEffect(() => {
     if (id === undefined) return;
-    const t = setTimeout(dismissImportToast, AUTO_DISMISS_MS);
+    const t = setTimeout(dismissImportToast, IMPORT_NOTICE_AUTO_DISMISS_MS);
     return () => clearTimeout(t);
   }, [id]);
   if (!toast) return null;

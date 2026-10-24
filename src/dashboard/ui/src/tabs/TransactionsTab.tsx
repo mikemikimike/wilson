@@ -7,6 +7,7 @@ import { useUrlState } from '@/hooks/useUrlState';
 import { api } from '@/api';
 import { formatAmount, formatDate } from '@/format';
 import { ImportStatementDialog, type ImportResponse } from '@/components/ImportStatementDialog';
+import { IMPORT_NOTICE_AUTO_DISMISS_MS, importBannerModel, type ImportBannerModel } from '@/lib/importToast';
 import { classifyWriteError, type WriteFailureKind } from '@/store/offline-writes';
 import { useDeclarativeTool } from '@/agent/useDeclarativeTool';
 import { useWebMcpPageTools } from '@/agent/useWebMcpPageTools';
@@ -327,7 +328,8 @@ export function TransactionsTab() {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [importOpen, setImportOpen] = useState(false);
   const [seedFile, setSeedFile] = useState<File | null>(null);
-  const [banner, setBanner] = useState('');
+  // The post-import banner (#201): `id` restarts the auto-hide timer when another import replaces it.
+  const [banner, setBanner] = useState<(ImportBannerModel & { id: number }) | null>(null);
   const [zoneDragOver, setZoneDragOver] = useState(false);
   const mirror = useMirrorStatus();
   const { dateRange, setDateRange, accountId, category: globalCategory, entityId } = useAppState();
@@ -561,8 +563,16 @@ export function TransactionsTab() {
     // current-month filter.
     const range = rangeCoveringImport(dateRange, result);
     if (range) setDateRange(range);
-    setBanner(result.message);
+    setBanner((prev) => ({ ...importBannerModel(result), id: (prev?.id ?? 0) + 1 }));
   }
+
+  // Hides itself like the import toast; × dismisses it sooner.
+  const bannerId = banner?.id;
+  useEffect(() => {
+    if (bannerId === undefined) return;
+    const t = setTimeout(() => setBanner(null), IMPORT_NOTICE_AUTO_DISMISS_MS);
+    return () => clearTimeout(t);
+  }, [bannerId]);
 
   const modelMissing = semanticData != null && semanticData.modelReady === false;
   const coveragePartial = !modelMissing && semanticData != null && semanticData.indexed < semanticData.total;
@@ -677,11 +687,18 @@ export function TransactionsTab() {
         )}
 
         {banner && (
-          <div className="flex items-center justify-between border border-green-700/50 bg-green-900/30 text-text rounded-md px-3 py-2 text-sm">
-            <span className="break-words">{banner}</span>
+          <div
+            role="status"
+            data-testid="import-banner"
+            data-tone={banner.tone}
+            className={`flex items-center justify-between border text-text rounded-md px-3 py-2 text-sm ${
+              banner.tone === 'success' ? 'border-green-700/50 bg-green-900/30' : 'border-border bg-surface-raised'
+            }`}
+          >
+            <span className="min-w-0 break-words">{banner.message}</span>
             <button
-              onClick={() => setBanner('')}
-              className="text-text-muted hover:text-text bg-transparent border-none text-base cursor-pointer ml-3 shrink-0"
+              onClick={() => setBanner(null)}
+              className="text-text-muted hover:text-text bg-transparent border-none text-base cursor-pointer ml-3 shrink-0 min-w-6 min-h-6"
               aria-label="Dismiss"
             >
               &times;

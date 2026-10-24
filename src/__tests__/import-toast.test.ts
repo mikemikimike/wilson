@@ -5,6 +5,7 @@ import {
   showImportToast,
   dismissImportToast,
   getImportToast,
+  importBannerModel,
 } from '../dashboard/ui/src/lib/importToast';
 
 describe('importToastModel', () => {
@@ -36,5 +37,39 @@ describe('import toast store', () => {
     expect(getImportToast()?.model.message).toBe('4 transactions imported');
     dismissImportToast();
     expect(getImportToast()).toBeNull();
+  });
+});
+
+// #201: a re-import that added nothing is not a success, and the copy comes from the API's own answer.
+describe('importBannerModel', () => {
+  test('rows added: success tone with the server message', () => {
+    expect(importBannerModel({ status: 'imported', transactionsImported: 3, transactionsSkipped: 1, message: 'Imported 3 transactions from a.csv (2026-01-01 to 2026-01-31). 1 duplicates skipped.' })).toEqual({
+      tone: 'success',
+      message: 'Imported 3 transactions from a.csv (2026-01-01 to 2026-01-31). 1 duplicates skipped.',
+    });
+  });
+  test('same file again: neutral, says it was already imported and when', () => {
+    expect(importBannerModel({
+      status: 'skipped',
+      transactionsImported: 0,
+      transactionsSkipped: 3,
+      previouslyImported: { importedAt: '2026-10-24 09:15:00', transactionCount: 3 },
+      message: 'This file was already imported on 2026-10-24 09:15:00 (3 transactions).',
+    })).toEqual({ tone: 'neutral', message: 'No new transactions — this file was already imported on 2026-10-24.' });
+  });
+  test('every row already present: neutral, with the real count', () => {
+    expect(importBannerModel({ status: 'skipped', transactionsImported: 0, transactionsSkipped: 5, message: 'All 5 transactions already exist (skipped as duplicates).' })).toEqual({
+      tone: 'neutral',
+      message: 'No new transactions — all 5 transactions in this file were already imported.',
+    });
+    expect(importBannerModel({ status: 'skipped', transactionsImported: 0, transactionsSkipped: 1, message: '' }).message).toBe(
+      'No new transactions — the 1 transaction in this file was already imported.',
+    );
+  });
+  test('nothing imported and no counts: neutral, claims nothing else', () => {
+    expect(importBannerModel({ status: 'skipped', transactionsImported: 0, transactionsSkipped: 0, message: '' })).toEqual({
+      tone: 'neutral',
+      message: 'No new transactions imported.',
+    });
   });
 });
