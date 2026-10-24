@@ -5,7 +5,9 @@ import { OfflineUnavailable } from '@/components/OfflineUnavailable';
 import { ChartCard } from '@/charts/ChartCard';
 import { FilteredBadge } from '@/components/FilteredBadge';
 import { chartTokens } from '@/charts/tokens';
-import { buildHeatmapGrid, heatmapDayTitle, heatmapSummary, heatmapYearRange, isFilteredHeatmap } from '@/lib/heatmapGrid';
+import { buildHeatmapGrid, heatmapDayTitle, budgetStatus, heatmapSummary, heatmapYearRange, isFilteredHeatmap } from '@/lib/heatmapGrid';
+import { useUrlState } from '@/hooks/useUrlState';
+import { tabHash } from '@/lib/urlState';
 import { dailySpendingPath } from '@/lib/overviewQueries';
 import { formatDate, money } from '@/format';
 import type { CoverageResponse, DailySpendingRow, StreakData } from '@/types';
@@ -49,14 +51,19 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
   const { accountId, entityId, category } = useAppState();
   const dailyPath = dailySpendingPath(startDate, endDate, { accountId, entityId, category });
   const { data: dailyData, loading: loadingDaily, offline: offlineDaily } = useApi<DailySpendingRow[]>(dailyPath);
-  const { data: streakData, loading: loadingStreak, offline: offlineStreak } = useApi<StreakData>('/api/streak');
+  const { data: streakData, loading: loadingStreak, offline: offlineStreak, refetch: refetchStreak } = useApi<StreakData>('/api/streak');
   // Coverage is optional: if the endpoint is missing or fails, every day is
   // treated as covered (the pre-coverage behavior).
   const { data: coverage, loading: loadingCoverage } = useApi<CoverageResponse>('/api/coverage');
 
   // No invented default: a missing or zero total means no budget (#181).
+  // A failed request is "unknown", never "no budget" (NN-09).
+  const status = budgetStatus(streakData);
+  const budgetKnown = status !== 'unknown';
+  const budgetFailed = !streakData && !loadingStreak;
   const budget = streakData?.dailyBudget ?? 0;
-  const hasBudget = budget > 0;
+  const hasBudget = status === 'set';
+  const { state: urlState } = useUrlState();
   const grid = useMemo(() => {
     const spending = new Map<string, number>();
     for (const row of dailyData ?? []) spending.set(row.date, row.spending);
@@ -86,7 +93,7 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
 
   const { weeks, months, maxAmount } = grid;
   const filtered = isFilteredHeatmap({ accountId, entityId, category });
-  const summary = heatmapSummary(grid, money(budget), filtered, hasBudget);
+  const summary = heatmapSummary(grid, money(budget), filtered, hasBudget, budgetKnown);
   const cellColor = (amount: number) => (filtered || !hasBudget ? getRelativeColor(amount, maxAmount) : getColor(amount, budget));
   const svgWidth = LABEL_WIDTH + weeks.length * TOTAL;
   const svgHeight = HEADER_HEIGHT + 7 * TOTAL;
@@ -124,9 +131,17 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
         ) : summary.needsBudget ? (
           <>
             <FilteredBadge category={category} />
-            <a href="#goals" className="text-xs text-green hover:underline">
+            <a href={tabHash(urlState, 'goals')} className="text-xs text-green hover:underline">
               Set a budget to track this
             </a>
+          </>
+        ) : budgetFailed ? (
+          <>
+            <FilteredBadge category={category} />
+            <span className="text-xs text-text-muted">Couldn't load your budget</span>
+            <button type="button" onClick={refetchStreak} className="text-xs text-green hover:underline min-h-6 min-w-6 px-1">
+              Retry
+            </button>
           </>
         ) : summary.tally || category ? (
           <>

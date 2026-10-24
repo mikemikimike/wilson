@@ -288,6 +288,11 @@ export function withTab(state: UrlState, tab: string): UrlState {
   return normalize(next);
 }
 
+/** '#tab?...' for a link to another tab that keeps the current global range / filters (a plain '#tab' would drop them). */
+export function tabHash(state: UrlState, tab: string): string {
+  return serializeHash(withTab(state, tab));
+}
+
 /** Set (or clear, with null) the chat session id. An invalid id clears it. */
 export function withSession(state: UrlState, id: string | null): UrlState {
   return { ...state, extra: [...state.extra], session: isSessionId(id) ? id : null };

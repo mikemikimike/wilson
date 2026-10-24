@@ -166,13 +166,33 @@ export function isFilteredHeatmap(f: HeatmapFilters): boolean {
 }
 
 /** The card's takeaway line and header tally (null = hidden). */
+export type BudgetStatus = 'set' | 'none' | 'unknown';
+
+/**
+ * Whether the user has a daily budget. `unknown` covers a request that is still loading or failed: it must never
+ * read as `none` (NN-09 -- "no budget" is a claim about the user, not about our fetch).
+ */
+export function budgetStatus(streak: { dailyBudget?: number | null } | null): BudgetStatus {
+  if (!streak) return 'unknown';
+  return (streak.dailyBudget ?? 0) > 0 ? 'set' : 'none';
+}
+
 export function heatmapSummary(
   grid: Pick<HeatmapGrid, 'underBudgetDays' | 'totalDays'>,
   budgetLabel: string,
   filtered: boolean,
   hasBudget = true,
+  budgetKnown = true,
 ): { takeaway: string; tally: { under: number; total: number } | null; needsBudget: boolean } {
   if (grid.totalDays === 0) return { takeaway: 'No imported data in the last year.', tally: null, needsBudget: false };
+  if (!budgetKnown) {
+    // The budget request failed, so claim neither "under budget" nor "no budget".
+    return {
+      takeaway: `${filtered ? 'Filtered daily' : 'Daily'} spending on ${grid.totalDays} days with imported data, shaded by relative amount. Couldn't load your budget, so there is no under-budget count.`,
+      tally: null,
+      needsBudget: false,
+    };
+  }
   if (!hasBudget) {
     // No budget total means no daily allowance: "under budget on N days" would be a verdict against nothing (NN-09).
     return {
