@@ -85,7 +85,7 @@ function PanelBody({
         <Shell tone={p.turnOnError ? 'warn' : 'muted'}>
           <span>Second opinion (open-jev): off</span>
           <button
-            className="underline text-text-secondary hover:text-text bg-transparent border-none cursor-pointer p-0 text-xs disabled:opacity-50 disabled:cursor-default"
+            className="underline text-text-secondary hover:text-text bg-transparent border-none cursor-pointer p-0 min-h-6 min-w-6 text-xs disabled:opacity-50 disabled:cursor-default"
             onClick={() => void p.turnOn()}
             disabled={p.turnOnBusy}
           >

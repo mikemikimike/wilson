@@ -209,7 +209,7 @@ export function ForecastTab() {
 
   if (nwLoading || hLoading) {
     return (
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4">
         <div className="h-[320px] animate-pulse bg-border-muted rounded" />
       </div>
     );
@@ -217,7 +217,7 @@ export function ForecastTab() {
 
   if (nwOffline && !nw) {
     return (
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4">
         <OfflineUnavailable title="Forecast" />
       </div>
     );
@@ -230,7 +230,7 @@ export function ForecastTab() {
   // missing starting balance is the worse of the two failures.
   if (nwError && !nw) {
     return (
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4">
         <div className="bg-surface-raised border border-border rounded-lg p-4">
           <h3 className="text-xs text-text-secondary uppercase tracking-wide mb-2">Forecast</h3>
           <p className="text-sm text-red">
@@ -248,7 +248,7 @@ export function ForecastTab() {
   // an error.
   if (hError && !history) {
     return (
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4">
         <div className="bg-surface-raised border border-border rounded-lg p-4">
           <h3 className="text-xs text-text-secondary uppercase tracking-wide mb-2">Forecast</h3>
           <p className="text-sm text-red">Couldn&apos;t load cashflow history: {hError}</p>
@@ -259,7 +259,7 @@ export function ForecastTab() {
 
   if (simError) {
     return (
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4">
         <div className="bg-surface-raised border border-border rounded-lg p-4">
           <h3 className="text-xs text-text-secondary uppercase tracking-wide mb-2">Forecast</h3>
           <p className="text-sm text-text-muted">
@@ -274,7 +274,7 @@ export function ForecastTab() {
   const last = forecast?.points[forecast.points.length - 1] ?? null;
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-4">
+    <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4">
       {manual && (
         <ManualInputsForm
           defaultStartNetWorth={nw?.netWorth ?? 0}

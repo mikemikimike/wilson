@@ -118,7 +118,7 @@ export function LogsTab() {
                       {row.data != null && (
                         <button
                           onClick={() => toggleExpand(i)}
-                          className="ml-2 text-text-muted hover:text-text-secondary text-[10px]"
+                          className="ml-2 min-h-6 min-w-6 text-text-muted hover:text-text-secondary text-[10px]"
                         >
                           {isExpanded ? '[-]' : '[+]'}
                         </button>

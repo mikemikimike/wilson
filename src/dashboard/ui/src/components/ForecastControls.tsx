@@ -105,7 +105,7 @@ export function ForecastControls({
             onPointerUp={onSettled}
             onKeyUp={onSettled}
             onBlur={onSettled}
-            className="w-full accent-green cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full h-6 accent-green cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="Savings rate change, percentage points of monthly income"
           />
           {savingsDisabled && (
@@ -133,7 +133,7 @@ export function ForecastControls({
             onPointerUp={onSettled}
             onKeyUp={onSettled}
             onBlur={onSettled}
-            className="w-full accent-green cursor-pointer"
+            className="w-full h-6 accent-green cursor-pointer"
             aria-label="Assumed real annual return, percent"
           />
         </div>
@@ -154,7 +154,7 @@ export function ForecastControls({
             onPointerUp={onSettled}
             onKeyUp={onSettled}
             onBlur={onSettled}
-            className="w-full accent-green cursor-pointer"
+            className="w-full h-6 accent-green cursor-pointer"
             aria-label="Projection horizon, years"
           />
         </div>
@@ -175,7 +175,7 @@ export function ForecastControls({
             onPointerUp={onSettled}
             onKeyUp={onSettled}
             onBlur={onSettled}
-            className="w-full accent-green cursor-pointer"
+            className="w-full h-6 accent-green cursor-pointer"
             aria-label="One-off net worth shock, dollars"
           />
           <input
@@ -189,7 +189,7 @@ export function ForecastControls({
             onPointerUp={onSettled}
             onKeyUp={onSettled}
             onBlur={onSettled}
-            className="w-full accent-green cursor-pointer mt-1 disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full h-6 accent-green cursor-pointer mt-1 disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="Year of the one-off shock"
           />
         </div>

@@ -10,7 +10,7 @@ export function ForecastAssumptions() {
       <h3 className="text-xs text-text-secondary uppercase tracking-wide mb-3">
         Assumptions &amp; Limitations
       </h3>
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
         <div>
           <h4 className="text-xs text-text-secondary uppercase tracking-wide mb-2">
             Assumptions — what this model does

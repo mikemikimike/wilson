@@ -56,7 +56,7 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* No overflow clip here: a clipped root hides real horizontal overflow from the NN-10 layout audit (#180). */
 }
 
 /* Chat composer typeahead popover fade-in (disabled under motion-reduce). */

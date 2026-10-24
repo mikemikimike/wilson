@@ -89,7 +89,7 @@ export function App() {
 
   return (
     <AppContext.Provider value={state}>
-      <div className="h-screen flex flex-col overflow-hidden">
+      <div className="h-screen flex flex-col min-w-0">
       <Header
         accounts={accounts}
         categories={categories}
@@ -102,7 +102,7 @@ export function App() {
       />
       <TabBar activeTab={activeTab} onTabChange={handleTabChange} />
       <WebMcpProvider activeTab={activeTab} onNavigate={handleTabChange}>
-        <main className="flex-1 overflow-hidden min-h-0 flex flex-col">
+        <main className="flex-1 min-h-0 min-w-0 flex flex-col">
           {/* Tabs are separate chunks (tabs/lazyTabs.ts); main.tsx starts the URL's tab before React renders. */}
           <Suspense fallback={<TabLoading />}>
             <ActiveTabComponent />

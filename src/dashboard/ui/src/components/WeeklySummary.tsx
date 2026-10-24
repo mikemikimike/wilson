@@ -16,8 +16,8 @@ export function WeeklySummary() {
 
   if (loadingWeek || loadingStreak) {
     return (
-      <div className="bg-surface-raised border border-border rounded-lg p-4">
-        <div className="h-[60px] animate-pulse bg-border-muted rounded" />
+      <div key="weekly-skeleton" className="bg-surface-raised border border-border rounded-lg p-4">
+        <div className="h-[70px] md:h-[47px] animate-pulse bg-border-muted rounded" />
       </div>
     );
   }

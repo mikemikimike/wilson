@@ -17,8 +17,8 @@ export function BudgetCountdown() {
 
   if (loading) {
     return (
-      <div className="bg-surface-raised border border-border rounded-lg p-4">
-        <div className="h-[120px] animate-pulse bg-border-muted rounded" />
+      <div key="countdown-skeleton" className="bg-surface-raised border border-border rounded-lg p-4">
+        <div className="h-[96px] md:h-[120px] animate-pulse bg-border-muted rounded" />
       </div>
     );
   }

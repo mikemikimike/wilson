@@ -926,10 +926,26 @@ function buildPanel(): void {
   const dot = el('span', `display:inline-block;width:8px;height:8px;border-radius:50%;background:${T.muted};`);
   const launcherLabel = el('span', `font:600 11px ${T.mono};letter-spacing:.08em;`, 'AGENT ACCESS');
   launcher.append(dot, launcherLabel);
+  launcher.setAttribute?.('aria-label', 'Agent access');
+  // Phone widths: collapse to a 32px dot-only button tucked into the corner so it stops covering cards (#180).
+  const compact = typeof window.matchMedia === 'function' ? window.matchMedia('(max-width: 640px)') : null;
+  const applyCompact = () => {
+    const on = !!compact?.matches;
+    launcherLabel.style.display = on ? 'none' : '';
+    launcher.style.width = on ? '32px' : '';
+    launcher.style.height = on ? '32px' : '';
+    launcher.style.padding = on ? '0' : '7px 12px';
+    launcher.style.justifyContent = on ? 'center' : '';
+    launcher.style.bottom = on ? '8px' : '16px';
+    launcher.style.left = on ? '8px' : '16px';
+    launcher.style.opacity = on ? '0.85' : '1';
+  };
+  applyCompact();
+  compact?.addEventListener?.('change', applyCompact);
 
   const panel = el(
     'div',
-    `${FONT}position:fixed;bottom:56px;left:16px;z-index:2147483646;width:300px;max-height:70vh;overflow:auto;box-sizing:border-box;` +
+    `${FONT}position:fixed;bottom:56px;left:16px;z-index:2147483646;width:min(300px,calc(100vw - 32px));max-height:70vh;overflow:auto;box-sizing:border-box;` +
       `background:${T.bg};border:1px solid ${T.border};border-radius:${T.radius};padding:14px;box-shadow:0 8px 24px rgba(0,0,0,.5);`,
   );
   panel.hidden = true;

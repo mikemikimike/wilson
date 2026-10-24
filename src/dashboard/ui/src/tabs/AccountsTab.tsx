@@ -154,7 +154,7 @@ export function AccountsTab() {
 
   if (loading) {
     return (
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4">
         <div className="grid grid-cols-3 gap-4">
           {[0, 1, 2].map((i) => (
             <div key={i} className="bg-surface-raised border border-border rounded-lg p-4">
@@ -170,7 +170,7 @@ export function AccountsTab() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-4">
+    <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4">
       {/* Stat cards */}
       <div className="grid grid-cols-3 gap-4">
         <StatCard label="Total Assets" value={netWorth?.totalAssets ?? 0} color="green" />

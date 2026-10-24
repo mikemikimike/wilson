@@ -10,8 +10,8 @@ export function StreakCounter() {
 
   if (loading) {
     return (
-      <div className="bg-surface-raised border border-border rounded-lg p-4">
-        <div className="h-[80px] animate-pulse bg-border-muted rounded" />
+      <div key="streak-skeleton" className="bg-surface-raised border border-border rounded-lg p-4">
+        <div className="h-[92px] md:h-[80px] animate-pulse bg-border-muted rounded" />
       </div>
     );
   }

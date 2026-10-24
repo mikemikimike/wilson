@@ -865,9 +865,9 @@ export function ChatTab() {
       : `${ta.items.length} ${noun}${ta.items.length === 1 ? '' : 's'}`;
 
   return (
-    <div className="flex-1 flex overflow-hidden">
-      {/* Session sidebar */}
-      <div className="w-60 shrink-0 border-r border-border bg-surface-raised flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
+      {/* Session sidebar: a short strip above the chat on phones, a column beside it from md up */}
+      <div className="w-full md:w-60 max-h-36 md:max-h-none shrink-0 border-b md:border-b-0 md:border-r border-border bg-surface-raised flex flex-col overflow-hidden">
         <div className="p-3 border-b border-border">
           <button
             onClick={handleNewChat}
@@ -901,7 +901,7 @@ export function ChatTab() {
       </div>
 
       {/* Main chat area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-h-0 min-w-0">
         {/* Messages area */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {messages.length === 0 && (

@@ -169,7 +169,7 @@ export const OVERFLOW_JS = `(() => {
 })()`;
 
 /**
- * NN-10 phone layout audit. Run at 360x800 on a settled tab. Returns { viewport, count, offenders: [{rule, selector, w, h, text}] }.
+ * NN-10 phone layout audit. Run at 360x800 on a settled tab. Returns { viewport, count (reported), total (found), truncated, offenders: [{rule, selector, w, h, text}] }.
  *   offscreen   (a) right edge past the viewport while NOT inside an intentional horizontal scroller (an ancestor that opts in:
  *               class overflow-x-auto|scroll or overflow-auto|scroll, inline overflow-x, or data-hscroll; a plain
  *               overflow-y-auto does NOT count even though it computes overflow-x to auto). Only the outermost offender of a subtree is reported. Fixed elements skipped.
@@ -233,7 +233,8 @@ export const LAYOUT_AUDIT_JS = `(() => {
   }
   const seen = new Set();
   const offenders = out.filter((o) => { const k = o.rule + o.selector + o.w + 'x' + o.h; if (seen.has(k)) return false; seen.add(k); return true; });
-  return { viewport: vw, count: offenders.length, offenders: offenders.slice(0, 60) };
+  const LIMIT = 60;
+  return { viewport: vw, count: Math.min(offenders.length, LIMIT), total: offenders.length, truncated: offenders.length > LIMIT, offenders: offenders.slice(0, LIMIT) };
 })()`;
 
 /**

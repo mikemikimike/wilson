@@ -407,7 +407,7 @@ export function ReviewTab() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="shrink-0 p-6 pb-0 space-y-4">
+      <div className="shrink-0 p-3 sm:p-6 pb-0 sm:pb-0 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-semibold text-text">Review</h2>
@@ -450,7 +450,7 @@ export function ReviewTab() {
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 min-h-0">
         {!error && <div className="mb-3"><PrelabelPanel reviews={pending} canAct={canAct} onResults={handlePrelabelResults} /></div>}
 
         {loading && (
@@ -484,7 +484,7 @@ export function ReviewTab() {
         )}
 
         {!loading && !error && pending.length > 0 && (
-          <div className="bg-surface-raised border border-border rounded-lg overflow-hidden">
+          <div className="bg-surface-raised border border-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-surface-raised z-10">
                 <tr className="border-b border-border text-text-secondary text-xs uppercase tracking-wide">

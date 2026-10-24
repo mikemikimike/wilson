@@ -34,6 +34,7 @@ export function BudgetBars() {
       loading={loading}
       hasData={rows.length > 0}
       height={120}
+      heightClass="h-[98px]"
       empty={<p className="text-sm text-text-muted">No budgets configured.</p>}
       headerRight={
         scaleLabel ? <span className="text-[10px] text-text-muted tabular-nums">{scaleLabel}</span> : undefined

@@ -570,9 +570,10 @@ export function TransactionsTab() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Fixed header + filters */}
-      <div className="shrink-0 p-6 pb-0 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+      <div className="shrink-0 p-3 sm:p-6 pb-0 sm:pb-0 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* max-sm:flex-1 (basis 0): the group stays beside the Import button whatever the count text length, so loading the count never wraps the button onto a new row. */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0 max-sm:flex-1">
             <h2 className="text-lg font-semibold text-text">Transactions</h2>
             {mirror.available && mirror.seeded && !mirror.online && (
               <span
@@ -582,17 +583,16 @@ export function TransactionsTab() {
                 Offline — showing synced data
               </span>
             )}
-            {data && (
-              <span className="text-xs text-text-muted font-mono">
-                {semanticActive
+            {/* Always mounted (non-breaking space until data lands) so a phone-width wrap reserves its line and the form below never jumps. */}
+            <span className="text-xs text-text-muted font-mono min-h-4 max-sm:basis-full">
+              {!data ? '\u00a0' : (semanticActive
                   ? semanticLoading
                     ? 'searching…'
                     : semanticError
                       ? 'semantic search failed'
                       : `${semanticResults.length} of ${semanticData?.results.length ?? 0} semantic matches`
-                  : `${filtered.length} of ${data.length} transactions`}
-              </span>
-            )}
+                  : `${filtered.length} of ${data.length} transactions`)}
+            </span>
           </div>
           {/* The tooltip sits on a wrapper: some browsers show no title on a disabled button. */}
           <span title={importButton.title}>
@@ -607,14 +607,14 @@ export function TransactionsTab() {
           </span>
         </div>
 
-        <form key={filterForm.formKey} className="flex gap-3" aria-label="Filter transactions" {...filterForm.formProps}>
+        <form key={filterForm.formKey} className="flex flex-wrap gap-2 sm:gap-3" aria-label="Filter transactions" {...filterForm.formProps}>
           <input
             type="text"
             name="search"
             placeholder="Search by merchant or description..."
             value={shownFilters.search}
             onChange={(e) => editFilter({ search: e.target.value }, () => setSearch(e.target.value))}
-            className="flex-1 bg-surface-raised border border-border rounded-md px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-green"
+            className="flex-1 max-sm:basis-full min-w-[10rem] bg-surface-raised border border-border rounded-md px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-green"
             {...filterForm.field('search')}
           />
           <select
@@ -624,7 +624,7 @@ export function TransactionsTab() {
               const name = categoryRows?.find((c) => String(c.id) === e.target.value)?.name ?? '';
               editFilter({ category: name }, () => setCategoryFilter(name));
             }}
-            className="bg-surface-raised border border-border rounded-md px-3 py-2 text-sm text-text focus:outline-none focus:border-green"
+            className="max-sm:basis-full max-sm:min-w-0 bg-surface-raised border border-border rounded-md px-3 py-2 text-sm text-text focus:outline-none focus:border-green"
             {...filterForm.field('category_id')}
           >
             <option value="">All Categories</option>
@@ -640,7 +640,7 @@ export function TransactionsTab() {
             aria-label="From date"
             value={shownFilters.start}
             onChange={(e) => e.target.value && editFilter({ start: e.target.value }, () => setDateRange({ ...dateRange, startDate: e.target.value }))}
-            className="bg-surface-raised border border-border rounded-md px-2 py-2 text-sm text-text focus:outline-none focus:border-green"
+            className="max-sm:flex-1 max-sm:min-w-0 bg-surface-raised border border-border rounded-md px-2 py-2 text-sm text-text focus:outline-none focus:border-green"
             {...filterForm.field('start')}
           />
           <input
@@ -649,7 +649,7 @@ export function TransactionsTab() {
             aria-label="To date"
             value={shownFilters.end}
             onChange={(e) => e.target.value && editFilter({ end: e.target.value }, () => setDateRange({ ...dateRange, endDate: e.target.value }))}
-            className="bg-surface-raised border border-border rounded-md px-2 py-2 text-sm text-text focus:outline-none focus:border-green"
+            className="max-sm:flex-1 max-sm:min-w-0 bg-surface-raised border border-border rounded-md px-2 py-2 text-sm text-text focus:outline-none focus:border-green"
             {...filterForm.field('end')}
           />
           <button
@@ -710,7 +710,7 @@ export function TransactionsTab() {
       </div>
 
       {/* Scrollable table area */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 min-h-0">
         {loading && (
           <div className="bg-surface-raised border border-border rounded-lg p-4">
             <div className="h-[300px] animate-pulse bg-border-muted rounded" />
@@ -747,7 +747,7 @@ export function TransactionsTab() {
                   semantic
                 </span>
               </div>
-              <div className="bg-surface-raised border border-border rounded-lg overflow-hidden">
+              <div className="bg-surface-raised border border-border rounded-lg overflow-x-auto">
                 <table className="w-full text-sm">
                   <TxTableHead entities={entities} />
                   <tbody>
@@ -811,7 +811,7 @@ export function TransactionsTab() {
         )}
 
         {!loading && !error && !semanticActive && filtered.length > 0 && (
-          <div className="bg-surface-raised border border-border rounded-lg overflow-hidden">
+          <div className="bg-surface-raised border border-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <TxTableHead entities={entities} />
               <tbody>

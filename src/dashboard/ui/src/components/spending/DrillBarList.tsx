@@ -58,7 +58,7 @@ export function DrillBarList({
             <span className="flex items-baseline justify-between gap-3 min-w-0">
               <span className="flex items-center gap-1.5 min-w-0">
                 <span aria-hidden="true" className="chart-mark w-2 h-2 rounded-full shrink-0" style={{ background: it.color }} />
-                <span className="truncate text-text" title={it.label}>
+                <span className="break-words sm:truncate text-text" title={it.label}>
                   {it.label}
                 </span>
               </span>
@@ -84,7 +84,7 @@ export function DrillBarList({
                 )}
               </span>
               {cmp && (
-                <span className="w-[7rem] shrink-0 text-right">
+                <span className="w-[5.5rem] sm:w-[7rem] shrink-0 text-right">
                   <DeltaBadge current={it.total} prev={it.prevTotal} cmp={cmp} />
                 </span>
               )}
@@ -157,7 +157,7 @@ export function FoldedRow({
   );
   const content = (
     <>
-      <span className="truncate text-text-secondary" title={label}>
+      <span className="break-words sm:truncate text-text-secondary" title={label}>
         {label}
         {onExpand && <span aria-hidden="true"> ▾</span>}
       </span>

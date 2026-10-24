@@ -103,7 +103,7 @@ export function OverviewTab() {
   return (
     // pb-20: a safe area under the last row so the floating 'Agent access'
     // pill (fixed bottom-left, webmcp-bridge.ts) never covers card footnotes.
-    <div className="flex-1 overflow-y-auto p-6 pb-20 space-y-4">
+    <div className="flex-1 overflow-y-auto p-3 sm:p-6 pb-20 space-y-4">
       {/* Offline pill — same affordance as the transactions tab */}
       {mirror.available && mirror.seeded && !mirror.online && (
         <div className="flex items-center gap-2">
@@ -123,26 +123,26 @@ export function OverviewTab() {
         <WeeklySummary />
 
         {/* Heatmap + Streak */}
-        <div className="grid grid-cols-[1fr_240px] gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_240px] gap-4">
           <SpendingHeatmap onDayClick={(date) => setSelectedDate(date)} />
           <StreakCounter />
         </div>
 
         {/* Budget countdown + Savings sparkline + Cash forecast */}
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <BudgetCountdown />
           <SavingsSparkline />
           <CashflowForecast />
         </div>
 
         {/* Spending drill-down (L1 categories → L2 merchants → L3 merchant → txn) + P&L */}
-        <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-start">
+        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-start">
           <SpendingDrill />
           <PnlCard />
         </div>
 
         {/* Budget bars + Alerts + Liabilities */}
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <BudgetBars />
           <AlertList />
           <LiabilitiesCard />

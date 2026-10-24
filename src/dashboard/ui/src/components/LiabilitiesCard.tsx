@@ -11,8 +11,8 @@ export function LiabilitiesCard() {
 
   if (loading) {
     return (
-      <div className="bg-surface-raised border border-border rounded-lg p-4">
-        <div className="h-[80px] animate-pulse bg-border-muted rounded" />
+      <div key="liabilities-skeleton" className="bg-surface-raised border border-border rounded-lg p-4">
+        <div className="h-[88px] md:h-[80px] animate-pulse bg-border-muted rounded" />
       </div>
     );
   }

@@ -83,8 +83,8 @@ export function CashflowForecast() {
 
   if (loading) {
     return (
-      <div className="bg-surface-raised border border-border rounded-lg p-4">
-        <div className="h-[120px] animate-pulse bg-border-muted rounded" />
+      <div key="cashflow-skeleton" className="bg-surface-raised border border-border rounded-lg p-4">
+        <div className="h-[360px] md:h-[380px] xl:h-[344px] animate-pulse bg-border-muted rounded" />
       </div>
     );
   }
@@ -184,7 +184,7 @@ export function CashflowForecast() {
             step={WHATIF_STEP}
             value={incomePct}
             onChange={(e) => setIncomePct(Number(e.target.value))}
-            className="w-full accent-green cursor-pointer"
+            className="w-full h-6 accent-green cursor-pointer"
             aria-label="Assumed monthly income, percent of history"
           />
         </div>
@@ -202,7 +202,7 @@ export function CashflowForecast() {
             step={WHATIF_STEP}
             value={expensePct}
             onChange={(e) => setExpensePct(Number(e.target.value))}
-            className="w-full accent-green cursor-pointer"
+            className="w-full h-6 accent-green cursor-pointer"
             aria-label="Assumed monthly expense, percent of history"
           />
         </div>

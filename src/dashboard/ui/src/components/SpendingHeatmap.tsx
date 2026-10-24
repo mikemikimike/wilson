@@ -89,9 +89,21 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
       loading={loadingDaily || loadingStreak || loadingCoverage}
       hasData={dailyData !== null}
       height={140}
+      // Stacked on a phone the loaded card is taller (wrapped takeaway + legend); CSS keeps it reactive to resize/rotation.
+      heightClass="h-[180px] md:h-[161px]"
       takeaway={summary.takeaway}
+      // While loading, an invisible stand-in holds the tally's and Table toggle's width so the title row wraps (or not) exactly as it will
+      // once loaded; otherwise the row grows a line on a phone and shoves the takeaway and chart down.
       headerRight={
-        summary.tally || category ? (
+        dailyData === null && (loadingDaily || loadingStreak || loadingCoverage) ? (
+          <>
+            <span aria-hidden="true" className="invisible text-xs tabular-nums">
+              Under budget 00 of 000 days
+            </span>
+            {/* …and the width of the 'Table' toggle that appears with the data. */}
+            <span aria-hidden="true" className="invisible inline-block w-[52px] h-6" />
+          </>
+        ) : summary.tally || category ? (
           <>
             <FilteredBadge category={category} />
             {summary.tally && (

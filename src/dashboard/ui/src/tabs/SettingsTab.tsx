@@ -401,7 +401,7 @@ function SecuritySection() {
                   {u.id !== authStatus?.user?.id && (
                     <button
                       onClick={() => handleDeleteUser(u.id)}
-                      className="text-text-muted hover:text-red bg-transparent border-none cursor-pointer text-sm p-1"
+                      className="text-text-muted hover:text-red bg-transparent border-none cursor-pointer text-sm p-1 min-h-6 min-w-6"
                       title="Remove user"
                     >
                       &times;
@@ -506,7 +506,7 @@ function MemoryCard({
       </div>
       <button
         onClick={() => onDelete(memory.id)}
-        className="text-text-muted hover:text-red bg-transparent border-none cursor-pointer text-sm p-1 shrink-0"
+        className="text-text-muted hover:text-red bg-transparent border-none cursor-pointer text-sm p-1 min-h-6 min-w-6 shrink-0"
         title="Delete memory"
       >
         &times;
@@ -781,21 +781,21 @@ function ModelRow({ row, chatModelName, catalog, canOverride, onSave }: ModelRow
 
   return (
     <div className="bg-surface border border-border rounded px-3 py-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-x-2 min-w-0">
           <span className="text-sm text-text shrink-0">{row.label}</span>
           {row.inUse ? (
-            <span className="text-sm text-text-muted truncate">
+            <span className="text-sm text-text-muted sm:truncate break-words">
               {row.modelName}
               {row.providerName && <span className="text-xs text-text-muted"> — via {row.providerName}</span>}
             </span>
           ) : (
-            <span className="text-sm text-text-muted truncate">
+            <span className="text-sm text-text-muted sm:truncate break-words">
               Not in use{row.note ? ` — ${row.note}` : ''}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 min-w-0 sm:shrink-0">
           {/* Assignment state: the chat row IS the global model setting (no
               chip). Tool rows say why they run what they run. */}
           {row.inUse && row.task !== 'chat' && (
@@ -884,8 +884,9 @@ function ModelsSection() {
     return (
       <div>
         <h2 className="text-xs text-text-secondary uppercase tracking-wide mb-3">Models</h2>
+        {/* Reserve the loaded row stack (7 task rows; taller when they wrap on a phone) so the sections below do not jump when it lands. */}
         <div className="bg-surface-raised border border-border rounded-lg p-4">
-          <div className="h-[120px] animate-pulse bg-border-muted rounded" />
+          <div className="h-[700px] sm:h-[420px] animate-pulse bg-border-muted rounded" />
         </div>
       </div>
     );
@@ -895,7 +896,7 @@ function ModelsSection() {
     <div>
       <h2 className="text-xs text-text-secondary uppercase tracking-wide mb-3">Models</h2>
       <div className="bg-surface-raised border border-border rounded-lg p-4 space-y-3">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <p className="text-xs text-text-muted">
             Which AI model handles each task — and whether it runs on this device or a cloud server.
           </p>
@@ -1032,7 +1033,7 @@ function EntitySection() {
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => startEdit(e)}
-                    className="text-text-muted hover:text-text bg-transparent border-none cursor-pointer text-xs px-1.5 py-0.5"
+                    className="text-text-muted hover:text-text bg-transparent border-none cursor-pointer text-xs px-1.5 py-0.5 min-h-6 min-w-6"
                     title="Edit entity"
                   >
                     edit
@@ -1040,7 +1041,7 @@ function EntitySection() {
                   {!e.is_default && (
                     <button
                       onClick={() => handleDelete(e.id)}
-                      className="text-text-muted hover:text-red bg-transparent border-none cursor-pointer text-sm p-1"
+                      className="text-text-muted hover:text-red bg-transparent border-none cursor-pointer text-sm p-1 min-h-6 min-w-6"
                       title="Delete entity"
                     >
                       &times;
@@ -1114,7 +1115,7 @@ function EntitySection() {
 
 export function SettingsTab() {
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-6">
+    <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-6">
       <ModelsSection />
       <AgentAccessCenter />
       <ProfileSection />

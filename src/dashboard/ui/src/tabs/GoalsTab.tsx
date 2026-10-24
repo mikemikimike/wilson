@@ -294,7 +294,7 @@ function GoalCard({ goal, onEdit }: { goal: Goal; onEdit?: (id: number) => void 
             <button
               type="button"
               onClick={() => onEdit(goal.id)}
-              className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded border border-border text-text-secondary hover:text-text bg-transparent cursor-pointer"
+              className="min-h-6 text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded border border-border text-text-secondary hover:text-text bg-transparent cursor-pointer"
             >
               Edit
             </button>
@@ -382,7 +382,7 @@ export function GoalsTab() {
 
   if (loading) {
     return (
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4">
         <div className="grid grid-cols-3 gap-4">
           {[0, 1, 2].map((i) => (
             <div key={i} className="bg-surface-raised border border-border rounded-lg p-4">
@@ -402,7 +402,7 @@ export function GoalsTab() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-4">
+    <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4">
       {/* Stat cards */}
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-surface-raised border border-border rounded-lg p-4">

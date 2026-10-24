@@ -34,6 +34,7 @@ export function SavingsSparkline() {
       loading={loading}
       hasData={latest !== null}
       height={60}
+      heightClass="h-[88px] md:h-[60px]"
       empty={<p className="text-sm text-text-muted">No income or spending in the last 6 months.</p>}
       takeaway={
         lowIncome ? 'Low income data — showing net savings in dollars instead of a rate.' : undefined

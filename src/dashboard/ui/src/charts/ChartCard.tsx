@@ -10,6 +10,8 @@ export interface ChartCardProps {
   hasData: boolean;
   /** Fixed skeleton height (px) for the first load, so the layout doesn't jump. */
   height: number;
+  /** Responsive skeleton height (e.g. 'h-[180px] md:h-[140px]'); wins over `height` so the card reserves its loaded height per breakpoint with no JS. */
+  heightClass?: string;
   /**
    * Data behind the chart; enables the visible 'Table' toggle. Several tables
    * (e.g. a ranked list AND its 12-month series) render one after another.
@@ -34,6 +36,7 @@ export function ChartCard({
   loading,
   hasData,
   height,
+  heightClass,
   table,
   empty,
   headerRight,
@@ -72,7 +75,7 @@ export function ChartCard({
         />
       )}
       {above}
-      <div className="flex items-center justify-between gap-2 mb-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mb-2 min-h-6">
         <h3
           id={titleId}
           ref={headingRef}
@@ -108,7 +111,7 @@ export function ChartCard({
       )}
 
       {phase === 'skeleton' ? (
-        <div className="animate-pulse bg-border-muted rounded" style={{ height }} />
+        <div className={`animate-pulse bg-border-muted rounded ${heightClass ?? ''}`} style={heightClass ? undefined : { height }} />
       ) : phase === 'empty' ? (
         empty ?? <p className="text-sm text-text-muted">No data.</p>
       ) : (

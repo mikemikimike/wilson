@@ -119,7 +119,7 @@ function TracesContent() {
   if (loading) {
     return (
       <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="shrink-0 p-6 pb-0 space-y-4">
+        <div className="shrink-0 p-3 sm:p-6 pb-0 sm:pb-0 space-y-4">
           <div className="grid grid-cols-4 gap-4">
             {Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="bg-surface-raised border border-border rounded-lg p-4">
@@ -128,7 +128,7 @@ function TracesContent() {
             ))}
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+        <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 min-h-0">
           <div className="bg-surface-raised border border-border rounded-lg p-4">
             <div className="h-[200px] animate-pulse bg-border-muted rounded" />
           </div>
@@ -146,7 +146,7 @@ function TracesContent() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Fixed stat cards + model breakdown */}
-      <div className="shrink-0 p-6 pb-0 space-y-4">
+      <div className="shrink-0 p-3 sm:p-6 pb-0 sm:pb-0 space-y-4">
         <div className="grid grid-cols-4 gap-4">
           <StatCard label="Total Calls" value={fmtNum(stats?.totalCalls ?? 0)} sub={`${fmtNum(stats?.errorCalls ?? 0)} errors`} />
           <StatCard label="Success Rate" value={`${successRate}%`} sub={`${fmtNum(stats?.successfulCalls ?? 0)} successful`} />
@@ -182,7 +182,7 @@ function TracesContent() {
       </div>
 
       {/* Scrollable trace table */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 min-h-0">
         <div className="bg-surface-raised border border-border rounded-lg p-4">
           <h3 className="text-xs text-text-secondary uppercase tracking-wide mb-3">Recent Traces</h3>
           {!traces || traces.length === 0 ? (
@@ -446,7 +446,7 @@ function TrainingContent({
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Fixed header: export buttons, stat cards, progress, filters */}
-      <div className="shrink-0 p-6 pb-0 space-y-4">
+      <div className="shrink-0 p-3 sm:p-6 pb-0 sm:pb-0 space-y-4">
         <div className="flex items-start justify-between gap-4">
           <ExportOptions handoffExcluded={stats?.handoffExcluded} />
           {interactions && (
@@ -522,7 +522,7 @@ function TrainingContent({
       </div>
 
       {/* Scrollable table area */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 min-h-0">
         {loading && (
           <div className="bg-surface-raised border border-border rounded-lg p-4">
             <div className="h-[300px] animate-pulse bg-border-muted rounded" />
@@ -542,7 +542,7 @@ function TrainingContent({
         )}
 
         {!loading && !error && interactions && interactions.length > 0 && (
-          <div className="bg-surface-raised border border-border rounded-lg overflow-hidden">
+          <div className="bg-surface-raised border border-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-surface-raised z-10">
                 <tr className="border-b border-border text-text-secondary text-xs uppercase tracking-wide">

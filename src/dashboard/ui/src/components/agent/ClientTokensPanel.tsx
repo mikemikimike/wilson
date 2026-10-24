@@ -67,7 +67,7 @@ function ToolPicker({
                 : undefined
             }
           >
-            <input type="checkbox" className="mt-0.5" checked={selected.has(tool.name)} disabled={locked || disabled} onChange={() => onToggle(tool)} />
+            <input type="checkbox" className="mt-0.5 shrink-0 max-sm:size-6" checked={selected.has(tool.name)} disabled={locked || disabled} onChange={() => onToggle(tool)} />
             <span className="text-xs text-text font-mono">
               {tool.name}
               {tool.classification !== 'read' && (
@@ -208,10 +208,10 @@ export function ClientTokensPanel({
 
       <div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-3 gap-y-1.5 text-xs">
         <span className="text-text-muted">Endpoint</span>
-        <code className="font-mono text-text truncate">{endpoint}</code>
+        <code className="font-mono text-text break-all sm:truncate">{endpoint}</code>
         <button
           onClick={() => void copy('endpoint', endpoint)}
-          className="text-xs text-text-muted hover:text-text bg-transparent border border-border rounded px-2 py-0.5 cursor-pointer"
+          className="text-xs text-text-muted hover:text-text bg-transparent border border-border rounded px-2 py-0.5 min-h-6 cursor-pointer"
         >
           {copied === 'endpoint' ? 'Copied' : 'Copy'}
         </button>
@@ -266,13 +266,13 @@ export function ClientTokensPanel({
             const isEditing = editing?.id === t.id;
             return (
               <div key={t.id} className="border border-border rounded px-2 py-1.5 text-xs space-y-2">
-                <div className="flex items-center gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-text truncate">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="min-w-0 flex-1 basis-40">
+                    <div className="text-text break-words sm:truncate">
                       {t.name} <code className="font-mono text-text-muted">{t.token_prefix}…</code>
                       {t.revoked_at && <span className="ml-2 text-red">revoked</span>}
                     </div>
-                    <div className="text-text-muted truncate">
+                    <div className="text-text-muted break-words sm:truncate">
                       {t.tools.length > 0 ? t.tools.join(', ') : 'no tools'} · expires {formatTokenTime(t.expires_at)} · last used {formatTokenTime(t.last_used_at)}
                     </div>
                   </div>
@@ -281,14 +281,14 @@ export function ClientTokensPanel({
                       <button
                         onClick={() => setEditing(isEditing ? null : { id: t.id, selected: new Set(t.tools) })}
                         disabled={busy}
-                        className="text-xs text-text-muted hover:text-text bg-transparent border border-border rounded px-2 py-0.5 cursor-pointer disabled:opacity-40"
+                        className="text-xs text-text-muted hover:text-text bg-transparent border border-border rounded px-2 py-0.5 min-h-6 cursor-pointer disabled:opacity-40"
                       >
                         {isEditing ? 'Cancel' : 'Tools'}
                       </button>
                       <button
                         onClick={() => void handleRotate(t.id)}
                         disabled={busy}
-                        className="text-xs text-text-muted hover:text-text bg-transparent border border-border rounded px-2 py-0.5 cursor-pointer disabled:opacity-40"
+                        className="text-xs text-text-muted hover:text-text bg-transparent border border-border rounded px-2 py-0.5 min-h-6 cursor-pointer disabled:opacity-40"
                       >
                         Rotate
                       </button>

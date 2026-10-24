@@ -359,10 +359,11 @@ function layoutVerdict(byTab) {
   if (!byTab) return { ...base, value: null, offenders: null, pass: null };
   const offenders = {};
   const value = {};
+  const truncated = {};
   for (const [tab, r] of Object.entries(byTab)) {
-    if (r?.offenders?.length) { offenders[tab] = r.offenders; value[tab] = r.offenders.length; }
+    if (r?.offenders?.length) { offenders[tab] = r.offenders; value[tab] = r.total ?? r.offenders.length; if (r.truncated) truncated[tab] = { shown: r.offenders.length, total: r.total }; }
   }
-  return { ...base, value, offenders, pass: Object.keys(offenders).length === 0 };
+  return { ...base, value, offenders, ...(Object.keys(truncated).length ? { truncated } : {}), pass: Object.keys(offenders).length === 0 };
 }
 
 function printSummary(r) {

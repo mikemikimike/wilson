@@ -167,6 +167,8 @@ export function SpendingLevel1({ ctx }: { ctx: DrillCtx }) {
       loading={loading}
       hasData={hasData}
       height={260}
+      // Loaded drill (top categories) measured on the seeded sandbox: ~629 px stacked, ~481 px side by side; data-dependent, so a floor not a promise.
+      heightClass="h-[629px] md:h-[481px]"
       empty={<DrillEmpty ctx={ctx} error={error} />}
       table={breakdownTableData({
         rows: expanded ? expandedRows : visible,
@@ -188,7 +190,7 @@ export function SpendingLevel1({ ctx }: { ctx: DrillCtx }) {
         compareCaption={ctx.compare?.caption}
         caption={`${txnCountLabel(data?.count ?? 0)} · ${ctx.periodLabel}`}
       />
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 items-start">
+      <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto] gap-4 items-start">
         <div className="min-w-0" ref={listWrapRef}>
           <DrillBarList
             items={items}
