@@ -17,6 +17,17 @@ describe('phone layout source guards (#180)', () => {
     expect(src).toContain('aria-current');
   });
 
+  test('the tab bar shows scroll-aware edge fades and keyboard/touch-reachable hints (#186)', () => {
+    const src = read('components/TabBar.tsx');
+    expect(src).toContain('data-hscroll');
+    expect(src).toContain('pointer-events-none');
+    expect(src).toContain("addEventListener('scroll', measure");
+    for (const id of ['llm', 'logs', 'settings']) expect(src).toMatch(new RegExp(`\\n  ${id}: '`));
+    expect(src).toContain('onFocus');
+    expect(src).toContain("pointerType === 'touch'");
+    expect(read('components/agent/KillSwitch.tsx')).toContain('aria-describedby="agent-kill-switch-hint"');
+  });
+
   test('the app root no longer clips horizontal overflow', () => {
     expect(read('App.tsx')).not.toMatch(/h-screen flex flex-col[^"]*overflow-hidden/);
     const css = read('styles/app.css');

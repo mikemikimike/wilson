@@ -28,6 +28,9 @@ export function KillSwitch({
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <div className="text-sm font-medium text-text">Agent access (all profiles)</div>
+          <div id="agent-kill-switch-hint" className="text-xs mt-0.5 text-text-muted">
+            Master switch: when off, no AI agent or MCP client can use any Wilson tool.
+          </div>
           {state.enabled ? (
             <div className={`text-xs mt-0.5 ${live > 0 ? 'text-green' : 'text-text-muted'}`}>
               {live} tool{live === 1 ? '' : 's'} live in this tab · {state.pending.length} pending
@@ -40,6 +43,7 @@ export function KillSwitch({
           role="switch"
           aria-checked={state.enabled}
           aria-label="Agent access"
+          aria-describedby="agent-kill-switch-hint"
           disabled={busy || !canChange}
           title={canChange ? undefined : 'Only an admin can change this'}
           onClick={() => (state.enabled ? setConfirming(true) : onChange(true))}
