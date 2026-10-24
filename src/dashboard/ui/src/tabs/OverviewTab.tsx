@@ -19,6 +19,7 @@ import { useAppState } from '@/state';
 import { dayTransactionsPath, daySpendTotal } from '@/lib/overviewQueries';
 import { money } from '@/format';
 import { importEntry, rangeCoveringImport, type WriteAuthStatus } from '@/lib/transactionEditing';
+import { showImportToast } from '@/lib/importToast';
 import type { ImportResponse } from '@/components/ImportStatementDialog';
 import type { Transaction } from '@/types';
 
@@ -90,6 +91,7 @@ export function OverviewTab() {
     const range = rangeCoveringImport(dateRange, result);
     if (range) setDateRange(range);
     refetchAny();
+    showImportToast(result);
     setCardsKey((k) => k + 1);
   }
 

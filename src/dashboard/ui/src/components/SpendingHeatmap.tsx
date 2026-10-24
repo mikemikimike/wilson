@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '@/hooks/useApi';
 import { useAppState } from '@/state';
 import { OfflineUnavailable } from '@/components/OfflineUnavailable';
@@ -62,6 +62,22 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
     for (const row of dailyData ?? []) spending.set(row.date, row.spending);
     return buildHeatmapGrid({ startDate, endDate, spending, dailyBudget: budget, coverage });
   }, [dailyData, budget, coverage, startDate, endDate]);
+
+  // Newest weeks are on the right: open scrolled to the end (before paint, so nothing visibly jumps) and show a
+  // left-edge fade while older weeks are hidden. A no-op when the grid fits.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrolledAway, setScrolledAway] = useState(false);
+  const syncFade = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) setScrolledAway(el.scrollLeft > 0);
+  }, []);
+  const loadingAny = loadingDaily || loadingStreak || loadingCoverage;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollLeft = el.scrollWidth - el.clientWidth;
+    syncFade();
+  }, [grid, loadingAny, syncFade]);
 
   if ((offlineDaily && !dailyData) || (offlineStreak && !streakData)) {
     // Mirror unavailable or never seeded — say so rather than an all-zero grid.
@@ -145,7 +161,8 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
         ) : null
       }
     >
-      <div className="overflow-x-auto">
+      <div className="relative">
+      <div ref={scrollRef} onScroll={syncFade} className="overflow-x-auto">
         <svg width={svgWidth} height={svgHeight} className="block">
           <defs>
             <pattern id={HATCH_ID} width={4} height={4} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -203,6 +220,14 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
             )),
           )}
         </svg>
+      </div>
+      {scrolledAway && (
+        <div
+          aria-hidden="true"
+          data-testid="heatmap-left-fade"
+          className="pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-surface-raised to-transparent"
+        />
+      )}
       </div>
     </ChartCard>
   );

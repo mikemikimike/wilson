@@ -6,6 +6,7 @@ import { AppContext, type AppState } from '@/state';
 import { useDateRange } from '@/hooks/useDateRange';
 import { dropUnknownProfileIds, navigateToTab, useUrlState } from '@/hooks/useUrlState';
 import { categoryFilterOptions } from '@/lib/categoryOptions';
+import { ImportToast } from '@/components/ImportToast';
 import type { UrlTab } from '@/lib/urlState';
 import { useApi } from '@/hooks/useApi';
 import { useMirrorSync } from '@/hooks/useMirrorSync';
@@ -110,6 +111,7 @@ export function App() {
           </Suspense>
         </main>
       </WebMcpProvider>
+      <ImportToast />
       </div>
     </AppContext.Provider>
   );
