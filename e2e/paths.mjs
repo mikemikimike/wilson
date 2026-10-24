@@ -218,8 +218,11 @@ export const PATHS = [
     async run(ctx) {
       const { ab, step } = ctx;
       await step('open Overview', async () => gotoTab(ab, 'Overview', 'This week'));
-      for (const card of ['Spending heatmap', 'Streak', 'Budget countdown', 'Savings rate', 'Cash forecast', 'Spending by category', 'Profit & loss', 'Budgets vs actual', 'Alerts', 'Net worth']) {
-        await step(`card: ${card}`, async () => expectText(ab, card, { within: MAIN, timeout: 15_000 }));
+      // The savings card is titled 'Savings Rate', or 'Net Savings' when income is too low for a rate (SavingsSparkline).
+      for (const card of ['Spending heatmap', 'Streak', 'Budget countdown', ['Savings rate', 'Net savings'], 'Cash forecast', 'Spending by category', 'Profit & loss', 'Budgets vs actual', 'Alerts', 'Net worth']) {
+        const titles = [card].flat();
+        await step(`card: ${titles.join(' / ')}`, async () =>
+          Promise.any(titles.map((t) => expectText(ab, t, { within: MAIN, timeout: 15_000 }))));
       }
       await step('figures come from the seeded FAKE ledger (no NaN / undefined)', async () => {
         const t = await textOf(ab, MAIN);

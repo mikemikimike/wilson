@@ -116,7 +116,7 @@ function RowPicker({
         aria-label={label}
         onChange={(e) => handleChange(e.target.value)}
         disabled={saving}
-        className={`bg-transparent border border-transparent hover:border-border rounded px-1 py-0.5 text-xs text-text-secondary cursor-pointer focus:outline-none focus:border-green disabled:opacity-50 w-full ${maxWidth}`}
+        className={`bg-transparent border border-transparent hover:border-border rounded px-1 py-0.5 min-h-6 min-w-24 text-xs text-text-secondary cursor-pointer focus:outline-none focus:border-green disabled:opacity-50 w-full ${maxWidth}`}
       >
         {(value === '' || !emptyDisabled) && (
           <option value="" disabled={emptyDisabled}>
