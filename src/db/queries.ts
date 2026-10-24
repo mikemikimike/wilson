@@ -806,7 +806,10 @@ export interface TransactionUpdate {
   date?: string;
   description?: string;
   amount?: number;
-  category?: string;
+  /** null clears it (Uncategorized). */
+  category?: string | null;
+  /** Cleared (null) together with the category. */
+  category_confidence?: number | null;
   notes?: string;
   entity_id?: number | null;
   /** The dashboard's Account picker; null unlinks. */
@@ -840,6 +843,7 @@ export function updateTransaction(
   if (updates.description !== undefined) { sets.push('description = @description'); params.description = updates.description; }
   if (updates.amount !== undefined) { sets.push('amount = @amount'); params.amount = updates.amount; }
   if (updates.category !== undefined) { sets.push('category = @category'); params.category = updates.category; }
+  if (updates.category_confidence !== undefined) { sets.push('category_confidence = @category_confidence'); params.category_confidence = updates.category_confidence; }
   if (updates.notes !== undefined) { sets.push('notes = @notes'); params.notes = updates.notes; }
   if (updates.entity_id !== undefined) { sets.push('entity_id = @entity_id'); params.entity_id = updates.entity_id; }
   if (updates.account_id !== undefined) { sets.push('account_id = @account_id'); params.account_id = updates.account_id; }

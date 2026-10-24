@@ -46,6 +46,7 @@ import { computeNetWorth, NET_WORTH_TREND_FEATURE } from '../tools/net-worth/net
 import { computeForecast } from '../tools/query/forecast.js';
 import { IRS_CATEGORIES } from '../tools/tax/irs-categories.js';
 import { CATEGORIES } from '../tools/categorize/categories.js';
+import { UNCATEGORIZED_LABEL } from '../db/spend-rules.js';
 import { embedTransactionIds } from '../utils/embed-on-write.js';
 import { hasLicense } from '../licensing/license.js';
 import { getCheckoutUrl } from '../licensing/upsell.js';
@@ -418,7 +419,7 @@ export const MCP_TOOL_CATALOG: McpToolDef[] = [
     defaultPolicy: 'allow',
     zodShape: {
       search: z.string().max(100).optional().describe('Text to find in the transaction description'),
-      category_id: z.number().int().positive().optional().describe('Only this category (pick from the list)'),
+      category_id: z.number().int().nonnegative().optional().describe('Only this category (pick from the list; 0 is Uncategorized)'),
       start: dateString.optional().describe('First date to include, YYYY-MM-DD'),
       end: dateString.optional().describe('Last date to include, YYYY-MM-DD'),
       cursor: pageCursor,
@@ -1025,7 +1026,11 @@ function fitList<T extends Record<string, unknown>>(body: T, listKey: string, ca
  */
 function transactionFilterRows(db: Database, args: Record<string, unknown>): unknown {
   let category: string | undefined;
-  if (args.category_id !== undefined) {
+  // 0 is the filter's Uncategorized choice (#200): a blank, NULL or 'Uncategorized' category, as the tab shows it.
+  const uncategorized = args.category_id === 0;
+  if (uncategorized) {
+    category = UNCATEGORIZED_LABEL;
+  } else if (args.category_id !== undefined) {
     const row = db.prepare('SELECT name FROM categories WHERE id = @id').get({ id: args.category_id }) as { name: string } | undefined;
     if (!row) throw new NotFoundError(`Category #${args.category_id} not found. Pick a category from the form's list.`);
     category = row.name;
@@ -1035,7 +1040,7 @@ function transactionFilterRows(db: Database, args: Record<string, unknown>): unk
     category,
     dateStart: args.start as string | undefined,
     dateEnd: args.end as string | undefined,
-  });
+  }, uncategorized ? { rules: { uncategorizedMatchesBlank: true } } : {});
   return capOutput(rows, {
     cap: DEFAULT_OUTPUT_CAP,
     limit: limitOf(args),

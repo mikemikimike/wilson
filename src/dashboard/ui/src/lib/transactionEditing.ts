@@ -9,6 +9,7 @@
  * No `@/` imports and no `window`, so bun tests can load it from the repo root.
  */
 import { categoryOptionLabel } from '../../../declarative-submit-core.js';
+import { isUncategorized } from '../../../../db/spend-rules.js';
 
 /** The fields of GET /api/auth/status these helpers read. */
 export interface WriteAuthStatus {
@@ -92,22 +93,31 @@ export interface PickerOption {
 /**
  * The inline category picker's options: every category by NAME (what PATCH takes), labelled the safe way the
  * filter labels them. A row's current category that is not in the list (a bank-supplied one) stays selectable
- * so the select shows it rather than silently showing another value.
+ * so the select shows it rather than silently showing another value. Uncategorized is the picker's '' option
+ * (`categoryPickerValue`), never one of these.
  */
 export function categoryPickerOptions(
   rows: ReadonlyArray<{ id: number; name: string; is_system: number | boolean }>,
   current: string | null,
 ): PickerOption[] {
   const options = rows.map((row) => ({ value: row.name, label: categoryOptionLabel(row) }));
-  if (current && !rows.some((r) => r.name === current)) {
+  if (current && !isUncategorized(current) && !rows.some((r) => r.name === current)) {
     options.unshift({ value: current, label: current });
   }
   return options;
 }
 
-/** The PATCH body the category picker sends: a person picking a category has verified it. */
-export function categoryPatchBody(category: string): { category: string; user_verified: 1 } {
-  return { category, user_verified: 1 };
+/** The picker's value for a row: '' (the Uncategorized option) for a NULL, blank or 'Uncategorized' category. */
+export function categoryPickerValue(category: string | null | undefined): string {
+  return isUncategorized(category) ? '' : category!;
+}
+
+/**
+ * The PATCH body the category picker sends. A person picking a category has verified it; picking Uncategorized
+ * ('') clears the category and the verified flag, so the row goes back to the categorize queue (#200).
+ */
+export function categoryPatchBody(category: string): { category: string; user_verified: 1 } | { category: null; user_verified: 0 } {
+  return category === '' ? { category: null, user_verified: 0 } : { category, user_verified: 1 };
 }
 
 /** The PATCH body the account picker sends ('' is the "--" choice: unlink). */

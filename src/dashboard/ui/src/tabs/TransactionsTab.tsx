@@ -14,29 +14,42 @@ import { useWebMcpPageTools } from '@/agent/useWebMcpPageTools';
 import { usePageContext } from '@/agent/WebMcpProvider';
 import { dateOutsideRange, monthBoundsOf, pollUntil } from '@webmcp-page-tools';
 import { armPageGuard, scrollForAgent } from '@/agent/agentGuard';
-import { buildCategoryOptions } from '@declarative-submit';
 import {
   canEditTransactions,
   importEntry,
   rangeCoveringImport,
   accountCellLabel,
   categoryPickerOptions,
+  categoryPickerValue,
   categoryPatchBody,
   accountPatchBody,
   type PickerOption,
   type WriteAuthStatus,
 } from '@/lib/transactionEditing';
+import { categoryChoices, matchesCategoryFilter, UNCATEGORIZED_LABEL } from '@/lib/categoryOptions';
 import type { Transaction, Entity, CategoryRow, Account } from '@/types';
 
 /** Confidence at or above which the categorize tool auto-assigns (src/tools/categorize). */
 const CONFIDENCE_REVIEW_THRESHOLD = 0.7;
+
+/**
+ * The badge's slot is always rendered at one width (wider than "verified", the widest badge), so the Category column
+ * is the same width whether or not any row shows a badge, and rows line up at every width (#186).
+ */
+function BadgeSlot({ tx }: { tx: Transaction }) {
+  return (
+    <span className="inline-flex w-16 shrink-0" data-badge-slot>
+      <ConfidenceBadge tx={tx} />
+    </span>
+  );
+}
 
 function ConfidenceBadge({ tx }: { tx: Transaction }) {
   if (tx.user_verified) {
     return (
       <span
         title="Verified by you"
-        className="inline-block text-[10px] px-1.5 py-0.5 rounded border border-green/40 bg-green/10 text-green"
+        className="inline-block whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded border border-green/40 bg-green/10 text-green"
       >
         verified
       </span>
@@ -51,7 +64,7 @@ function ConfidenceBadge({ tx }: { tx: Transaction }) {
           ? 'Low model confidence \u2014 worth reviewing'
           : 'Model confidence'
       }
-      className={`inline-block text-[10px] px-1.5 py-0.5 rounded border font-mono ${
+      className={`inline-block whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded border font-mono ${
         low
           ? 'border-yellow/40 bg-yellow/10 text-yellow'
           : 'border-border bg-border-muted/60 text-text-muted'
@@ -83,7 +96,7 @@ function RowPicker({
   options: PickerOption[];
   /** The '' option's text ('--', 'Uncategorized'). */
   emptyLabel: string;
-  /** The '' option is shown only while it is the value and can't be chosen (a category can be changed, not cleared). */
+  /** The '' option is shown only while it is the value and can't be chosen. */
   emptyDisabled?: boolean;
   label: string;
   body: (value: string) => Record<string, unknown>;
@@ -264,25 +277,28 @@ function TxRow({
       <td className="px-4 py-3 text-text-secondary text-xs">
         {editing ? (
           <div className="flex items-center gap-1.5">
+            {/* '' is Uncategorized: choosing it clears the category and the verified flag (#200). */}
             <RowPicker
               txId={tx.id}
-              value={tx.category ?? ''}
+              value={categoryPickerValue(tx.category)}
               options={categoryPickerOptions(editing.categoryRows, tx.category)}
-              emptyLabel="Uncategorized"
-              emptyDisabled
+              emptyLabel={UNCATEGORIZED_LABEL}
               label="Category"
               body={categoryPatchBody}
               onSaved={onSaved}
             />
-            <ConfidenceBadge tx={tx} />
+            <BadgeSlot tx={tx} />
           </div>
         ) : tx.category_detailed ?? tx.category ? (
           <span className="inline-flex items-center gap-1.5">
             {tx.category_detailed ?? tx.category}
-            <ConfidenceBadge tx={tx} />
+            <BadgeSlot tx={tx} />
           </span>
         ) : (
-          <span className="text-text-muted">Uncategorized</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="text-text-muted">{UNCATEGORIZED_LABEL}</span>
+            <BadgeSlot tx={tx} />
+          </span>
         )}
         {editing && tx.category_detailed && tx.category_detailed !== tx.category && (
           <div className="text-[10px] text-text-muted truncate max-w-[160px]" title="Category from the statement">
@@ -369,12 +385,19 @@ export function TransactionsTab() {
 
   // Category rows (with ids) feed the filter's <select>: the agent-facing tool takes `category_id`, and option
   // labels go through the same safe-label rule as everything else an agent reads (threat T20).
+  // The list is the header's shared one (lib/categoryOptions, #200), Uncategorized first as id 0; a label only
+  // transactions carry has no id the agent form could name, so it stays a header-only choice.
   const { data: categoryRows } = useApi<CategoryRow[]>('/api/categories');
-  const categoryOptions = useMemo(() => buildCategoryOptions(categoryRows ?? []), [categoryRows]);
+  const filterChoices = useMemo(
+    () => (categoryRows ? categoryChoices(categoryRows, null).filter((c) => c.id !== null) : []),
+    [categoryRows],
+  );
+  const categoryOptions = useMemo(() => filterChoices.map((c) => ({ value: String(c.id), label: c.label })), [filterChoices]);
   const categoryIdFor = (name: string): string => {
-    const row = (categoryRows ?? []).find((c) => c.name === name);
-    return row ? String(row.id) : '';
+    const choice = filterChoices.find((c) => c.name === name);
+    return choice ? String(choice.id) : '';
   };
+  const categoryNameFor = (id: unknown): string => filterChoices.find((c) => c.id !== null && String(c.id) === String(id))?.name ?? '';
 
   // The filter bar is a declarative form (`fill_transaction_filters`, a page tool: a call changes what the user sees).
   // Humans keep filtering live as they type; an agent's submit is authorized by the server, which also reads the first
@@ -402,8 +425,7 @@ export function TransactionsTab() {
     afterServer: (args, server) => {
       setDraft(null);
       setSearch(typeof args.search === 'string' ? args.search : '');
-      const picked = (categoryRows ?? []).find((c) => c.id === args.category_id);
-      setCategoryFilter(picked ? picked.name : '');
+      setCategoryFilter(typeof args.category_id === 'number' ? categoryNameFor(args.category_id) : '');
       const start = typeof args.start === 'string' ? args.start : dateRange.startDate;
       const end = typeof args.end === 'string' ? args.end : dateRange.endDate;
       if (start !== dateRange.startDate || end !== dateRange.endDate) setDateRange({ startDate: start, endDate: end });
@@ -441,7 +463,7 @@ export function TransactionsTab() {
         const desc = tx.description.toLowerCase();
         if (!merchant.includes(q) && !desc.includes(q)) return false;
       }
-      if (categoryFilter && tx.category !== categoryFilter) return false;
+      if (!matchesCategoryFilter(tx.category, categoryFilter)) return false;
       return true;
     });
   }, [data, search, categoryFilter]);
@@ -476,7 +498,7 @@ export function TransactionsTab() {
   const semanticResults = useMemo(() => {
     if (!semanticData) return [];
     return semanticData.results.filter((tx) => {
-      if (categoryFilter && tx.category !== categoryFilter) return false;
+      if (!matchesCategoryFilter(tx.category, categoryFilter)) return false;
       return true;
     });
   }, [semanticData, categoryFilter]);
@@ -631,7 +653,7 @@ export function TransactionsTab() {
             name="category_id"
             value={categoryIdFor(shownFilters.category)}
             onChange={(e) => {
-              const name = categoryRows?.find((c) => String(c.id) === e.target.value)?.name ?? '';
+              const name = e.target.value === '' ? '' : categoryNameFor(e.target.value);
               editFilter({ category: name }, () => setCategoryFilter(name));
             }}
             className="max-sm:basis-full max-sm:min-w-0 bg-surface-raised border border-border rounded-md px-3 py-2 text-sm text-text focus:outline-none focus:border-green"

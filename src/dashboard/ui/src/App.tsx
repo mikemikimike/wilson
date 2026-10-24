@@ -5,14 +5,14 @@ import { TAB_IDS, type TabId } from '@webmcp-session';
 import { AppContext, type AppState } from '@/state';
 import { useDateRange } from '@/hooks/useDateRange';
 import { dropUnknownProfileIds, navigateToTab, useUrlState } from '@/hooks/useUrlState';
-import { categoryFilterOptions } from '@/lib/categoryOptions';
+import { categoryChoices } from '@/lib/categoryOptions';
 import { ImportToast } from '@/components/ImportToast';
 import type { UrlTab } from '@/lib/urlState';
 import { useApi } from '@/hooks/useApi';
 import { useMirrorSync } from '@/hooks/useMirrorSync';
 import { primeCategoryPalette } from '@/charts/palette';
 import { WebMcpProvider } from '@/agent/WebMcpProvider';
-import type { Account, SpendingSummaryItem, Entity } from '@/types';
+import type { Account, SpendingSummaryItem, Entity, CategoryRow } from '@/types';
 import { TAB_COMPONENTS } from '@/tabs/lazyTabs';
 
 // lib/urlState.ts parses the tab out of the URL hash from the same TAB_IDS;
@@ -47,10 +47,12 @@ export function App() {
 
   const { data: accountsData } = useApi<Account[]>('/api/accounts');
   const { data: entitiesData } = useApi<Entity[]>('/api/entities');
-  // Header category options: every category label in transactions (incl.
-  // Transfer / Credit Card / Payment / Income and 'Uncategorized'). Not
-  // /api/summary — that applies the dashboard SPEND rule and would drop the
-  // non-spend categories as filter options.
+  // Header category options: the shared list (lib/categoryOptions, #200) the
+  // Transactions tab's filter also uses: every category row plus every label
+  // in transactions (incl. Transfer / Credit Card / Payment / Income), with
+  // Uncategorized first. Not /api/summary — that applies the dashboard SPEND
+  // rule and would drop the non-spend categories as filter options.
+  const { data: categoryRows } = useApi<CategoryRow[]>('/api/categories');
   const { data: categoryOptions } = useApi<string[]>('/api/category-options');
   // All-time spending summary: ranks categories for stable chart colors.
   const { data: allSummaryData } = useApi<SpendingSummaryItem[]>('/api/summary?startDate=2000-01-01&endDate=2099-12-31');
@@ -60,7 +62,7 @@ export function App() {
   const accounts = useMemo(() => accountsData ?? [], [accountsData]);
   const entities = useMemo(() => entitiesData ?? [], [entitiesData]);
   // A deep-linked category stays selected even before the options load.
-  const categories = useMemo(() => categoryFilterOptions(categoryOptions, category), [categoryOptions, category]);
+  const categories = useMemo(() => categoryChoices(categoryRows, categoryOptions, category), [categoryRows, categoryOptions, category]);
 
   // Account/entity ids are profile-scoped. Any history entry (Back after a
   // profile switch, an old bookmark) can carry another profile's ids, so once

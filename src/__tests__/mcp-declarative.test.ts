@@ -409,6 +409,22 @@ describe('fill_transaction_filters', () => {
     expect(data.items[0]).toMatchObject({ date: '2026-09-02', amount: -6, category: 'Dining' });
   });
 
+  test("category_id 0 is the filter's Uncategorized choice: NULL, blank and 'Uncategorized' rows (#200)", async () => {
+    const db = createTestDb();
+    insertTransactions(db, [
+      { date: '2026-09-02', description: 'Null Cat', amount: -5 },
+      { date: '2026-09-03', description: 'Blank Cat', amount: -6, category: '' },
+      { date: '2026-09-04', description: 'Label Cat', amount: -7, category: 'Uncategorized' },
+      { date: '2026-09-05', description: 'Dining Cat', amount: -8, category: 'Dining' },
+    ]);
+    const scope = testScope();
+    const grants = grantTools(db, scope, ['fill_transaction_filters']);
+    const data = ((await call(db, scope, grants, 'fill_transaction_filters', { category_id: 0 })) as any).pageData;
+    expect(data.total).toBe(3);
+    expect(data.items.map((r: { amount: number }) => r.amount).sort((a: number, b: number) => a - b)).toEqual([-7, -6, -5]);
+    expect(await call(db, scope, grants, 'fill_transaction_filters', { category_id: -1 })).toMatchObject({ ok: false, status: 400, code: 'invalid_args' });
+  });
+
   test('an unknown category id is a 404 and a malformed date a 400', async () => {
     const db = createTestDb();
     seedTestData(db);

@@ -35,7 +35,7 @@ import type {
   MirrorEntityRow,
   MirrorTransactionRow,
 } from '../dashboard/ui/src/store/types.js';
-import { categoryFilterOptions } from '../dashboard/ui/src/lib/categoryOptions.js';
+import { categoryChoices } from '../dashboard/ui/src/lib/categoryOptions.js';
 import { budgetLimitScaleLabel, budgetTakeaway } from '../dashboard/ui/src/lib/budgetBars.js';
 import { nextShowTable, tableToggleLabel } from '../dashboard/ui/src/charts/chartCardState.js';
 import {
@@ -111,10 +111,12 @@ describe('M1 — /api/category-options', () => {
   });
 
   test('dropdown helper keeps a deep-linked category selected and sorts/dedupes', () => {
-    expect(categoryFilterOptions(null, 'Transfer')).toEqual(['Transfer']);
-    expect(categoryFilterOptions(['Transfer', 'Dining'], 'Dining')).toEqual(['Dining', 'Transfer']);
-    expect(categoryFilterOptions(['Dining', ''], 'Gone From Data')).toEqual(['Dining', 'Gone From Data']);
-    expect(categoryFilterOptions(['Income'], null)).toEqual(['Income']);
+    const names = (labels: string[] | null, selected: string | null) => categoryChoices(null, labels, selected).map((c) => c.name);
+    // Uncategorized is always first (#200); the rest are sorted and de-duplicated.
+    expect(names(null, 'Transfer')).toEqual(['Uncategorized', 'Transfer']);
+    expect(names(['Transfer', 'Dining'], 'Dining')).toEqual(['Uncategorized', 'Dining', 'Transfer']);
+    expect(names(['Dining', ''], 'Gone From Data')).toEqual(['Uncategorized', 'Dining', 'Gone From Data']);
+    expect(names(['Income', 'Uncategorized'], null)).toEqual(['Uncategorized', 'Income']);
   });
 });
 

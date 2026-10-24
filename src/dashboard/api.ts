@@ -327,10 +327,12 @@ export function apiTransactions(db: Database, params: URLSearchParams) {
 /**
  * The fields `update_transaction` lets an agent change, held to the same rules, plus the three only the dashboard sets:
  * the entity and account pickers and the verified flag. Anything else is refused, never stored (breaker H1).
+ * `category` may also be null or blank here: the picker's Uncategorized choice (#200). The agent tool cannot clear one.
  */
 const TransactionPatchBody = z
   .object({
     ...transactionEditShape,
+    category: transactionEditShape.category.unwrap().nullable().optional(),
     entity_id: z.number().int().positive().nullable().optional(),
     account_id: z.number().int().positive().nullable().optional(),
     user_verified: z.union([z.literal(0), z.literal(1), z.boolean()]).optional(),
@@ -354,12 +356,22 @@ export async function apiUpdateTransaction(db: Database, id: number, body: unkno
   if (hidden) return { success: false, error: `${hidden} contains invisible or control characters`, status: 400 };
   if (!getTransactionById(db, id)) return { success: false, error: `transaction #${id} not found`, status: 404 };
 
-  const { user_verified, ...fields } = parsed.data;
+  const { user_verified, category: rawCategory, ...fields } = parsed.data;
   const updates: TransactionUpdate = { ...fields };
   if (user_verified !== undefined) updates.user_verified = Number(user_verified);
-  if (fields.category !== undefined) {
-    const category = lookupCategory(db, fields.category);
-    if (!category) return { success: false, error: `unknown category "${sanitizeUntrustedText(fields.category, 40)}"`, status: 400 };
+  const clearCategory = rawCategory === null || (typeof rawCategory === 'string' && rawCategory.trim() === '');
+  if (clearCategory) {
+    // Back to Uncategorized (#200): nobody has verified "no category", so the row re-enters the categorize queue
+    // (category IS NULL, user_verified = 0) and its old confidence goes with the old category.
+    if (updates.user_verified === 1) {
+      return { success: false, error: 'an uncategorized transaction cannot be marked verified', status: 400 };
+    }
+    updates.category = null;
+    updates.category_confidence = null;
+    updates.user_verified = 0;
+  } else if (rawCategory !== undefined) {
+    const category = lookupCategory(db, rawCategory);
+    if (!category) return { success: false, error: `unknown category "${sanitizeUntrustedText(rawCategory, 40)}"`, status: 400 };
     updates.category = category.name;
   }
   if (fields.entity_id != null && !getEntityById(db, fields.entity_id)) {

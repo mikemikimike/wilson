@@ -1,12 +1,13 @@
 import { useAppState } from '@/state';
 import type { RangePreset } from '@/hooks/useDateRange';
 import { headerFiltersApply } from '@/lib/headerFilters';
+import type { CategoryChoice } from '@/lib/categoryOptions';
 import type { Entity } from '@/types';
 
 interface HeaderProps {
   activeTab: string;
   accounts: { id: number; name: string }[];
-  categories: string[];
+  categories: CategoryChoice[];
   entities: Entity[];
   monthLabel: string;
   preset: RangePreset;
@@ -102,8 +103,8 @@ export function Header({
         >
           <option value="">All categories</option>
           {categories.map((c) => (
-            <option key={c} value={c}>
-              {c}
+            <option key={c.name} value={c.name}>
+              {c.label}
             </option>
           ))}
         </select>
