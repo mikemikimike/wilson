@@ -79,9 +79,9 @@ broken journey.
 | ID | Journey | Tab | Covers |
 |---|---|---|---|
 | P01 | Admin signs in through the login gate | overview | AuthGate, NN-04 |
-| P02 | Viewer signs in: no Confirm/Apply in Review, no budget/goal forms, import disabled ("Importing requires an admin account."), kill switch disabled; direct PATCH/DELETE/PUT writes get 403 and change nothing; admin signs back in | settings, review, goals, transactions | NN-04, write-route authz |
+| P02 | Viewer signs in: no Confirm/Apply in Review, no budget/goal forms, the import entry disabled as "Import (admin only)" with an ask-your-admin tooltip, no row editors, kill switch disabled; direct PATCH/DELETE/PUT writes get 403 and change nothing; admin signs back in | settings, review, goals, transactions | NN-04, write-route authz |
 | P03 | Overview shows all ten cards with real figures (no NaN/undefined) | overview | OverviewTab, issue 76/80 |
-| P04 | Transactions: search narrows the list, category filter, edit a category (the agent proposal + hold-to-approve card, the only UI that edits a category), delete (skipped: no delete control exists) | transactions, settings | TransactionsTab, NN-03, NN-07 |
+| P04 | Transactions: search narrows the list, category filter, edit a category (the agent proposal + hold-to-approve card; a human admin can also pick one inline, #184), delete (skipped: no delete control exists) | transactions, settings | TransactionsTab, NN-03, NN-07 |
 | P05 | Import a FAKE 3-row CSV via the Import dialog: preview, import, rows appear, signs correct | transactions | ImportStatementDialog, issue 71/72, NN-07 |
 | P06 | Review: confirm one suggestion, correct another; pending count drops | review | ReviewTab, issue 84/86 |
 | P07 | Goals: set a monthly budget, edit a goal's target | goals | GoalsTab |

@@ -1,3 +1,4 @@
+import { lazy, Suspense, useState } from 'react';
 import { WeeklySummary } from '@/components/WeeklySummary';
 import { SpendingHeatmap } from '@/components/SpendingHeatmap';
 import { StreakCounter } from '@/components/StreakCounter';
@@ -17,7 +18,49 @@ import { useUrlState } from '@/hooks/useUrlState';
 import { useAppState } from '@/state';
 import { dayTransactionsPath, daySpendTotal } from '@/lib/overviewQueries';
 import { money } from '@/format';
+import { importEntry, rangeCoveringImport, type WriteAuthStatus } from '@/lib/transactionEditing';
+import type { ImportResponse } from '@/components/ImportStatementDialog';
 import type { Transaction } from '@/types';
+
+// The importer (and the statement parsers it pulls in) loads only when someone opens it, so Overview's first paint
+// doesn't pay for it (NN-10).
+const ImportStatementDialog = lazy(() =>
+  import('@/components/ImportStatementDialog').then((m) => ({ default: m.ImportStatementDialog })),
+);
+
+/**
+ * First-run call to action (#187): with no transactions at all, Overview's cards are empty, so the first thing it
+ * offers is the importer. A viewer is told up front that importing is the admin's job (#190).
+ */
+function FirstImportCta({ auth, onImport }: { auth: WriteAuthStatus | null; onImport: () => void }) {
+  const entry = importEntry(auth, 'Import your first statement');
+  return (
+    <section
+      aria-labelledby="first-import-heading"
+      className="bg-surface-raised border border-green/40 rounded-lg p-6 flex items-center justify-between gap-6 flex-wrap"
+    >
+      <div className="min-w-0 space-y-1">
+        <h2 id="first-import-heading" className="text-base font-semibold text-text">
+          No transactions yet
+        </h2>
+        <p className="text-sm text-text-secondary">
+          {entry.disabled
+            ? entry.title
+            : 'Import a CSV, OFX or QIF statement to fill in this overview. It is parsed in your browser, and nothing is saved until you confirm.'}
+        </p>
+      </div>
+      <span title={entry.title}>
+        <button
+          onClick={onImport}
+          disabled={entry.disabled}
+          className="bg-green-700 hover:bg-green-600 disabled:bg-surface disabled:text-text-muted disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors cursor-pointer border-none whitespace-nowrap"
+        >
+          {entry.label}
+        </button>
+      </span>
+    </section>
+  );
+}
 
 export function OverviewTab() {
   // The open day dialog lives in the URL (`day=YYYY-MM-DD`) so it survives a
@@ -25,8 +68,30 @@ export function OverviewTab() {
   const { state: url, navigate } = useUrlState();
   const selectedDate = url.day;
   const setSelectedDate = (day: string | null) => navigate((s) => ({ ...s, day }), { mode: 'replace' });
-  const { accountId, entityId, category } = useAppState();
+  const { accountId, entityId, category, dateRange, setDateRange } = useAppState();
   const mirror = useMirrorStatus();
+
+  // Any transaction at all? Unfiltered on purpose: the call to action is for an empty profile, not an empty filter.
+  const { data: anyTransaction, refetch: refetchAny } = useApi<Transaction[]>('/api/transactions?limit=1');
+  const isEmpty = anyTransaction != null && anyTransaction.length === 0;
+  const { data: authStatus } = useApi<WriteAuthStatus>(isEmpty ? '/api/auth/status' : null, [isEmpty]);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importMounted, setImportMounted] = useState(false);
+  // Bumped after an import so every card refetches (they fetch on mount).
+  const [cardsKey, setCardsKey] = useState(0);
+
+  function openImporter() {
+    setImportMounted(true);
+    setImportOpen(true);
+  }
+
+  function handleImported(result: ImportResponse) {
+    setImportOpen(false);
+    const range = rangeCoveringImport(dateRange, result);
+    if (range) setDateRange(range);
+    refetchAny();
+    setCardsKey((k) => k + 1);
+  }
 
   // Only fetch while a day is open (null path = skip), scoped to the same
   // header filters as the heatmap so the dialog total matches the cell.
@@ -51,34 +116,44 @@ export function OverviewTab() {
         </div>
       )}
 
-      {/* Weekly narrative */}
-      <WeeklySummary />
+      {isEmpty && <FirstImportCta auth={authStatus} onImport={openImporter} />}
 
-      {/* Heatmap + Streak */}
-      <div className="grid grid-cols-[1fr_240px] gap-4">
-        <SpendingHeatmap onDayClick={(date) => setSelectedDate(date)} />
-        <StreakCounter />
+      <div key={cardsKey} className="space-y-4">
+        {/* Weekly narrative */}
+        <WeeklySummary />
+
+        {/* Heatmap + Streak */}
+        <div className="grid grid-cols-[1fr_240px] gap-4">
+          <SpendingHeatmap onDayClick={(date) => setSelectedDate(date)} />
+          <StreakCounter />
+        </div>
+
+        {/* Budget countdown + Savings sparkline + Cash forecast */}
+        <div className="grid grid-cols-3 gap-4">
+          <BudgetCountdown />
+          <SavingsSparkline />
+          <CashflowForecast />
+        </div>
+
+        {/* Spending drill-down (L1 categories → L2 merchants → L3 merchant → txn) + P&L */}
+        <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-start">
+          <SpendingDrill />
+          <PnlCard />
+        </div>
+
+        {/* Budget bars + Alerts + Liabilities */}
+        <div className="grid grid-cols-3 gap-4">
+          <BudgetBars />
+          <AlertList />
+          <LiabilitiesCard />
+        </div>
       </div>
 
-      {/* Budget countdown + Savings sparkline + Cash forecast */}
-      <div className="grid grid-cols-3 gap-4">
-        <BudgetCountdown />
-        <SavingsSparkline />
-        <CashflowForecast />
-      </div>
-
-      {/* Spending drill-down (L1 categories → L2 merchants → L3 merchant → txn) + P&L */}
-      <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-start">
-        <SpendingDrill />
-        <PnlCard />
-      </div>
-
-      {/* Budget bars + Alerts + Liabilities */}
-      <div className="grid grid-cols-3 gap-4">
-        <BudgetBars />
-        <AlertList />
-        <LiabilitiesCard />
-      </div>
+      {importMounted && (
+        <Suspense fallback={null}>
+          <ImportStatementDialog open={importOpen} onClose={() => setImportOpen(false)} onImported={handleImported} />
+        </Suspense>
+      )}
 
       {/* Day-click detail modal */}
       <Dialog

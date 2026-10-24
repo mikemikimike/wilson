@@ -12,6 +12,7 @@ import { startDashboardServer, stopDashboardServer } from '../dashboard/server.j
 import { setInitialProfile, closeAll } from '../dashboard/db-manager.js';
 import { insertTransactions } from '../db/queries.js';
 import { apiUpdateTransaction, apiDeleteTransaction } from '../dashboard/api.js';
+import { insertAccount } from '../db/net-worth-queries.js';
 import { parseToolArgs } from '../mcp/tool-catalog.js';
 import type { Database } from '../db/compat-sqlite.js';
 
@@ -23,7 +24,7 @@ function seed(): { db: Database; id: number } {
 }
 
 function row(db: Database, id: number) {
-  return db.prepare('SELECT date, description, amount, typeof(amount) AS amount_type, category, notes, entity_id, user_verified FROM transactions WHERE id = @id').get({ id }) as Record<string, unknown>;
+  return db.prepare('SELECT date, description, amount, typeof(amount) AS amount_type, category, notes, entity_id, account_id, user_verified FROM transactions WHERE id = @id').get({ id }) as Record<string, unknown>;
 }
 
 const BAD_BODIES: Array<[string, unknown]> = [
@@ -38,6 +39,9 @@ const BAD_BODIES: Array<[string, unknown]> = [
   ['2 MB notes', { notes: 'x'.repeat(2_000_000) }],
   ['bidi override in description', { description: '‮evil' }],
   ['missing entity', { entity_id: 999999 }],
+  ['missing account', { account_id: 999999 }],
+  ['zero account', { account_id: 0 }],
+  ['string account', { account_id: '1' }],
   ['unknown key', { revision: 1 }],
   ['empty body', {}],
   ['null body', null],
@@ -87,6 +91,25 @@ describe('apiUpdateTransaction validation', () => {
     expect(row(db, id).entity_id).toBe(entity.id);
     expect((await apiUpdateTransaction(db, id, { entity_id: null })).success).toBe(true);
     expect(row(db, id).entity_id).toBeNull();
+  });
+
+  test('account_id may be set to an active account or cleared with null; an inactive one is a 400 (#187)', async () => {
+    const { db, id } = seed();
+    const account = insertAccount(db, { name: 'FAKE Checking (dummy)', account_type: 'asset', account_subtype: 'checking' });
+    expect((await apiUpdateTransaction(db, id, { account_id: account })).success).toBe(true);
+    expect(row(db, id).account_id).toBe(account);
+    expect((await apiUpdateTransaction(db, id, { account_id: null })).success).toBe(true);
+    expect(row(db, id).account_id).toBeNull();
+    const closed = insertAccount(db, { name: 'FAKE Closed (dummy)', account_type: 'asset', account_subtype: 'checking' });
+    db.prepare('UPDATE accounts SET is_active = 0 WHERE id = @id').run({ id: closed });
+    expect(await apiUpdateTransaction(db, id, { account_id: closed })).toEqual({ success: false, error: `account #${closed} not found`, status: 400 });
+    expect(row(db, id).account_id).toBeNull();
+  });
+
+  test('the inline category picker body (category + user_verified) is one valid edit (#184)', async () => {
+    const { db, id } = seed();
+    expect(await apiUpdateTransaction(db, id, { category: 'Dining', user_verified: 1 })).toEqual({ success: true, id });
+    expect(row(db, id)).toMatchObject({ category: 'Dining', user_verified: 1 });
   });
 
   test('a missing transaction is a 404', async () => {
@@ -145,6 +168,17 @@ describe('PATCH/DELETE /api/transactions/:id over HTTP', () => {
     const res = await patch(base, id, JSON.stringify({ entity_id: 999999 }));
     expect(res.status).toBe(400);
     expect(await res.text()).not.toMatch(/SQLITE|FOREIGN KEY/i);
+  });
+
+  test('an unknown account is a 400, not a 500, and writes nothing (#187)', async () => {
+    const { db, id, base } = await start();
+    const before = row(db, id);
+    const res = await patch(base, id, JSON.stringify({ account_id: 999999 }));
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    expect(text).toContain('account #999999 not found');
+    expect(text).not.toMatch(/SQLITE|FOREIGN KEY/i);
+    expect(row(db, id)).toEqual(before);
   });
 
   test('a missing transaction is a 404 on PATCH and DELETE', async () => {

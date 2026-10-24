@@ -50,6 +50,7 @@ import {
 } from '../db/categorization-review-queries.js';
 import {
   getAccounts,
+  getAccountById,
   getNetWorthSummary,
   getNetWorthTrend,
   getAccountTransactionSummary,
@@ -319,19 +320,26 @@ export function apiTransactions(db: Database, params: URLSearchParams) {
 }
 
 /**
- * The fields `update_transaction` lets an agent change, held to the same rules, plus the two only the dashboard sets:
- * the entity picker and the verified flag. Anything else is refused, never stored (breaker H1).
+ * The fields `update_transaction` lets an agent change, held to the same rules, plus the three only the dashboard sets:
+ * the entity and account pickers and the verified flag. Anything else is refused, never stored (breaker H1).
  */
 const TransactionPatchBody = z
   .object({
     ...transactionEditShape,
     entity_id: z.number().int().positive().nullable().optional(),
+    account_id: z.number().int().positive().nullable().optional(),
     user_verified: z.union([z.literal(0), z.literal(1), z.boolean()]).optional(),
   })
   .strict()
   .refine((b) => Object.values(b).some((v) => v !== undefined), {
-    message: 'give at least one of date, description, amount, category, notes, entity_id or user_verified',
+    message: 'give at least one of date, description, amount, category, notes, entity_id, account_id or user_verified',
   });
+
+/** An account a transaction may be linked to: it exists and is active (the pickers list only active accounts). */
+function linkableAccount(db: Database, id: number) {
+  const account = getAccountById(db, id);
+  return account && account.is_active ? account : undefined;
+}
 
 /** PATCH /api/transactions/:id (admin-only route). 400 on a bad body, 404 for a missing transaction. */
 export async function apiUpdateTransaction(db: Database, id: number, body: unknown): Promise<WriteResult<{ id: number }>> {
@@ -351,6 +359,9 @@ export async function apiUpdateTransaction(db: Database, id: number, body: unkno
   }
   if (fields.entity_id != null && !getEntityById(db, fields.entity_id)) {
     return { success: false, error: `entity #${fields.entity_id} not found`, status: 400 };
+  }
+  if (fields.account_id != null && !linkableAccount(db, fields.account_id)) {
+    return { success: false, error: `account #${fields.account_id} not found`, status: 400 };
   }
 
   if (!updateTransaction(db, id, updates)) return { success: false, error: `transaction #${id} not found`, status: 404 };
@@ -1431,6 +1442,8 @@ export interface ImportRequestBody {
   filename?: string;
   bank?: string;
   fileHash?: string;
+  /** Optional: link every imported row to this (active) account. Omitted or null: rows stay unlinked unless auto-linked by last4. */
+  accountId?: number | null;
   transactions?: ImportTransactionInput[];
 }
 
@@ -1489,6 +1502,14 @@ export async function apiImport(db: Database, body: ImportRequestBody): Promise<
     if (body.bank.length > IMPORT_MAX_TEXT_FIELD) {
       return failedImport(`bank must be at most ${IMPORT_MAX_TEXT_FIELD} characters`);
     }
+  }
+  let account: ReturnType<typeof getAccountById>;
+  if (body.accountId !== undefined && body.accountId !== null) {
+    if (typeof body.accountId !== 'number' || !Number.isInteger(body.accountId) || body.accountId <= 0) {
+      return failedImport('accountId must be a positive integer');
+    }
+    account = linkableAccount(db, body.accountId);
+    if (!account) return failedImport(`account #${body.accountId} not found`);
   }
   if (!body.transactions) {
     return failedImport('transactions is required');
@@ -1601,6 +1622,7 @@ export async function apiImport(db: Database, body: ImportRequestBody): Promise<
     pending: t.pending ? 1 : 0,
     authorized_date: t.authorized_date,
     account_last4: t.account_last4,
+    account_id: account?.id ?? null,
   }));
   const { count, ids } = insertTransactions(db, txns);
 
@@ -1626,21 +1648,22 @@ export async function apiImport(db: Database, body: ImportRequestBody): Promise<
   });
 
   // 6. Auto-link newly imported transactions to accounts by account_last4
-  //    (mirrors the CLI pipeline)
+  //    (mirrors the CLI pipeline). An explicit account choice already linked every row.
   let autoLinked = 0;
   const last4Values = [...new Set(txns.map((t) => t.account_last4 ?? null).filter(Boolean))] as string[];
-  for (const last4 of last4Values) {
-    const account = db.prepare(
+  for (const last4 of account ? [] : last4Values) {
+    const match = db.prepare(
       'SELECT id FROM accounts WHERE account_number_last4 = @last4 AND is_active = 1'
     ).get({ last4 }) as { id: number } | undefined;
-    if (account) {
-      autoLinked += linkTransactionsToAccount(db, account.id, { accountLast4: last4 });
+    if (match) {
+      autoLinked += linkTransactionsToAccount(db, match.id, { accountLast4: last4 });
     }
   }
 
   // 7. Response (shape mirrors the CLI SingleFileResult)
   let message = `Imported ${count} transactions from ${body.filename} (${dateRangeStart} to ${dateRangeEnd}).`;
   if (skipped > 0) message += ` ${skipped} duplicates skipped.`;
+  if (account) message += ` Assigned to ${sanitizeUntrustedText(account.name, 60)}.`;
   if (autoLinked > 0) message += ` ${autoLinked} transactions auto-linked to accounts.`;
   return {
     status: 'imported',

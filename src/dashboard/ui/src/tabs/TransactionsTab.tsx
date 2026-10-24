@@ -14,7 +14,18 @@ import { usePageContext } from '@/agent/WebMcpProvider';
 import { dateOutsideRange, monthBoundsOf, pollUntil } from '@webmcp-page-tools';
 import { armPageGuard, scrollForAgent } from '@/agent/agentGuard';
 import { buildCategoryOptions } from '@declarative-submit';
-import type { Transaction, Entity, CategoryRow } from '@/types';
+import {
+  canEditTransactions,
+  importEntry,
+  rangeCoveringImport,
+  accountCellLabel,
+  categoryPickerOptions,
+  categoryPatchBody,
+  accountPatchBody,
+  type PickerOption,
+  type WriteAuthStatus,
+} from '@/lib/transactionEditing';
+import type { Transaction, Entity, CategoryRow, Account } from '@/types';
 
 /** Confidence at or above which the categorize tool auto-assigns (src/tools/categorize). */
 const CONFIDENCE_REVIEW_THRESHOLD = 0.7;
@@ -50,65 +61,77 @@ function ConfidenceBadge({ tx }: { tx: Transaction }) {
   );
 }
 
-function EntityCell({
+/**
+ * One inline picker cell (a writer's human edit, sent straight to PATCH /api/transactions/:id; NN-03 covers agent
+ * mutations only, so no approval card). The select is controlled by the row's value, so a failed save reverts on
+ * its own: `onSaved` (the refetch) fires only on success.
+ */
+function RowPicker({
   txId,
-  entityId,
-  entities,
-  onUpdate,
+  value,
+  options,
+  emptyLabel,
+  emptyDisabled,
+  label,
+  body,
+  onSaved,
+  maxWidth = 'max-w-[140px]',
 }: {
   txId: number;
-  entityId: number | null;
-  entities: Entity[];
-  onUpdate: (txId: number, entityId: number | null) => void;
+  value: string;
+  options: PickerOption[];
+  /** The '' option's text ('--', 'Uncategorized'). */
+  emptyLabel: string;
+  /** The '' option is shown only while it is the value and can't be chosen (a category can be changed, not cleared). */
+  emptyDisabled?: boolean;
+  label: string;
+  body: (value: string) => Record<string, unknown>;
+  onSaved: () => void;
+  maxWidth?: string;
 }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<WriteFailureKind | null>(null);
 
-  async function handleChange(value: string) {
-    const newEntityId = value === '' ? null : Number(value);
+  async function handleChange(next: string) {
     setSaving(true);
     setSaveError(null);
     try {
       await api(`/api/transactions/${txId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ entity_id: newEntityId }),
+        body: JSON.stringify(body(next)),
       });
-      onUpdate(txId, newEntityId);
+      onSaved();
     } catch (err) {
-      // Offline (or otherwise failed) assignments surface an explicit state
-      // instead of failing silently; the controlled select self-reverts because
-      // onUpdate only fires on success.
+      // Offline (or otherwise failed) edits surface an explicit state instead of failing silently.
       setSaveError(classifyWriteError(err));
     } finally {
       setSaving(false);
     }
   }
 
-  if (entities.length <= 1) {
-    const entity = entities.find((e) => e.id === entityId);
-    return (
-      <span className="text-text-muted text-xs">{entity?.name ?? '--'}</span>
-    );
-  }
-
   return (
     <div className="flex flex-col gap-0.5">
       <select
-        value={entityId ?? ''}
+        value={value}
+        aria-label={label}
         onChange={(e) => handleChange(e.target.value)}
         disabled={saving}
-        className="bg-transparent border border-transparent hover:border-border rounded px-1 py-0.5 text-xs text-text-secondary cursor-pointer focus:outline-none focus:border-green disabled:opacity-50 w-full max-w-[120px]"
+        className={`bg-transparent border border-transparent hover:border-border rounded px-1 py-0.5 text-xs text-text-secondary cursor-pointer focus:outline-none focus:border-green disabled:opacity-50 w-full ${maxWidth}`}
       >
-        <option value="">--</option>
-        {entities.map((e) => (
-          <option key={e.id} value={e.id}>
-            {e.name}
+        {(value === '' || !emptyDisabled) && (
+          <option value="" disabled={emptyDisabled}>
+            {emptyLabel}
+          </option>
+        )}
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
           </option>
         ))}
       </select>
       {saveError === 'requires-connection' && (
         <span className="text-[10px] leading-tight text-amber-500">
-          Requires connection — assignment not saved
+          Requires connection — change not saved
         </span>
       )}
       {saveError === 'failed' && (
@@ -116,6 +139,43 @@ function EntityCell({
       )}
     </div>
   );
+}
+
+function EntityCell({
+  tx,
+  entities,
+  canEdit,
+  onSaved,
+}: {
+  tx: Transaction;
+  entities: Entity[];
+  canEdit: boolean;
+  onSaved: () => void;
+}) {
+  if (entities.length <= 1 || !canEdit) {
+    const entity = entities.find((e) => e.id === tx.entity_id);
+    return (
+      <span className="text-text-muted text-xs">{entity?.name ?? '--'}</span>
+    );
+  }
+  return (
+    <RowPicker
+      txId={tx.id}
+      value={tx.entity_id == null ? '' : String(tx.entity_id)}
+      options={entities.map((e) => ({ value: String(e.id), label: e.name }))}
+      emptyLabel="--"
+      label="Entity"
+      body={(v) => ({ entity_id: v === '' ? null : Number(v) })}
+      onSaved={onSaved}
+      maxWidth="max-w-[120px]"
+    />
+  );
+}
+
+/** What a writer's row pickers list; null for a viewer (NN-04: read-only, no editors). */
+interface RowEditing {
+  categoryRows: CategoryRow[];
+  accounts: Account[];
 }
 
 function TxTableHead({ entities }: { entities: Entity[] }) {
@@ -138,13 +198,18 @@ function TxTableHead({ entities }: { entities: Entity[] }) {
 function TxRow({
   tx,
   entities,
-  onUpdate,
+  accounts,
+  editing,
+  onSaved,
   score,
   highlighted,
 }: {
   tx: Transaction;
   entities: Entity[];
-  onUpdate: (txId: number, entityId: number | null) => void;
+  accounts: Account[];
+  editing: RowEditing | null;
+  /** A picker saved: refetch the rows. */
+  onSaved: () => void;
   /** Cosine similarity in [-1, 1] — present only on semantic matches. */
   score?: number;
   /** The row a drill-down 'Open in Transactions' link pointed at (URL `txn`), or one an agent asked to show (`open_transaction`). */
@@ -196,7 +261,21 @@ function TxRow({
         {formatAmount(tx.amount)}
       </td>
       <td className="px-4 py-3 text-text-secondary text-xs">
-        {tx.category_detailed ?? tx.category ? (
+        {editing ? (
+          <div className="flex items-center gap-1.5">
+            <RowPicker
+              txId={tx.id}
+              value={tx.category ?? ''}
+              options={categoryPickerOptions(editing.categoryRows, tx.category)}
+              emptyLabel="Uncategorized"
+              emptyDisabled
+              label="Category"
+              body={categoryPatchBody}
+              onSaved={onSaved}
+            />
+            <ConfidenceBadge tx={tx} />
+          </div>
+        ) : tx.category_detailed ?? tx.category ? (
           <span className="inline-flex items-center gap-1.5">
             {tx.category_detailed ?? tx.category}
             <ConfidenceBadge tx={tx} />
@@ -204,18 +283,30 @@ function TxRow({
         ) : (
           <span className="text-text-muted">Uncategorized</span>
         )}
+        {editing && tx.category_detailed && tx.category_detailed !== tx.category && (
+          <div className="text-[10px] text-text-muted truncate max-w-[160px]" title="Category from the statement">
+            {tx.category_detailed}
+          </div>
+        )}
       </td>
       <td className="px-4 py-3 text-text-secondary text-xs">
-        {tx.account_name ?? <span className="text-text-muted">--</span>}
+        {editing && editing.accounts.length > 0 ? (
+          <RowPicker
+            txId={tx.id}
+            value={tx.account_id == null ? '' : String(tx.account_id)}
+            options={editing.accounts.map((a) => ({ value: String(a.id), label: a.name }))}
+            emptyLabel={tx.account_name ? `-- (${tx.account_name})` : '--'}
+            label="Account"
+            body={accountPatchBody}
+            onSaved={onSaved}
+          />
+        ) : (
+          accountCellLabel(tx, accounts) ?? <span className="text-text-muted">--</span>
+        )}
       </td>
       {entities.length > 1 && (
         <td className="px-4 py-3">
-          <EntityCell
-            txId={tx.id}
-            entityId={tx.entity_id}
-            entities={entities}
-            onUpdate={onUpdate}
-          />
+          <EntityCell tx={tx} entities={entities} canEdit={editing != null} onSaved={onSaved} />
         </td>
       )}
     </tr>
@@ -267,6 +358,12 @@ export function TransactionsTab() {
   }, [highlightId, data]);
   const { data: entitiesData } = useApi<Entity[]>('/api/entities');
   const entities = useMemo(() => entitiesData ?? [], [entitiesData]);
+  const { data: accountsData } = useApi<Account[]>('/api/accounts');
+  const accounts = useMemo(() => accountsData ?? [], [accountsData]);
+  // Write controls follow the role (NN-04): a viewer gets plain text and a disabled import entry (#190).
+  const { data: authStatus } = useApi<WriteAuthStatus>('/api/auth/status');
+  const canEdit = canEditTransactions(authStatus);
+  const importButton = importEntry(authStatus);
 
   // Category rows (with ids) feed the filter's <select>: the agent-facing tool takes `category_id`, and option
   // labels go through the same safe-label rule as everything else an agent reads (threat T20).
@@ -324,6 +421,10 @@ export function TransactionsTab() {
     else apply();
   };
   const filterCategoryOptions = filterForm.hold('categories', categoryOptions);
+  const editing = useMemo<RowEditing | null>(
+    () => (canEdit && categoryRows ? { categoryRows, accounts } : null),
+    [canEdit, categoryRows, accounts],
+  );
 
   // The category select lists every category (/api/categories), not just the ones in the loaded page, so a
   // filter whose category has no rows in the current range still shows as selected (the stale "All Categories"
@@ -430,26 +531,22 @@ export function TransactionsTab() {
     visibleRows: shownIds.size,
   });
 
-  function handleEntityUpdate(txId: number, newEntityId: number | null) {
-    // Optimistically update local data
-    if (data) {
-      const tx = data.find((t) => t.id === txId);
-      if (tx) tx.entity_id = newEntityId;
-      refetch();
-    }
+  function handleRowSaved() {
+    refetch();
     // Semantic rows may not be on the loaded page — refresh them too so the
-    // entity cell reflects the update.
+    // edited cell reflects the update.
     semanticRefetch();
   }
 
   function openImporter() {
+    if (importButton.disabled) return;
     setSeedFile(null);
     setImportOpen(true);
   }
 
   function dropStatement(files: FileList | null) {
     const file = files?.[0];
-    if (!file) return;
+    if (!file || importButton.disabled) return;
     // One file at a time; extension/format validation (and the error path)
     // lives in the dialog, so an unsupported file shows its inline error.
     setSeedFile(file);
@@ -460,15 +557,10 @@ export function TransactionsTab() {
     setImportOpen(false);
     refetch();
     // Switch the visible window to the imported dates when the current range
-    // doesn't cover them (ISO strings compare lexicographically), so fresh rows
-    // aren't hidden under the default current-month filter.
-    if (
-      result.transactionsImported > 0 &&
-      result.dateRange &&
-      (dateRange.startDate > result.dateRange.start || dateRange.endDate < result.dateRange.end)
-    ) {
-      setDateRange({ startDate: result.dateRange.start, endDate: result.dateRange.end });
-    }
+    // doesn't cover them, so fresh rows aren't hidden under the default
+    // current-month filter.
+    const range = rangeCoveringImport(dateRange, result);
+    if (range) setDateRange(range);
     setBanner(result.message);
   }
 
@@ -502,12 +594,17 @@ export function TransactionsTab() {
               </span>
             )}
           </div>
-          <button
-            onClick={openImporter}
-            className="bg-green-700 hover:bg-green-600 text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors cursor-pointer border-none"
-          >
-            Import statement
-          </button>
+          {/* The tooltip sits on a wrapper: some browsers show no title on a disabled button. */}
+          <span title={importButton.title}>
+            <button
+              onClick={openImporter}
+              disabled={importButton.disabled}
+              aria-label={importButton.title ? `${importButton.label}. ${importButton.title}` : undefined}
+              className="bg-green-700 hover:bg-green-600 disabled:bg-surface-raised disabled:text-text-muted disabled:cursor-not-allowed text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors cursor-pointer border-none"
+            >
+              {importButton.label}
+            </button>
+          </span>
         </div>
 
         <form key={filterForm.formKey} className="flex gap-3" aria-label="Filter transactions" {...filterForm.formProps}>
@@ -659,7 +756,9 @@ export function TransactionsTab() {
                         key={tx.id}
                         tx={tx}
                         entities={entities}
-                        onUpdate={handleEntityUpdate}
+                        accounts={accounts}
+                        editing={editing}
+                        onSaved={handleRowSaved}
                         score={tx.score}
                         highlighted={tx.id === highlightedId}
                       />
@@ -689,15 +788,23 @@ export function TransactionsTab() {
                 dropStatement(e.dataTransfer.files);
               }}
               onClick={openImporter}
-              className={`rounded-lg border-2 border-dashed p-10 text-center cursor-pointer transition-colors ${
-                zoneDragOver ? 'border-green bg-green/10' : 'border-border bg-surface-raised hover:border-green'
+              className={`rounded-lg border-2 border-dashed p-10 text-center transition-colors ${
+                importButton.disabled
+                  ? 'border-border bg-surface-raised'
+                  : zoneDragOver ? 'border-green bg-green/10 cursor-pointer' : 'border-border bg-surface-raised hover:border-green cursor-pointer'
               }`}
             >
               <div className="text-3xl mb-2">📥</div>
-              <p className="text-sm text-text">Drop a bank statement here</p>
-              <p className="text-xs text-text-muted mt-1">
-                CSV, OFX, or QIF — or click to browse. Preview the parse before anything is imported.
-              </p>
+              {importButton.disabled ? (
+                <p className="text-sm text-text">{importButton.title}</p>
+              ) : (
+                <>
+                  <p className="text-sm text-text">Drop a bank statement here</p>
+                  <p className="text-xs text-text-muted mt-1">
+                    CSV, OFX, or QIF — or click to browse. Preview the parse before anything is imported.
+                  </p>
+                </>
+              )}
               <p className="text-xs text-text-muted mt-4">No transactions found.</p>
             </div>
           )
@@ -713,7 +820,9 @@ export function TransactionsTab() {
                     key={tx.id}
                     tx={tx}
                     entities={entities}
-                    onUpdate={handleEntityUpdate}
+                    accounts={accounts}
+                    editing={editing}
+                    onSaved={handleRowSaved}
                     highlighted={tx.id === highlightId || tx.id === highlightedId}
                   />
                 ))}

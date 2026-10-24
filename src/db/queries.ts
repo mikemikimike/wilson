@@ -64,6 +64,8 @@ export interface TransactionInsert {
   pending?: number;
   authorized_date?: string;
   account_name?: string;
+  /** Link to an accounts row (the dashboard importer's optional account choice). */
+  account_id?: number | null;
 }
 
 export interface TransactionRow {
@@ -130,10 +132,10 @@ export function insertTransactions(
   const stmt = db.prepare(`
     INSERT INTO transactions (date, description, amount, category, category_confidence,
       source_file, bank, account_last4, is_recurring, tags, notes,
-      merchant_name, category_detailed, external_id, payment_channel, pending, authorized_date, account_name)
+      merchant_name, category_detailed, external_id, payment_channel, pending, authorized_date, account_name, account_id)
     VALUES (@date, @description, @amount, @category, @category_confidence,
       @source_file, @bank, @account_last4, @is_recurring, @tags, @notes,
-      @merchant_name, @category_detailed, @external_id, @payment_channel, @pending, @authorized_date, @account_name)
+      @merchant_name, @category_detailed, @external_id, @payment_channel, @pending, @authorized_date, @account_name, @account_id)
   `);
 
   const insertMany = db.transaction((items: TransactionInsert[]) => {
@@ -158,6 +160,7 @@ export function insertTransactions(
         pending: txn.pending ?? 0,
         authorized_date: txn.authorized_date ?? null,
         account_name: txn.account_name ?? null,
+        account_id: txn.account_id ?? null,
       });
       ids.push((result as { lastInsertRowid: number }).lastInsertRowid);
     }
@@ -806,6 +809,8 @@ export interface TransactionUpdate {
   category?: string;
   notes?: string;
   entity_id?: number | null;
+  /** The dashboard's Account picker; null unlinks. */
+  account_id?: number | null;
   /** SQLite 0/1: user has personally verified the category. */
   user_verified?: number;
 }
@@ -837,6 +842,7 @@ export function updateTransaction(
   if (updates.category !== undefined) { sets.push('category = @category'); params.category = updates.category; }
   if (updates.notes !== undefined) { sets.push('notes = @notes'); params.notes = updates.notes; }
   if (updates.entity_id !== undefined) { sets.push('entity_id = @entity_id'); params.entity_id = updates.entity_id; }
+  if (updates.account_id !== undefined) { sets.push('account_id = @account_id'); params.account_id = updates.account_id; }
   if (updates.user_verified !== undefined) { sets.push('user_verified = @user_verified'); params.user_verified = updates.user_verified; }
 
   if (sets.length === 0) return false;

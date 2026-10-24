@@ -67,6 +67,9 @@ const ROUTES: RouteRow[] = [
   { file: S, method: 'POST', pattern: '/api/profiles/switch', path: '/api/profiles/switch', body: { name: 'other' }, kind: 'refuse', control: { body: { name: 'bad name!' } } },
   { file: S, method: 'PUT', pattern: '/api/budgets/:id', path: '/api/budgets/Dining', body: { monthlyLimit: 1 }, kind: 'refuse' },
   { file: S, method: 'PATCH', pattern: '/api/transactions/:id', path: '/api/transactions/1', body: { category: 'Viewer Was Here' }, kind: 'refuse' },
+  // The human pickers on the Transactions tab (#184 category, #187 account) send these bodies; a viewer gets no picker and the route still refuses.
+  { file: S, method: 'PATCH', pattern: '/api/transactions/:id', path: '/api/transactions/1', body: { category: 'Dining', user_verified: 1 }, kind: 'refuse' },
+  { file: S, method: 'PATCH', pattern: '/api/transactions/:id', path: '/api/transactions/1', body: { account_id: 1 }, kind: 'refuse' },
   { file: S, method: 'DELETE', pattern: '/api/transactions/:id', path: '/api/transactions/1', kind: 'refuse', control: { path: '/api/transactions/9999' } },
   { file: S, method: 'POST', pattern: '/api/reviews/:id/(confirm|correct)', path: '/api/reviews/1/confirm', kind: 'refuse' },
   { file: S, method: 'PATCH', pattern: '/api/goals/:id', path: '/api/goals/1', body: { targetAmount: 1 }, kind: 'refuse' },
@@ -75,6 +78,7 @@ const ROUTES: RouteRow[] = [
   { file: S, method: 'DELETE', pattern: '/api/entities/:id', path: '/api/entities/1', kind: 'refuse', control: { path: '/api/entities/9999' } },
   // ── import, memories, settings, models ──
   { file: S, method: 'POST', pattern: '/api/import', path: '/api/import', body: { filename: 'v.csv', bank: 'generic', transactions: [{ date: '2026-02-01', description: 'FAKE viewer import (dummy)', amount: -1 }] }, kind: 'refuse', control: { body: {} } },
+  { file: S, method: 'POST', pattern: '/api/import', path: '/api/import', body: { filename: 'v2.csv', bank: 'generic', accountId: 1, transactions: [{ date: '2026-02-02', description: 'FAKE viewer import with account (dummy)', amount: -1 }] }, kind: 'refuse', control: { body: {} } },
   { file: S, method: 'POST', pattern: '/api/demo/trace/step', path: '/api/demo/trace/step', body: { step: 'import' }, kind: 'refuse' },
   { file: S, method: 'POST', pattern: '/api/demo/autobook/candidates', path: '/api/demo/autobook/candidates', kind: 'allowed', reason: 'Read-only lookup (server.ts:904-906); the booking happens only in the WebMCP commit after approval' },
   { file: S, method: 'POST', pattern: '/api/memories', path: '/api/memories', body: { memoryType: 'context', content: 'FAKE viewer memory (dummy)' }, kind: 'refuse', control: { body: { memoryType: 'context', content: 'FAKE admin memory (dummy)' } } },

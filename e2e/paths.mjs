@@ -5,6 +5,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { clearInput, click, clickText, expectNoText, expectText, gotoTab, q, sleep, tagByText, tagWhere, textOf, timeMutation, waitFor } from './lib/page.mjs';
 
+/**
+ * Page-side expression: a transaction row's category. An admin's cell is a <select> (#184), whose innerText lists
+ * every option, so read its value; a viewer's cell is plain text.
+ */
+const CATEGORY_CELL = `((r) => { const c = r?.children[3]; const sel = c?.querySelector('select'); return (sel ? sel.value : c?.innerText ?? '').trim(); })`;
+
 const MAIN = 'main';
 
 // ── shared helpers ───────────────────────────────────────────────────────────
@@ -160,13 +166,15 @@ export const PATHS = [
           const buttons = await ab.eval(`[...document.querySelectorAll('main button')].map((b) => b.innerText.trim())`);
           if (buttons.includes('Set budget') || buttons.includes('Update goal')) throw new Error(`viewer sees goal write buttons: ${buttons.join(', ')}`);
         });
-        await step('Transactions: import needs an admin', async () => {
+        await step('Transactions: import is admin-only before any work, and rows have no editors', async () => {
           await gotoTab(ab, 'Transactions', 'transactions');
-          await clickText(ab, 'Import statement', { within: MAIN });
-          await expectText(ab, 'Importing requires an admin account.');
-          const disabled = await ab.eval(`[...document.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Import to database')?.disabled === true`);
-          if (!disabled) throw new Error('"Import to database" is enabled for a viewer');
-          await clickText(ab, 'Cancel');
+          // #190: the entry itself says so, disabled, with a tooltip naming what to do next.
+          await waitFor(ab, `[...document.querySelectorAll('main button')].find((b) => b.innerText.trim() === 'Import (admin only)')?.disabled === true`, { what: 'disabled "Import (admin only)" entry' });
+          const tip = await ab.eval(`[...document.querySelectorAll('main button')].find((b) => b.innerText.trim() === 'Import (admin only)')?.parentElement?.title ?? ''`);
+          if (!/household admin/.test(tip)) throw new Error(`admin-only tooltip missing: ${JSON.stringify(tip)}`);
+          // #184/#187: no category/account picker for a viewer (NN-04).
+          const pickers = await ab.eval(`document.querySelectorAll('main select[aria-label="Category"], main select[aria-label="Account"], main select[aria-label="Entity"]').length`);
+          if (pickers !== 0) throw new Error(`viewer sees ${pickers} row editors`);
         });
         await step('Settings: kill switch is admin-only', async () => {
           await gotoTab(ab, 'Settings', 'Agent access');
@@ -245,19 +253,30 @@ export const PATHS = [
         await waitFor(ab, `(() => { const m = /(\\d+) of (\\d+) transactions/.exec(document.querySelector('main').innerText); return m && +m[1] === +m[2]; })()`, { what: 'search cleared' });
         await ab.must(['select', 'form[aria-label="Filter transactions"] select[name="category_id"]', 'Groceries']);
         await clickText(ab, 'Apply', { within: 'form[aria-label="Filter transactions"]' });
-        await waitFor(ab, `(() => { const rows = [...document.querySelectorAll('main tbody tr[data-tx-id]')]; return rows.length > 0 && rows.every((r) => r.children[3]?.innerText.includes('Groceries')); })()`, { what: 'only Groceries rows' });
+        await waitFor(ab, `(() => { const rows = [...document.querySelectorAll('main tbody tr[data-tx-id]')]; return rows.length > 0 && rows.every((r) => ${CATEGORY_CELL}(r).includes('Groceries')); })()`, { what: 'only Groceries rows' });
         await ab.must(['select', 'form[aria-label="Filter transactions"] select[name="category_id"]', 'All Categories']);
         await clickText(ab, 'Apply', { within: 'form[aria-label="Filter transactions"]' });
         await waitFor(ab, `(() => { const m = /(\\d+) of (\\d+) transactions/.exec(document.querySelector('main').innerText); return m && +m[1] === +m[2]; })()`, { what: 'filters cleared' });
       });
-      // There is no human edit or delete control in the Transactions tab (TransactionsTab.tsx renders only an entity
-      // select, :53). Editing a category is reachable only through the agent path (`update_transaction`) and the
-      // approval card a person must hold to approve, so that is the UI this step drives.
+      // A human admin edits a category inline (#184): the same validated PATCH, no approval card (NN-03 is agents only).
+      await step('edit a category by hand (inline picker)', async () => {
+        // Not a row the later steps drive (Taco Palace, Corner Cafe); its category is put back afterwards.
+        const found = await ab.eval(`(() => { const r = [...document.querySelectorAll('main tbody tr[data-tx-id]')].find((r) => r.querySelector('select[aria-label="Category"]') && !/Taco Palace|Corner Cafe/.test(r.innerText) && ${CATEGORY_CELL}(r) !== '' && ${CATEGORY_CELL}(r) !== 'Dining'); return r ? { id: +r.dataset.txId, cat: ${CATEGORY_CELL}(r) } : null; })()`);
+        if (!found) throw new Error('no row with a category picker');
+        const sel = `main tbody tr[data-tx-id="${found.id}"] select[aria-label="Category"]`;
+        await ab.must(['select', sel, 'Dining']);
+        await waitFor(ab, `${CATEGORY_CELL}(document.querySelector('main tbody tr[data-tx-id="${found.id}"]')) === 'Dining'`, { what: `row ${found.id} shows Dining` });
+        await waitFor(ab, `document.querySelector('main tbody tr[data-tx-id="${found.id}"]')?.querySelector('[title="Verified by you"]') != null`, { what: `row ${found.id} verified badge` });
+        await ab.must(['select', sel, found.cat]);
+        await waitFor(ab, `${CATEGORY_CELL}(document.querySelector('main tbody tr[data-tx-id="${found.id}"]')) === ${JSON.stringify(found.cat)}`, { what: `row ${found.id} back to ${found.cat}` });
+      });
+      // Delete has no control in the Transactions tab. The agent path (`update_transaction`) and the approval card a
+      // person must hold to approve is the other way to edit a category, so this step drives it too.
       await step('edit a category (agent proposal + hold-to-approve card)', async () => {
         await gotoTab(ab, 'Settings', 'Agent access');
         await grantTool(ab, 'update_transaction');
         await gotoTab(ab, 'Transactions', 'transactions');
-        const target = await ab.eval(`(() => { const r = [...document.querySelectorAll('main tbody tr[data-tx-id]')].find((r) => r.innerText.includes('Taco Palace')); return r ? { id: +r.dataset.txId, cat: r.children[3].innerText.trim() } : null; })()`);
+        const target = await ab.eval(`(() => { const r = [...document.querySelectorAll('main tbody tr[data-tx-id]')].find((r) => r.innerText.includes('Taco Palace')); return r ? { id: +r.dataset.txId, cat: ${CATEGORY_CELL}(r) } : null; })()`);
         if (!target) throw new Error('no Taco Palace row to edit');
         const inv = await invoke(ab, 'update_transaction', { id: target.id, category: 'Travel' }, { detach: true });
         if (!inv.ok || !inv.data?.invocationId) throw new Error(`invoke failed: ${inv.error}`);
@@ -269,7 +288,7 @@ export const PATHS = [
         if (res.data?.output?.outcome && res.data.output.outcome !== 'committed') throw new Error(`approval outcome ${res.data.output.outcome}`);
         await gotoTab(ab, 'Overview', 'This week');
         await gotoTab(ab, 'Transactions', 'transactions');
-        await waitFor(ab, `document.querySelector('main tbody tr[data-tx-id="${target.id}"]')?.children[3]?.innerText.includes('Travel')`, { what: `row ${target.id} shows Travel` });
+        await waitFor(ab, `${CATEGORY_CELL}(document.querySelector('main tbody tr[data-tx-id="${target.id}"]')).includes('Travel')`, { what: `row ${target.id} shows Travel` });
         ctx.state.editedTx = target.id;
       });
       await step('delete a transaction', async () => {
@@ -613,7 +632,7 @@ export const PATHS = [
       let target;
       await step('mutating: update_transaction raises a card, reject leaves the row unchanged', async () => {
         await gotoTab(ab, 'Transactions', 'transactions');
-        target = await ab.eval(`(() => { const r = [...document.querySelectorAll('main tbody tr[data-tx-id]')].find((r) => r.innerText.includes('Corner Cafe')); return r ? { id: +r.dataset.txId, cat: r.children[3].innerText.split('\\n')[0].trim() } : null; })()`);
+        target = await ab.eval(`(() => { const r = [...document.querySelectorAll('main tbody tr[data-tx-id]')].find((r) => r.innerText.includes('Corner Cafe')); return r ? { id: +r.dataset.txId, cat: ${CATEGORY_CELL}(r) } : null; })()`);
         if (!target) throw new Error('no Corner Cafe row');
         const r = await invoke(ab, 'update_transaction', { id: target.id, category: 'Groceries' }, { detach: true });
         if (!r.ok || r.data?.status !== 'pending') throw new Error(`expected a pending invocation, got ${JSON.stringify(r.data?.status ?? r.error)}`);

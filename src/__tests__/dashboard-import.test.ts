@@ -446,6 +446,60 @@ describe('POST /api/import', () => {
     expect(linked.c).toBe(2);
   });
 
+  // ── Optional account choice (#187) ───────────────────────────────────────
+
+  test('accountId links every imported row to the chosen account', async () => {
+    const { db, base } = await start();
+    const accountId = insertAccount(db, { name: 'FAKE Checking (dummy)', account_type: 'asset', account_subtype: 'checking', account_number_last4: '9999' });
+    const other = insertAccount(db, { name: 'FAKE Card (dummy)', account_type: 'liability', account_subtype: 'credit_card', account_number_last4: '1234' });
+
+    const res = await post(base, {
+      filename: 'pick-account.csv',
+      bank: 'generic',
+      accountId,
+      // A last4 that matches another account: the explicit choice wins, auto-link does not run.
+      transactions: ROWS.map((r) => ({ ...r, account_last4: '1234' })),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.status).toBe('imported');
+    expect(data.transactionsImported).toBe(3);
+    expect(data.message).toContain('Assigned to FAKE Checking (dummy).');
+    const counts = db.prepare('SELECT account_id, COUNT(*) AS c FROM transactions GROUP BY account_id').all();
+    expect(counts).toEqual([{ account_id: accountId, c: 3 }]);
+    expect(other).not.toBe(accountId);
+  });
+
+  test('accountId null or omitted leaves rows unlinked', async () => {
+    const { db, base } = await start();
+    const res = await post(base, { filename: 'no-account.csv', bank: 'generic', accountId: null, transactions: ROWS });
+    expect(res.status).toBe(200);
+    const unlinked = db.prepare('SELECT COUNT(*) AS c FROM transactions WHERE account_id IS NULL').get() as { c: number };
+    expect(unlinked.c).toBe(3);
+  });
+
+  for (const [label, accountId] of [['unknown', 424242], ['zero', 0], ['fractional', 1.5], ['string', '1']] as const) {
+    test(`${label} accountId returns 400 and inserts nothing`, async () => {
+      const { db, base } = await start();
+      const res = await post(base, { filename: 'bad-account.csv', bank: 'generic', accountId, transactions: ROWS });
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.status).toBe('failed');
+      expect(data.error).toMatch(/account/);
+      expect((db.prepare('SELECT COUNT(*) AS c FROM transactions').get() as { c: number }).c).toBe(0);
+      expect((db.prepare('SELECT COUNT(*) AS c FROM imports').get() as { c: number }).c).toBe(0);
+    });
+  }
+
+  test('an inactive account is refused like an unknown one', async () => {
+    const { db, base } = await start();
+    const accountId = insertAccount(db, { name: 'FAKE Closed (dummy)', account_type: 'asset', account_subtype: 'checking' });
+    db.prepare('UPDATE accounts SET is_active = 0 WHERE id = @id').run({ id: accountId });
+    const res = await post(base, { filename: 'closed.csv', bank: 'generic', accountId, transactions: ROWS });
+    expect(res.status).toBe(400);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM transactions').get() as { c: number }).c).toBe(0);
+  });
+
   // ── Per-row calendar-date / length / markup validation (guardrail finding L2) ──
 
   const row = (over: Record<string, unknown>) => ({ ...ROWS[0], ...over });

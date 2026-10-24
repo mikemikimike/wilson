@@ -11,6 +11,7 @@ import {
   canCommitImport,
   type ParsedStatement,
 } from '@import-tools/client-import.js';
+import type { Account } from '@/types';
 
 /** Mirrors ImportResult in src/dashboard/api.ts (not imported — that file pulls bun:sqlite types into the ui program). */
 export interface ImportResponse {
@@ -69,6 +70,9 @@ export function ImportStatementDialog({
 }: ImportStatementDialogProps) {
   const { data: authStatus } = useApi<AuthStatus>('/api/auth/status');
   const canCommit = canCommitImport(authStatus);
+  // Optional: which account the imported rows belong to (#187). '' = none (auto-link by last4 still runs).
+  const { data: accounts } = useApi<Account[]>(open ? '/api/accounts' : null, [open]);
+  const [accountId, setAccountId] = useState('');
 
   const [parsing, setParsing] = useState(false);
   const [parseError, setParseError] = useState('');
@@ -87,6 +91,7 @@ export function ImportStatementDialog({
       setCommitting(false);
       setCommitError('');
       setDragOver(false);
+      setAccountId('');
     }
   }, [open]);
 
@@ -142,6 +147,7 @@ export function ImportStatementDialog({
           filename: parsed.filename,
           bank: parsed.statement.bank,
           fileHash: parsed.fileHash,
+          accountId: accountId === '' ? null : Number(accountId),
           transactions: parsed.statement.transactions.map((t) => ({
             date: t.date,
             description: t.description,
@@ -180,9 +186,6 @@ export function ImportStatementDialog({
       title="Import statement"
       footer={
         <div className="flex items-center justify-between gap-2">
-          {!canCommit && (
-            <span className="text-xs text-text-muted">Importing requires an admin account.</span>
-          )}
           <div className="flex items-center gap-2 ml-auto">
             <button
               onClick={onClose}
@@ -211,6 +214,17 @@ export function ImportStatementDialog({
           e.target.value = '';
         }}
       />
+
+      {/* The role is known before any work (#190): say so first, and what to do instead. */}
+      {!canCommit && (
+        <div role="note" className="mb-3 border border-yellow/40 bg-yellow/10 rounded-md px-3 py-2 text-sm text-text">
+          <p className="font-medium">Importing is admin-only.</p>
+          <p className="text-xs text-text-secondary mt-0.5">
+            Ask your household admin to import this statement, or to give you an admin account. You can still
+            preview a file here: it is parsed in your browser and nothing is sent.
+          </p>
+        </div>
+      )}
 
       {/* Drop / browse zone */}
       {!preview && (
@@ -312,6 +326,27 @@ export function ImportStatementDialog({
               </span>
             </span>
           </div>
+
+          {canCommit && accounts && accounts.length > 0 && (
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span className="text-text-muted">
+                Account <span className="text-xs">(optional)</span>
+              </span>
+              <select
+                value={accountId}
+                onChange={(e) => setAccountId(e.target.value)}
+                className="bg-surface-raised border border-border rounded-md px-2 py-1.5 text-sm text-text focus:outline-none focus:border-green max-w-[60%]"
+              >
+                <option value="">None — leave unassigned</option>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                    {a.account_number_last4 ? ` ··${a.account_number_last4}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           <button
             onClick={() => fileInputRef.current?.click()}
