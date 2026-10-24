@@ -1,5 +1,5 @@
 // @invariant NN-01
-import { describe, expect, test, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
+import { describe, expect, test, beforeAll, afterAll, beforeEach, afterEach, spyOn } from 'bun:test';
 // The default (CommonJS) objects are mutable and shared with `import http from 'http'` / require('http') callers;
 // the ESM namespace objects are read-only. Named-import callers keep the original binding (best effort, noted).
 import http from 'node:http';
@@ -17,6 +17,9 @@ import { parseChaseCSV } from '../tools/import/parsers/chase.js';
 import { parseOfx } from '../tools/import/parsers/ofx.js';
 import { parseQif } from '../tools/import/parsers/qif.js';
 import type { Database } from '../db/compat-sqlite.js';
+import { createHybridChat } from '../dashboard/ui/src/hybrid/client.js';
+import { isInTabOptedIn, setInTabOptIn, type ConsentStorage } from '../dashboard/ui/src/hybrid/consent.js';
+import type { TransformersModule } from '../dashboard/ui/src/hybrid/model-engine.js';
 
 /**
  * NN-01: with no cloud provider key, OTel endpoint or sync configured, the app makes no outbound request beyond
@@ -241,5 +244,85 @@ describe('NN-01 no outbound request beyond localhost in local flows', () => {
     parseQif('!Type:Bank\nD03/15/2026\nT-1.00\nPFAKE (dummy)\n^');
 
     expect(nonLocal()).toEqual([]);
+  }, 30_000);
+});
+
+class MemoryStorage implements ConsentStorage {
+  data = new Map<string, string>();
+  getItem(k: string) {
+    return this.data.get(k) ?? null;
+  }
+  setItem(k: string, v: string) {
+    this.data.set(k, v);
+  }
+  removeItem(k: string) {
+    this.data.delete(k);
+  }
+}
+
+describe('NN-01 in-tab chat model: no huggingface.co request without the Chat opt-in', () => {
+  const savedNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const savedSession = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+  let db: Database;
+  let server: Awaited<ReturnType<typeof startDashboardServer>>['server'] | null = null;
+
+  beforeEach(() => {
+    Object.defineProperty(globalThis, 'sessionStorage', { value: new MemoryStorage(), configurable: true, writable: true });
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { gpu: { requestAdapter: async () => ({ features: { has: () => true } }) } },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    if (server) {
+      try { stopDashboardServer(server); } catch { /* */ }
+      server = null;
+    }
+    closeAll();
+    if (savedNavigator) Object.defineProperty(globalThis, 'navigator', savedNavigator);
+    if (savedSession) Object.defineProperty(globalThis, 'sessionStorage', savedSession);
+    else delete (globalThis as { sessionStorage?: unknown }).sessionStorage;
+  });
+
+  test('chat turns against the live dashboard stay on loopback until opted in (and the canary sees the Hub after)', async () => {
+    db = createTestDb();
+    seedTestData(db);
+    setInitialProfile('test', db);
+    const started = await startDashboardServer(db, 0);
+    server = started.server;
+    const base = `http://localhost:${server.port}`;
+    const storage = new MemoryStorage();
+    // Stands in for transformers.js: the real one fetches config and weights from huggingface.co.
+    const loadTransformers = async (): Promise<TransformersModule> => {
+      await fetch('https://huggingface.co/onnx-community/gemma-4-E2B-it-ONNX/resolve/main/config.json');
+      throw new Error('unreachable: the recorder blocks the Hub');
+    };
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const chat = createHybridChat({
+        baseUrl: base,
+        fetchImpl: (input, init) => fetch(input, init),
+        loadTransformers,
+        hubFetch: (url) => fetch(url),
+        isOptedIn: (repo) => isInTabOptedIn(storage, repo),
+      });
+      for (const q of ['how much did I spend this week?', 'what are my top categories?']) {
+        expect(await chat.tryLocal(q)).toEqual({ ok: false, reason: 'not-opted-in' });
+      }
+      await chat.warmUp();
+      expect(recorded.length).toBeGreaterThan(0);
+      expect(nonLocal()).toEqual([]);
+
+      // Canary: after the opt-in the same turn does reach for the Hub (blocked here), so the check above is not vacuous.
+      const cfg = (await (await fetch(`${base}/api/config/local-chat`)).json()) as { repo: string };
+      setInTabOptIn(storage, cfg.repo);
+      const r = await chat.tryLocal('how much did I spend this week?');
+      expect(r.ok).toBe(false);
+      expect(nonLocal().map((o) => o.host)).toContain('huggingface.co');
+    } finally {
+      warn.mockRestore();
+    }
   }, 30_000);
 });

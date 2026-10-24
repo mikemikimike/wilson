@@ -496,7 +496,8 @@ export type HybridResult =
     }
   | {
       ok: false;
-      reason?: HandoffReason;
+      /** 'not-opted-in': the user has not turned the in-tab model on (consent.ts); never sent to the server. */
+      reason?: HandoffReason | 'not-opted-in';
       /**
        * Subagent mode only: what the server agent should know about the
        * on-device work (bounded, untrusted-framed server-side; spec section 8).

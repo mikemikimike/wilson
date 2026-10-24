@@ -85,6 +85,18 @@ export function nextChatModelInfo(): ServerChatModelInfo {
   return chatModelInfo(() => getConfiguredModel());
 }
 
+/**
+ * The model id the next dashboard turn would use (the saved setting), for the Chat opt-in copy
+ * ("questions go to <model>"). Null when the settings cannot be read.
+ */
+export function nextChatModelId(): string | null {
+  try {
+    return getConfiguredModel().model || null;
+  } catch {
+    return null;
+  }
+}
+
 /** What /api/chat reports about the server agent's model (chat-provenance.ts ServerModelInfo). */
 export interface ServerChatModelInfo {
   serverModelLocal: boolean;

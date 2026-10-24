@@ -37,7 +37,7 @@ import { annotateAgentPresent, handleJudgementRoute } from './judgement-routes.j
 import { buildScheduleC, scheduleCToCsv, scheduleCToXlsxBuffer } from '../tools/tax/schedule-c.js';
 import { hasLicense } from '../licensing/license.js';
 import { getCheckoutUrl } from '../licensing/upsell.js';
-import { initChatSession, handleChatMessage, getCategorizeProgress, nextChatModelInfo, serverChatModelInfo } from './chat.js';
+import { initChatSession, handleChatMessage, getCategorizeProgress, nextChatModelId, nextChatModelInfo, serverChatModelInfo } from './chat.js';
 import {
   isAuthEnabled, enableAuth, disableAuth, lanAuthReady, hasActiveAdmin,
   listUsers, getUserCount, deactivateUser, LastAdminError, hashPassword, insertUser, createFirstAdmin,
@@ -1260,7 +1260,11 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         if (path === '/api/config/local-chat') {
           // serverModelLocal: while the in-tab model downloads, the browser lets the server answer only when the
           // model its next turn would use runs on this machine; otherwise the turn waits for the in-tab model.
-          return Response.json({ ...apiLocalChatConfig(), serverModelLocal: nextChatModelInfo().serverModelLocal }, { headers });
+          // serverModel: named in the Chat opt-in ("until then, questions go to <model>").
+          return Response.json(
+            { ...apiLocalChatConfig(), serverModelLocal: nextChatModelInfo().serverModelLocal, serverModel: nextChatModelId() },
+            { headers },
+          );
         }
 
         // ── Models panel (Settings) ─────────────────────────────────

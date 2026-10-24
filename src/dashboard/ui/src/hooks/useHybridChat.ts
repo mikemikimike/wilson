@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { authedFetch, getBaseUrl } from '@/api';
+import { api, authedFetch, getBaseUrl } from '@/api';
 import { hybridOptsForOriginFetch } from '@/hybrid/init-opts';
 import type { HybridResult } from '@/hybrid/core';
 import type { PriorLocalTurn } from '@/hybrid/worker-protocol';
@@ -18,6 +18,14 @@ import {
 import { mirrorStatusViaPort, prepareMirrorForRun } from '@/store/mirror-subagent';
 import { chooseToolWithHost } from '@/openjev/choose-tool';
 import { getOpenJevHost } from '@/openjev/instance';
+import type { LocalChatConfigResponse } from '@/hybrid/client';
+import {
+  browserLocalStorage,
+  clearInTabOptIn,
+  isInTabOptedIn,
+  setInTabOptIn,
+  tryLocalIfOptedIn,
+} from '@/hybrid/consent';
 
 /**
  * React binding for the prebuilt hybrid chat chunk (/assets/hybrid-chat.js).
@@ -72,6 +80,47 @@ function loadHybridChunk(baseUrl: string): Promise<WilsonHybridChatGlobal | null
   return chunkPromise;
 }
 
+/** Whether this browser exposes WebGPU at all (sync, so Chat can reserve the opt-in's space on first paint). */
+function hasWebGPU(): boolean {
+  try {
+    return typeof navigator !== 'undefined' && !!(navigator as { gpu?: unknown }).gpu;
+  } catch {
+    return false;
+  }
+}
+
+const DISMISS_KEY = 'wilson-intab-chat-optin-dismissed';
+
+function readDismissed(): boolean {
+  try {
+    return sessionStorage.getItem(DISMISS_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The Chat opt-in for the in-tab model (NN-01: its weights come from
+ * huggingface.co, so nothing loads before this click). `offered` only where
+ * the hybrid chunk is available, WebGPU exists, the server has local chat on
+ * and localStorage works (the chunk re-reads the key on every turn).
+ */
+export interface InTabConsent {
+  /** WebGPU present and nothing ruled the in-tab model out yet: Chat reserves the row. */
+  reserve: boolean;
+  offered: boolean;
+  optedIn: boolean;
+  /** "Not now" for this tab session. */
+  dismissed: boolean;
+  /** Catalog size, raw ('~3.6GB'). */
+  downloadSize: string | null;
+  /** The server's chat model id (who answers until the in-tab model is on). */
+  serverModel: string | null;
+  optIn(): void;
+  optOut(): void;
+  dismiss(): void;
+}
+
 export interface UseHybridChatResult {
   /** Local-first attempt; resolves {ok:false} on any hybrid failure. */
   tryLocal(
@@ -91,6 +140,8 @@ export interface UseHybridChatResult {
   getStatus(): ChunkStatus;
   /** In-tab model status ('idle' until a turn starts the load; turns use the server until 'ready'). */
   modelStatus: InTabModelStatus;
+  /** The opt-in the in-tab model needs before it may download (consent.ts). */
+  consent: InTabConsent;
 }
 
 export function useHybridChat(): UseHybridChatResult {
@@ -102,6 +153,19 @@ export function useHybridChat(): UseHybridChatResult {
   // the internal client, which would drop an already-loaded model.
   const initedRef = useRef<WilsonHybridChatGlobal | null>(null);
   const [modelStatus, setModelStatus] = useState<InTabModelStatus>({ state: 'idle' });
+  const [webgpu] = useState(hasWebGPU);
+  // Same-origin config read: which model the consent is for, its size, and the server's model.
+  const configRef = useRef<Promise<LocalChatConfigResponse | null> | null>(null);
+  const [config, setConfig] = useState<LocalChatConfigResponse | null | undefined>(undefined);
+  const [optedIn, setOptedIn] = useState(false);
+  const [dismissed, setDismissed] = useState(readDismissed);
+
+  const loadConfig = useCallback((): Promise<LocalChatConfigResponse | null> => {
+    configRef.current ??= api<LocalChatConfigResponse>('/api/config/local-chat')
+      .then((cfg) => (cfg?.enabled && cfg.repo ? cfg : null))
+      .catch(() => null);
+    return configRef.current;
+  }, []);
 
   const ensure = useCallback(async (): Promise<WilsonHybridChatGlobal | null> => {
     const base = getBaseUrl();
@@ -124,6 +188,15 @@ export function useHybridChat(): UseHybridChatResult {
     void ensure().then((hybrid) => {
       if (!alive) return;
       setStatus(hybrid ? 'available' : 'unavailable');
+      if (hybrid && webgpu) {
+        void loadConfig().then((cfg) => {
+          if (!alive) return;
+          setConfig(cfg);
+          setOptedIn(isInTabOptedIn(browserLocalStorage(), cfg?.repo));
+        });
+      } else {
+        setConfig(null);
+      }
       // An older chunk without the status API simply never shows a status line.
       unsubscribe = hybrid?.onModelStatus?.((next) => {
         if (alive) setModelStatus(next);
@@ -133,9 +206,9 @@ export function useHybridChat(): UseHybridChatResult {
       alive = false;
       unsubscribe?.();
     };
-  }, [ensure]);
+  }, [ensure, loadConfig, webgpu]);
 
-  const tryLocal = useCallback(
+  const runLocal = useCallback(
     async (
       query: string,
       onProgress?: (label: string) => void,
@@ -167,6 +240,21 @@ export function useHybridChat(): UseHybridChatResult {
     [ensure],
   );
 
+  const tryLocal = useCallback(
+    async (
+      query: string,
+      onProgress?: (label: string) => void,
+      sessionId?: string | null,
+      extras?: TryLocalExtras,
+    ): Promise<HybridResult> =>
+      // NN-01: without the opt-in for this model the chunk is not even asked (it gates again itself).
+      tryLocalIfOptedIn(
+        async () => isInTabOptedIn(browserLocalStorage(), (await loadConfig())?.repo),
+        () => runLocal(query, onProgress, sessionId, extras),
+      ),
+    [loadConfig, runLocal],
+  );
+
   const categorizeSample = useCallback(
     async (opts: CategorizeSampleOpts): Promise<CategorizeSampleResult> => {
       const hybrid = await ensure();
@@ -189,5 +277,45 @@ export function useHybridChat(): UseHybridChatResult {
 
   const getStatus = useCallback((): ChunkStatus => statusRef.current, []);
 
-  return { tryLocal, categorizeSample, status, getStatus, modelStatus };
+  // ── Opt-in / turn off (consent.ts) ──────────────────────────────────────
+  const repo = config?.repo ?? null;
+  const optIn = useCallback(() => {
+    if (!repo || !setInTabOptIn(browserLocalStorage(), repo)) return;
+    setOptedIn(true);
+    // Start the load now, so the status line shows the download instead of the next question waiting on it.
+    void ensure().then((hybrid) => hybrid?.warmUp?.());
+  }, [ensure, repo]);
+
+  const optOut = useCallback(() => {
+    if (!repo) return;
+    clearInTabOptIn(browserLocalStorage(), repo);
+    setOptedIn(false);
+    // Stops a download in flight and frees the GPU; the next opt-in spawns a fresh worker.
+    initedRef.current?.dispose?.();
+  }, [repo]);
+
+  const dismiss = useCallback(() => {
+    setDismissed(true);
+    try {
+      sessionStorage.setItem(DISMISS_KEY, '1');
+    } catch {
+      // blocked storage: dismissed for this page only
+    }
+  }, []);
+
+  const offered = status === 'available' && webgpu && !!config && browserLocalStorage() !== null;
+  const consent: InTabConsent = {
+    // Until the chunk and the config answer, a WebGPU browser keeps the row's space so the opt-in appears without a shift.
+    reserve: webgpu && status !== 'unavailable' && (config === undefined || offered),
+    offered,
+    optedIn: offered && optedIn,
+    dismissed,
+    downloadSize: config?.downloadSize ?? null,
+    serverModel: config?.serverModel ?? null,
+    optIn,
+    optOut,
+    dismiss,
+  };
+
+  return { tryLocal, categorizeSample, status, getStatus, modelStatus, consent };
 }

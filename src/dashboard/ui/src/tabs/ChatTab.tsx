@@ -23,6 +23,7 @@ import { syncMirror } from '@/store/mirror-client';
 import type { PriorLocalTurn } from '@/hybrid/worker-protocol';
 import { deriveChatProvenance, isLocalProvenance, linksRenderAsText, localUnavailableNotice, provenanceBadge, replyProvenance } from '@/hybrid/core';
 import { inTabStatusLine } from '@/hybrid/load-progress';
+import { IN_TAB_ON_LABEL, IN_TAB_TURN_OFF, inTabOptInCopy } from '@/hybrid/consent';
 import type { ChatProvenance, HybridResult, ServerModelInfo } from '@/hybrid/core';
 import { Typeahead, type TypeaheadItem } from '@/components/Typeahead';
 import { ComposerBackdrop, MentionIcon } from '@/components/ComposerBackdrop';
@@ -66,6 +67,11 @@ import {
   type AcceptPlan,
   type ChatCommand,
 } from '@/lib/chatCommands';
+
+/** In-tab model row heights (no layout shift when the opt-in or the status line fills it): opt-in = 3 text lines +
+ * the buttons at 360px (measured: 82px), the buttons' row beside 1-2 lines wider; opted in = the status line, 2 lines at 360px. */
+const IN_TAB_ROW_OPTIN_MIN_H = 'min-h-[5.25rem] sm:min-h-8';
+const IN_TAB_ROW_ON_MIN_H = 'min-h-8 sm:min-h-6';
 
 interface DisplayMessage {
   /** Stable React key (index keys re-mount bubbles when history shifts). */
@@ -199,6 +205,9 @@ export function ChatTab() {
   // First use downloads the in-tab model in the background; turns go to the server meanwhile only when its model is
   // local, and otherwise wait for it (the line says which).
   const inTabStatus = inTabStatusLine(hybrid.modelStatus);
+  // NN-01: the in-tab model downloads from huggingface.co only after this opt-in (hybrid/consent.ts).
+  const consent = hybrid.consent;
+  const optInCopy = inTabOptInCopy(consent.downloadSize, consent.serverModel);
   // Turns answered on-device in this chat, so a later server handoff can close the history gap.
   const priorLocalTurnsRef = useRef<PriorLocalTurn[]>([]);
   const { sources, loaded: sourcesLoaded, ensureLoaded } = useMentionSources();
@@ -1027,7 +1036,51 @@ export function ChatTab() {
             emptyText={sourcesLoaded ? undefined : 'Loading…'}
             status={status}
           />
-          {inTabStatus && <div className="mb-2 text-xs text-text-muted">{inTabStatus}</div>}
+          {consent.reserve && !(consent.offered && !consent.optedIn && consent.dismissed) ? (
+            /* In-tab model row. Its space is held from first paint on a WebGPU browser (min-h fits the opt-in at
+               360px and wider), and the status line replaces it in place once opted in. */
+            <div
+              className={`mb-2 text-xs leading-4 text-text-muted ${
+                consent.offered && consent.optedIn ? IN_TAB_ROW_ON_MIN_H : IN_TAB_ROW_OPTIN_MIN_H
+              }`}
+              data-testid="in-tab-consent"
+            >
+              {!consent.offered ? null : consent.optedIn ? (
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1">{inTabStatus ?? IN_TAB_ON_LABEL}</span>
+                  <button
+                    type="button"
+                    onClick={consent.optOut}
+                    className="shrink-0 inline-flex items-center min-h-6 px-1 underline hover:text-text"
+                  >
+                    {IN_TAB_TURN_OFF}
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+                  <p className="min-w-0 flex-1">{optInCopy.text}</p>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={consent.optIn}
+                      className="inline-flex items-center min-h-7 px-2.5 rounded border border-green-700 text-green font-medium hover:bg-green-700 hover:text-white transition-colors"
+                    >
+                      {optInCopy.accept}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={consent.dismiss}
+                      className="inline-flex items-center min-h-7 px-2 hover:text-text underline"
+                    >
+                      {optInCopy.dismiss}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            inTabStatus && <div className="mb-2 text-xs text-text-muted">{inTabStatus}</div>
+          )}
           <div ref={composerRowRef} className="flex gap-2 items-end">
             <div className="relative flex-1 min-w-0 bg-surface rounded-lg">
               <ComposerBackdrop

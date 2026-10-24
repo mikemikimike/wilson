@@ -118,6 +118,12 @@ export interface HybridOpts {
   /** Called on every in-tab model status change (standalone.ts fans it out to the UIs). */
   onModelStatus?: (status: InTabModelStatus) => void;
   /**
+   * NN-01 consent gate, asked on every tryLocal with the model repo (consent.ts). False: the turn resolves
+   * {ok:false, reason:'not-opted-in'} before the probe, the worker, the Hub and the weights. standalone.ts
+   * always sets it (the localStorage opt-in); absent means no gate (unit tests of the load path).
+   */
+  isOptedIn?: (repo: string) => boolean;
+  /**
    * TEST SEAM ONLY: replaces the frozen OPEN_JEV_ROUTE_CUT for the open-jev tiebreak. Production never
    * sets it; `null` (the frozen value when no viable cut exists) disables the tiebreak.
    */
@@ -153,6 +159,8 @@ export interface LocalChatConfigResponse {
    * Absent from older servers = not local: a turn then waits for the in-tab model rather than go to the server.
    */
   serverModelLocal?: boolean;
+  /** The server's chat model id (named in the Chat opt-in copy); absent from older servers. */
+  serverModel?: string | null;
   /** Browser subagent flag (absent from older servers = off). */
   subagent?: {
     enabled: boolean;
@@ -219,6 +227,7 @@ function modelConfigOf(cfg: LocalChatConfigResponse): WorkerModelConfig {
 
 export function createHybridChat(opts: HybridOpts) {
   const fetchImpl = opts.fetchImpl;
+  const consentGate = opts.isOptedIn;
   const base = opts.baseUrl.replace(/\/+$/, '');
 
   // ── Model backend: the worker in production, an in-thread engine in tests ──
@@ -775,6 +784,15 @@ export function createHybridChat(opts: HybridOpts) {
     try {
       if (verdict === 'unavailable') return { ok: false };
 
+      // ── Consent gate (NN-01) ────────────────────────────────────────────
+      // The in-tab model downloads from huggingface.co. Without the user's
+      // opt-in for this model the turn goes to the server at once: only the
+      // same-origin config read runs (it names the model the consent is for);
+      // no probe, no worker, no Hub request, no weights, no waiting.
+      if (consentGate && !(await consented())) {
+        return (await fetchConfig()) ? { ok: false, reason: 'not-opted-in' } : { ok: false };
+      }
+
       const cfg = await loadConfig();
       if (!cfg) return { ok: false };
 
@@ -883,6 +901,35 @@ export function createHybridChat(opts: HybridOpts) {
     }
   }
 
+  /** The consent gate for the configured model; true when there is no gate. Never throws. */
+  async function consented(): Promise<boolean> {
+    if (!consentGate) return true;
+    const cfg = await fetchConfig();
+    if (!cfg) return false;
+    try {
+      return consentGate(cfg.repo) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Right after the opt-in click: start the background load so the status line
+   * shows the download at once, instead of on the next question. Does nothing
+   * without consent, without WebGPU, or once the model is ready. Never rejects.
+   */
+  async function warmUp(): Promise<void> {
+    try {
+      if (verdict === 'unavailable' || !(await consented())) return;
+      if (!(await loadConfig())) return;
+      if (verdict === 'unknown') await probe();
+      if (!shouldAttemptLocal(verdict) || modelReady()) return;
+      void startBackgroundLoad(await serverAnswersLocally());
+    } catch (err) {
+      console.warn('[hybrid-chat] in-tab model warm-up failed:', err);
+    }
+  }
+
   /** Terminate the worker and fail anything in flight. A later call respawns it lazily. */
   function dispose(): void {
     backendInstance?.dispose();
@@ -895,6 +942,7 @@ export function createHybridChat(opts: HybridOpts) {
     loadModel,
     tryLocal,
     categorizeSample,
+    warmUp,
     /** Current in-tab model status (HybridOpts.onModelStatus reports each change). */
     getModelStatus: (): InTabModelStatus => modelStatus,
     dispose,

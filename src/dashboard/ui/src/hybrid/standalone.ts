@@ -25,6 +25,7 @@ import {
 } from './client.js';
 import type { HybridResult } from './core.js';
 import type { CategorizeSampleResult, CategorizeSampleOpts } from './client.js';
+import { browserLocalStorage, isInTabOptedIn } from './consent.js';
 
 export type { CategorizeSampleResult, CategorizeSampleOpts, TryLocalOpts, SubagentTurnOpts, InTabModelStatus } from './client.js';
 
@@ -48,7 +49,19 @@ export interface WilsonHybridChatGlobal {
    */
   getModelStatus?(): InTabModelStatus;
   onModelStatus?(listener: (status: InTabModelStatus) => void): () => void;
+  /** After the opt-in click: start the in-tab model load (gated like tryLocal). Optional: an older chunk has none. */
+  warmUp?(): Promise<void>;
+  /** "Turn off": terminate the model worker (stopping a download in flight). Optional: an older chunk has none. */
+  dispose?(): void;
 }
+
+/**
+ * NN-01: every client this chunk makes checks the localStorage opt-in on each
+ * turn (consent.ts), whichever UI called init(), so neither dashboard can start
+ * the Hub download without the user's click. A caller cannot turn the gate off.
+ */
+const storedOptIn = (repo: string): boolean => isInTabOptedIn(browserLocalStorage(), repo);
+
 
 /** The inlined model worker. The constructor can throw (CSP, policy); the backend treats that as unavailable. */
 const createModelWorker = (): WorkerLike => new ModelWorkerCtor({ name: 'wilson-model' }) as unknown as WorkerLike;
@@ -73,6 +86,7 @@ function get(): HybridChat {
     fetchImpl: (input, init) => fetch(input, init),
     createWorker: createModelWorker,
     onModelStatus: publishStatus,
+    isOptedIn: storedOptIn,
   });
   return chat;
 }
@@ -80,7 +94,7 @@ function get(): HybridChat {
 export function init(opts: HybridOpts): void {
   // Replacing the client must not leak its worker (and the model in GPU memory).
   chat?.dispose();
-  chat = createHybridChat({ createWorker: createModelWorker, ...opts, onModelStatus: publishStatus });
+  chat = createHybridChat({ createWorker: createModelWorker, ...opts, onModelStatus: publishStatus, isOptedIn: storedOptIn });
   publishStatus(chat.getModelStatus());
 }
 
@@ -121,6 +135,15 @@ export function categorizeSample(opts: CategorizeSampleOpts): Promise<Categorize
   return get().categorizeSample(opts);
 }
 
+export function warmUp(): Promise<void> {
+  return get().warmUp();
+}
+
+export function dispose(): void {
+  chat?.dispose();
+  if (chat) publishStatus(chat.getModelStatus());
+}
+
 declare global {
   interface Window {
     WilsonHybridChat?: WilsonHybridChatGlobal;
@@ -128,5 +151,5 @@ declare global {
 }
 
 if (typeof window !== 'undefined') {
-  window.WilsonHybridChat = { init, probe, loadModel, tryLocal, categorizeSample, getModelStatus, onModelStatus };
+  window.WilsonHybridChat = { init, probe, loadModel, tryLocal, categorizeSample, getModelStatus, onModelStatus, warmUp, dispose };
 }
