@@ -1022,7 +1022,7 @@ function buildPanel(): void {
     killRow.append(toggle);
     kill.append(killRow);
     if (!state.enabled) {
-      kill.append(el('div', `color:${T.red};margin-top:6px;`, 'Agent access is off. No tools are exposed to any agent or MCP client.'));
+      kill.append(el('div', `color:${T.red};margin-top:6px;`, "Agent access is off. No tools are exposed to any outside agent or MCP client. This does not turn off Wilson's own Chat."));
     } else if (confirmingOff) {
       kill.append(el('div', `color:${T.muted};margin:6px 0;`, 'Turn off agent access? Every grant is revoked and pending approvals are rejected, in every profile.'));
       const row = el('div', 'display:flex;gap:8px;');

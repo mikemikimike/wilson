@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { Dialog } from '@/components/Dialog';
 import type { AgentState } from '@agent-access-model';
+import { KILL_SWITCH_HINT, KILL_SWITCH_OFF_LINE } from '@/lib/agentAccessCopy';
 
 /**
- * The global switch. On: agent access works as configured below. Off: no tool is exposed to any agent or MCP
- * client, in any profile, grants are revoked and pending approvals are rejected. Turning it off asks first.
+ * The global switch. On: agent access works as configured below. Off: no tool is exposed to any outside agent or
+ * MCP client, in any profile, grants are revoked and pending approvals are rejected. Turning it off asks first.
+ * Wilson's own Chat agent is not gated by it, and the copy says so.
  */
 export function KillSwitch({
   state,
@@ -29,14 +31,14 @@ export function KillSwitch({
         <div className="min-w-0">
           <div className="text-sm font-medium text-text">Agent access (all profiles)</div>
           <div id="agent-kill-switch-hint" className="text-xs mt-0.5 text-text-muted">
-            Master switch: when off, no AI agent or MCP client can use any Wilson tool.
+            {KILL_SWITCH_HINT}
           </div>
           {state.enabled ? (
             <div className={`text-xs mt-0.5 ${live > 0 ? 'text-green' : 'text-text-muted'}`}>
               {live} tool{live === 1 ? '' : 's'} live in this tab · {state.pending.length} pending
             </div>
           ) : (
-            <div className="text-xs mt-0.5 text-red">Agent access is off. No tools are exposed to any agent or MCP client.</div>
+            <div className="text-xs mt-0.5 text-red">{KILL_SWITCH_OFF_LINE}</div>
           )}
         </div>
         <button

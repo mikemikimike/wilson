@@ -168,6 +168,19 @@ describe('buildModelTaskRows availability (#189)', () => {
     expect(spy).not.toHaveBeenCalled();
     const qwen = catalog.find((m) => m.id === 'ollama:qwen3:8b');
     if (qwen) expect(qwen.cached).toBe(true);
+    for (const m of catalog) expect(m.installKnown).toBe(true);
+  });
+
+  test('buildModelCatalog: unreachable Ollama marks its entries unknown, not "not installed" (NN-09)', async () => {
+    const catalog = await buildModelCatalog(false, null);
+    for (const m of catalog) {
+      if (m.provider === 'ollama') {
+        expect(m.cached).toBe(false);
+        expect(m.installKnown).toBe(false);
+      } else {
+        expect(m.installKnown).toBe(true);
+      }
+    }
   });
 });
 
@@ -271,6 +284,12 @@ describe('catalogOptionLabel (#196)', () => {
       .toBe('Tab (~1 GB — downloads on first use)');
     expect(catalogOptionLabel({ ...base, id: 'transformers:a/b', displayName: 'Tab', provider: 'transformers' }))
       .toBe('Tab (downloads on first use)');
+  });
+  test('Ollama unreachable: says the install state is unknown, never "not installed" (NN-09)', () => {
+    const label = catalogOptionLabel({ ...base, installKnown: false, id: 'ollama:qwen3:8b', displayName: 'Qwen3 8B', provider: 'ollama' });
+    expect(label).toBe("Qwen3 8B (Ollama didn't answer — can't check if installed)");
+    expect(label).not.toContain('not installed');
+    expect(label).not.toContain('ollama pull');
   });
   test('installed local and cloud models show the plain name', () => {
     expect(catalogOptionLabel({ ...base, cached: true, id: 'ollama:m', displayName: 'M', provider: 'ollama' })).toBe('M');

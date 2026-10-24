@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { TAB_IDS, type TabId } from '@webmcp-session';
+import { SETTINGS_TAB_HINT } from '@/lib/agentAccessCopy';
 
 // The ids live in one place (TAB_IDS, shared with the server's tab-scoped tools); only the labels are here.
 const TAB_LABELS: Record<TabId, string> = {
@@ -20,7 +21,7 @@ const TAB_LABELS: Record<TabId, string> = {
 const TAB_HINTS: Partial<Record<TabId, string>> = {
   llm: 'Every model call Wilson has made, with its prompt, response and cost, for you to review and rate.',
   logs: 'The dashboard server log, for diagnosing problems.',
-  settings: 'Preferences, profiles and Agent access, the master switch for what AI agents may do in Wilson.',
+  settings: SETTINGS_TAB_HINT,
 };
 
 export type { TabId };

@@ -56,10 +56,12 @@ export function pointsToModelSettings(content: string): boolean {
 /**
  * Dropdown text for a catalog entry. Wilson never pulls Ollama models, so an uninstalled one
  * says what to run; only models Wilson itself downloads (in-tab/transformers) flag a first-use download.
+ * When Ollama didn't answer, whether a model is installed is unknown, and the label says only that (NN-09).
  */
 export function catalogOptionLabel(model: CatalogModel): string {
   if (!model.isLocal || model.cached) return model.displayName;
   if (model.provider === 'ollama' || model.id.startsWith('ollama:')) {
+    if (model.installKnown === false) return `${model.displayName} (Ollama didn't answer — can't check if installed)`;
     return `${model.displayName} (not installed — run ollama pull ${model.id.replace(/^ollama:/, '')})`;
   }
   const size = model.downloadSize?.startsWith('~') ? model.downloadSize : model.downloadSize ? `~${model.downloadSize}` : null;

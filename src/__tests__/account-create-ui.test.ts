@@ -3,6 +3,7 @@ import {
   ACCOUNT_NAME_MAX,
   ACCOUNT_SUBTYPE_GROUPS,
   EMPTY_NEW_ACCOUNT,
+  accountsListState,
   addAccountEntry,
   newAccountBody,
   newAccountError,
@@ -56,5 +57,18 @@ describe('addAccountEntry', () => {
     expect(addAccountEntry({ authEnabled: true, user: { role: 'admin' } })).toEqual({ disabled: false, label: 'Add account' });
     expect(addAccountEntry({ authEnabled: false, user: null }).disabled).toBe(false);
     expect(addAccountEntry(null).disabled).toBe(false);
+  });
+});
+
+describe('accountsListState (NN-09)', () => {
+  test('a failed load is unknown, never "No accounts yet"', () => {
+    expect(accountsListState(null, false)).toBe('error');
+    expect(accountsListState(null, true)).toBe('offline');
+  });
+  test('an empty list is empty; a non-empty list is shown', () => {
+    expect(accountsListState([], false)).toBe('empty');
+    expect(accountsListState([{ id: 1 }], false)).toBe('list');
+    // A failed refetch keeps the last good list (useApi keeps stale data).
+    expect(accountsListState([{ id: 1 }], true)).toBe('list');
   });
 });

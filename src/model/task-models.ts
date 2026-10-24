@@ -219,6 +219,11 @@ export interface CatalogModel {
   isLocal: boolean;
   /** Local only: already downloaded. Cloud entries are always true (nothing to download). */
   cached: boolean;
+  /**
+   * False when `cached` could not be checked: an Ollama entry while Ollama didn't answer. Its
+   * `cached` is then false for "unknown", not "not installed" (NN-09). True everywhere else.
+   */
+  installKnown: boolean;
   /** Approximate first-run download size from the catalog; null when unknown. */
   downloadSize: string | null;
 }
@@ -230,8 +235,8 @@ export interface CatalogModel {
  *   probe says this machine can't drive them (same filter the TUI's provider
  *   picker applies). CPU/WASM transformers entries are always offered.
  * - `cached`: transformers entries check the on-disk cache; ollama entries
- *   check the running ollama server (unreachable → uncached, truthful — those
- *   entries carry no downloadSize so nothing misleading is shown); cloud
+ *   check the running ollama server (unreachable → uncached with
+ *   installKnown=false, so the UI says "unknown", not "not installed"); cloud
  *   entries are always cached.
  */
 export async function buildModelCatalog(
@@ -240,7 +245,8 @@ export async function buildModelCatalog(
   ollamaModels?: readonly string[] | null,
 ): Promise<CatalogModel[]> {
   const providerDefById = new Map(PROVIDER_DEFS.map((p) => [p.id, p]));
-  const installedOllama = (ollamaModels === undefined ? await listOllamaModels() : ollamaModels) ?? [];
+  const listed = ollamaModels === undefined ? await listOllamaModels() : ollamaModels;
+  const installedOllama = listed ?? [];
 
   const catalog: CatalogModel[] = [];
   for (const provider of PROVIDER_REGISTRY) {
@@ -266,6 +272,7 @@ export async function buildModelCatalog(
         providerName: provider.displayName,
         isLocal: def ? providerCallLocality(def, model.id).local : false,
         cached,
+        installKnown: provider.providerId !== 'ollama' || listed !== null,
         downloadSize: model.downloadSize ?? null,
       });
     }

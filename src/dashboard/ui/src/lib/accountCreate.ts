@@ -83,3 +83,15 @@ export function addAccountEntry(auth: WriteAuthStatus | null | undefined): AddAc
   if (isKnownReadOnly(auth)) return { disabled: true, label: 'Add account (admin only)', title: ADD_ACCOUNT_ADMIN_ONLY_TITLE };
   return { disabled: false, label: 'Add account' };
 }
+
+/**
+ * What the Accounts tab's list area can honestly show. A failed GET /api/accounts leaves `accounts` null: that is
+ * "unknown", never "No accounts yet", which could lead someone to add duplicates (NN-09). A refetch that fails after
+ * a good load keeps the last list (useApi keeps stale data), so this only says 'error' when nothing was ever loaded.
+ */
+export type AccountsListState = 'list' | 'empty' | 'error' | 'offline';
+
+export function accountsListState(accounts: readonly unknown[] | null, offline: boolean): AccountsListState {
+  if (accounts === null) return offline ? 'offline' : 'error';
+  return accounts.length > 0 ? 'list' : 'empty';
+}

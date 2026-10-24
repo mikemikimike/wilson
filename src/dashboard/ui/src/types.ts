@@ -531,6 +531,8 @@ export interface CatalogModel {
   providerName: string;
   isLocal: boolean;
   cached: boolean;
+  /** False when `cached` couldn't be checked (Ollama didn't answer); absent from older servers. */
+  installKnown?: boolean;
   downloadSize: string | null;
 }
 

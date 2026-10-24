@@ -15,7 +15,8 @@ import { chartTokens } from '@/charts/tokens';
 import { Dialog } from '@/components/Dialog';
 import { NewAccountForm } from '@/components/NewAccountForm';
 import { formatDate, money, moneyCompact } from '@/format';
-import { addAccountEntry } from '@/lib/accountCreate';
+import { OfflineUnavailable } from '@/components/OfflineUnavailable';
+import { accountsListState, addAccountEntry } from '@/lib/accountCreate';
 import type { WriteAuthStatus } from '@/lib/transactionEditing';
 import { invalidateMentionSources } from '@/hooks/useMentionSources';
 import type { Account, NetWorthResponse, NetWorthTrendPoint } from '@/types';
@@ -161,7 +162,12 @@ export function AccountsTab() {
   const { data: trend, loading: trendLoading } = useApi<NetWorthTrendPoint[]>(
     '/api/net-worth/trend?months=12',
   );
-  const { data: accounts, loading: acctLoading, refetch: refetchAccounts } = useApi<Account[]>('/api/accounts');
+  const {
+    data: accounts,
+    loading: acctLoading,
+    offline: acctOffline,
+    refetch: refetchAccounts,
+  } = useApi<Account[]>('/api/accounts');
   // Write controls follow the role (NN-04): a viewer sees "Add account" disabled; the server refuses them anyway.
   const { data: authStatus } = useApi<WriteAuthStatus>('/api/auth/status');
   const [addOpen, setAddOpen] = useState(false);
@@ -183,6 +189,8 @@ export function AccountsTab() {
     }
     return groups;
   }, [accounts]);
+
+  const listState = accountsListState(accounts, acctOffline);
 
   // Skeleton on first load only, so refetching after "Add account" doesn't blank the tab.
   const loading = (nwLoading && !netWorth) || (trendLoading && !trend) || (acctLoading && !accounts);
@@ -217,7 +225,18 @@ export function AccountsTab() {
       {trend && trend.length > 0 && <NetWorthChart data={trend} loading={trendLoading} />}
 
       {/* Accounts grouped by type */}
-      {Object.keys(grouped).length > 0 ? (
+      {listState === 'offline' ? (
+        <OfflineUnavailable title="Accounts" />
+      ) : listState === 'error' ? (
+        // Request failed: the accounts are unknown, not absent, so no "No accounts yet" and no Add button (NN-09).
+        <div className="bg-surface-raised border border-border rounded-lg p-4" data-testid="accounts-load-error">
+          <h3 className="text-xs text-text-secondary uppercase tracking-wide mb-2">Accounts</h3>
+          <p className="text-sm text-text-muted m-0">Couldn't load your accounts.</p>
+          <button type="button" onClick={refetchAccounts} className="inline-block text-xs text-green hover:underline mt-2 min-h-6 min-w-6">
+            Retry
+          </button>
+        </div>
+      ) : listState === 'list' ? (
         <>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-text">Accounts</h2>
