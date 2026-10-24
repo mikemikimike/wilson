@@ -18,7 +18,7 @@ import {
   type TransactionWhereRules,
 } from '../../../../db/transaction-where.js';
 import { DASHBOARD_RULES } from '../../../../db/spend-rules.js';
-import { parseTransactionListParams } from '../../../../dashboard/transactions-query.js';
+import { checkTransactionListParams, parseTransactionListParams } from '../../../../dashboard/transactions-query.js';
 import {
   parseAccountId,
   parseEntityId,
@@ -116,6 +116,9 @@ export async function serveApiPath(db: SqliteBinding, path: string): Promise<unk
   const params = new URLSearchParams(search);
 
   if (pathname === '/api/transactions') {
+    // A numeric param past 2^53: the server's 400 BadRequest, not a query.
+    const outOfRange = checkTransactionListParams(params);
+    if (outOfRange) return outOfRange;
     const { filters, limit, offset } = parseTransactionListParams(params);
     return mirrorGetTransactions(db, filters, { rules: DASHBOARD_RULES, page: { limit, offset } });
   }

@@ -10,17 +10,27 @@
 // merchantExact (exact merchant label), accountId, entityId, spendOnly
 // (1|true), limit (default 100), offset (default 0). Paging runs in SQL.
 // Edge behavior kept from the JS-slice era: `limit=` (empty) parses to NaN,
-// which yields zero rows.
+// which yields zero rows. One strict rule on top (checkTransactionListParams):
+// a numeric param past 2^53 is a 400, never a SQLite 500 (#197).
 //
-// Import-safe for the dashboard UI bundle: the only import is a type from the
-// transaction-where module.
+// Import-safe for the dashboard UI bundle: imports only the spending-params
+// module (itself UI-safe) and a type from the transaction-where module.
 
 import type { TransactionFilters } from '../db/transaction-where.js';
+import { outOfRangeInt, type BadRequest } from './spending-params.js';
 
 export interface TransactionListParams {
   filters: TransactionFilters;
   limit: number;
   offset: number;
+}
+
+/**
+ * The BadRequest for a numeric param past 2^53 (`limit is out of range`), or null. The server answers it as a
+ * 400 `{ error }` and the mirror returns it as is, which the fetch seam raises as the same "API 400" error.
+ */
+export function checkTransactionListParams(params: URLSearchParams): BadRequest | null {
+  return outOfRangeInt(params, 'limit', 'offset', 'accountId', 'entityId');
 }
 
 export function parseTransactionListParams(params: URLSearchParams): TransactionListParams {

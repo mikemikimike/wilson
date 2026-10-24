@@ -26,7 +26,8 @@ import {
   apiSkills, apiMerchants,
 } from './api.js';
 import { validateMentions, resolveMentionContext } from './mentions.js';
-import { isBadRequest } from './spending-params.js';
+import { isBadRequest, outOfRangeInt } from './spending-params.js';
+import { checkTransactionListParams } from './transactions-query.js';
 import { HttpError, checkBody, jsonBody, jsonValue } from './http-errors.js';
 import { z } from 'zod';
 import { buildHandoffContext, serverReadExecutor } from './local-handoff.js';
@@ -52,7 +53,7 @@ import {
 } from './origin-gate.js';
 import { getGlobalAgentState } from '../mcp/global-state.js';
 import { handleMcpRoute } from './mcp-routes.js';
-import { isStateChanging, readBodyThenRecheck } from './write-recheck.js';
+import { bodyCapFor, isStateChanging, readBodyThenRecheck } from './write-recheck.js';
 import { handleSyncRoute, syncCorsHeaders } from './sync-routes.js';
 import { handleMcpHttpRequest } from '../mcp/http-server.js';
 import { isAgentPresent, revokeGrantsForUser } from '../mcp/store.js';
@@ -526,9 +527,12 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         // One write-time re-check for every state-changing route (#157): the body is read here, once,
         // before any route sees it, and the request is refused if its authority changed meanwhile.
         // `/mcp` is excluded because it authenticates each call with its own client token and reads its
-        // own body; the public auth routes (status, setup, login) carry no login to re-check.
-        if (isStateChanging(req.method) && path !== MCP_HTTP_PATH && (!authEnabled || hasLogin)) {
-          const refused = await readBodyThenRecheck(req, recheck);
+        // own body; the public auth routes (status, setup, login) carry no login to re-check, but their
+        // body is still read here so the size cap holds for them too. A body over the cap (1 MB of JSON;
+        // statement imports keep Bun's own limit) is a 413 before any route parses it (#197).
+        if (isStateChanging(req.method) && path !== MCP_HTTP_PATH) {
+          const mayRecheck = !authEnabled || hasLogin;
+          const refused = await readBodyThenRecheck(req, mayRecheck ? recheck : () => null, bodyCapFor(path));
           if (refused) return refusal(refused);
         }
 
@@ -888,6 +892,9 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           return Response.json(apiBudgetCountdown(activeDb, url.searchParams), { headers });
         }
         if (path === '/api/transactions') {
+          // Mirrored: a numeric param past 2^53 is the same 400 { error } the mirror returns (#197).
+          const outOfRange = checkTransactionListParams(url.searchParams);
+          if (outOfRange) return Response.json({ error: outOfRange.error }, { status: 400, headers });
           return Response.json(apiTransactions(activeDb, url.searchParams), { headers });
         }
         if (path === '/api/transactions/search') {
@@ -919,6 +926,9 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         // read-only); mutations follow the standard admin-only canWrite guard.
 
         if (path === '/api/reviews') {
+          // A limit past 2^53 is refused as LIMIT by SQLite: a 400, not a 500 (#197).
+          const outOfRange = outOfRangeInt(url.searchParams, 'limit');
+          if (outOfRange) return Response.json({ error: outOfRange.error }, { status: 400, headers });
           return Response.json(apiReviewQueue(activeDb, url.searchParams), { headers });
         }
 

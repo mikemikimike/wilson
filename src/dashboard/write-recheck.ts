@@ -17,11 +17,66 @@
  * unchanged. A route added later is covered without remembering to ask.
  */
 
+import { HttpError } from './http-errors.js';
+
 /** Methods that change state. Anything else (GET, HEAD, OPTIONS) is read-only and never waits on a body. */
 const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 export function isStateChanging(method: string): boolean {
   return STATE_CHANGING.has(method.toUpperCase());
+}
+
+/**
+ * Cap on a write's body (#197): 1 MB, far above any JSON body a dashboard route takes (the largest, a chat query, is
+ * at most 100,000 characters). Statement import routes keep Bun's own limit instead (`bodyCapFor`).
+ */
+export const JSON_BODY_MAX_BYTES = 1_048_576;
+
+/**
+ * Routes that carry a whole parsed statement (thousands of rows): no cap of ours, so Bun's own request-body limit
+ * (`maxRequestBodySize`, 128 MB by default) stays theirs, exactly as before the JSON cap existed.
+ */
+const IMPORT_BODY_PATHS = new Set(['/api/import', '/api/demo/trace/step']);
+
+/** The body cap for a write to `path`: JSON_BODY_MAX_BYTES, or undefined (Bun's limit) for a statement import. */
+export function bodyCapFor(path: string): number | undefined {
+  return IMPORT_BODY_PATHS.has(path) ? undefined : JSON_BODY_MAX_BYTES;
+}
+
+/** The 413 for a body over `max` bytes. */
+function tooLarge(max: number): HttpError {
+  return new HttpError(413, `request body is larger than ${max / 1_048_576} MB`);
+}
+
+/**
+ * The whole body, or a 413 HttpError once more than `max` bytes are declared (Content-Length: refused before any
+ * byte is read) or have arrived (counted while streaming, so a chunked body without a length cannot slip past).
+ */
+async function readCapped(req: Request, max: number | undefined): Promise<ArrayBuffer> {
+  if (max === undefined) return req.arrayBuffer();
+  const declared = Number(req.headers.get('Content-Length') ?? 0);
+  if (declared > max) throw tooLarge(max);
+  if (!req.body) return new ArrayBuffer(0);
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge(max);
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return bytes.buffer;
 }
 
 /** The body readers a route may call. After buffering they all serve the same bytes. */
@@ -39,10 +94,11 @@ const BODY_READERS = ['json', 'text', 'arrayBuffer', 'blob', 'formData'] as cons
  * arrived with was deactivated / logged out / expired, or the active profile
  * changed (a request validated against profile A must never run on profile B).
  * The reason is handed back so the caller picks the status. A body that cannot
- * be read (client hung up) rejects, exactly as the route's own read would have.
+ * be read (client hung up) rejects, exactly as the route's own read would have. With `maxBytes`, a body over it
+ * rejects with a 413 HttpError before the rest is read and before `check()` or any route runs.
  */
-export async function readBodyThenRecheck<R>(req: Request, check: () => R | null): Promise<R | null> {
-  const bytes = await req.arrayBuffer();
+export async function readBodyThenRecheck<R>(req: Request, check: () => R | null, maxBytes?: number): Promise<R | null> {
+  const bytes = await readCapped(req, maxBytes);
   const refusal = check();
   if (refusal !== null) return refusal;
   const contentType = req.headers.get('Content-Type');

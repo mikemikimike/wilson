@@ -32,6 +32,19 @@ export function isBadRequest(v: unknown): v is BadRequest {
   return o.status === 400 && typeof o.error === 'string' && Object.keys(o).length === 2;
 }
 
+/**
+ * The lenient (legacy) parsers' one strict rule: the first of `names` whose value parses (parseInt, as they do) to an
+ * integer past 2^53 is a BadRequest `<name> is out of range`. SQLite refuses such a value as LIMIT/OFFSET, which used
+ * to be a 500 (#197). Absent, empty and non-numeric values pass (null) and keep their lenient defaults.
+ */
+export function outOfRangeInt(params: URLSearchParams, ...names: string[]): BadRequest | null {
+  for (const name of names) {
+    const n = parseInt(params.get(name) ?? '', 10);
+    if (Number.isFinite(n) && !Number.isSafeInteger(n)) return badRequest(`${name} is out of range`);
+  }
+  return null;
+}
+
 export const BREAKDOWN_DEFAULT_LIMIT = 12;
 export const BREAKDOWN_MAX_LIMIT = 200;
 export const BREAKDOWN_MAX_OFFSET = 1_000_000;
