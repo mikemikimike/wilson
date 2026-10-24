@@ -441,7 +441,8 @@ export const PATHS = [
         await expectText(ab, 'Net worth', { within: MAIN });
         const t = await textOf(ab, MAIN);
         const rows = await ab.eval(`document.querySelectorAll('main tbody tr').length`);
-        if (!t.includes('No accounts found.') && rows === 0) throw new Error('no account rows and no empty state');
+        if (await ab.eval(`!!document.querySelector('[data-testid="accounts-load-error"]')`)) throw new Error('accounts failed to load (error card shown)');
+        if (!t.includes('No accounts yet.') && rows === 0) throw new Error('no account rows and no empty state');
         if (/NaN|undefined/.test(t)) throw new Error('Accounts shows NaN/undefined');
       });
     },
