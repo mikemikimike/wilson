@@ -84,6 +84,9 @@ function PanelBody({
       return (
         <Shell tone={p.turnOnError ? 'warn' : 'muted'}>
           <span>Second opinion (open-jev): off</span>
+          <span className="max-w-[640px]">
+            A small model suggests categories for these rows and runs on this device. Turning it on asks before anything downloads.
+          </span>
           <button
             className="underline text-text-secondary hover:text-text bg-transparent border-none cursor-pointer p-0 min-h-6 min-w-6 text-xs disabled:opacity-50 disabled:cursor-default"
             onClick={() => void p.turnOn()}

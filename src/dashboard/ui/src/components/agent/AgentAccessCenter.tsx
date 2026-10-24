@@ -45,7 +45,7 @@ export function AgentAccessCenter() {
         {error ? (
           <div className="border border-border rounded-lg p-4 text-xs text-red bg-surface-raised">{error}</div>
         ) : (
-          <div className="h-[160px] animate-pulse bg-border-muted rounded-lg" />
+          <div className="h-[160px] bg-border-muted/30 rounded-lg" />
         )}
       </div>
     );

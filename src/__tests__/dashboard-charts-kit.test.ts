@@ -17,7 +17,7 @@ import {
   spaceMonthLabels,
   heatmapYearRange,
 } from '../dashboard/ui/src/lib/heatmapGrid.js';
-import { buildSavingsSeries, monthWindow, isLowIncome } from '../dashboard/ui/src/lib/savingsSeries.js';
+import { buildSavingsSeries, monthWindow, isLowIncome, savingsRateHint } from '../dashboard/ui/src/lib/savingsSeries.js';
 
 describe('format: money / moneyWhole / moneyCompact / pct', () => {
   test('money puts the sign before $ and groups thousands', () => {
@@ -348,5 +348,24 @@ describe('savings series', () => {
     const s = buildSavingsSeries([], { now });
     expect(s.latest).toBeNull();
     expect(s.points.every((p) => p.value === null)).toBe(true);
+  });
+});
+
+describe('savings rate hint (#186)', () => {
+  const now = new Date(2026, 9, 15);
+  const m = (n: number) => `$${n.toFixed(0)}`;
+
+  test('a negative rate from tiny income explains the formula with the real figures', () => {
+    const s = buildSavingsSeries([{ month: '2026-10', income: 12, expenses: 32 }], { now });
+    expect(s.mode).toBe('rate');
+    expect(savingsRateHint(s, m)).toContain('($12 − $32) ÷ $12');
+  });
+
+  test('no hint for a positive rate, an empty series, or net mode (which already explains itself)', () => {
+    expect(savingsRateHint(buildSavingsSeries([{ month: '2026-10', income: 100, expenses: 40 }], { now }), m)).toBeNull();
+    expect(savingsRateHint(buildSavingsSeries([], { now }), m)).toBeNull();
+    const low = buildSavingsSeries([{ month: '2026-10', income: 12, expenses: 2000 }], { now });
+    expect(low.mode).toBe('net');
+    expect(savingsRateHint(low, m)).toBeNull();
   });
 });

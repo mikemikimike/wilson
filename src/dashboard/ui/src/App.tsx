@@ -91,6 +91,7 @@ export function App() {
     <AppContext.Provider value={state}>
       <div className="h-screen flex flex-col min-w-0">
       <Header
+        activeTab={activeTab}
         accounts={accounts}
         categories={categories}
         entities={entities}

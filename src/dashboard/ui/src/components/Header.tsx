@@ -1,8 +1,10 @@
 import { useAppState } from '@/state';
 import type { RangePreset } from '@/hooks/useDateRange';
+import { headerFiltersApply } from '@/lib/headerFilters';
 import type { Entity } from '@/types';
 
 interface HeaderProps {
+  activeTab: string;
   accounts: { id: number; name: string }[];
   categories: string[];
   entities: Entity[];
@@ -22,6 +24,7 @@ const PRESETS: { id: RangePreset; label: string }[] = [
 ];
 
 export function Header({
+  activeTab,
   accounts,
   categories,
   entities,
@@ -39,6 +42,7 @@ export function Header({
         <span className="text-green">$</span> Wilson
       </h1>
 
+      {headerFiltersApply(activeTab) && (
       <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
         {/* Preset pills */}
         <div className="flex flex-wrap items-center gap-0.5 bg-surface border border-border rounded-md p-0.5">
@@ -120,6 +124,7 @@ export function Header({
         )}
         </div>
       </div>
+      )}
     </header>
   );
 }

@@ -4,7 +4,7 @@ import { OfflineUnavailable } from '@/components/OfflineUnavailable';
 import { ChartCard } from '@/charts/ChartCard';
 import { SavingsSparklineChart } from '@/charts/lazyCharts';
 import { chartTokens } from '@/charts/tokens';
-import { buildSavingsSeries } from '@/lib/savingsSeries';
+import { buildSavingsSeries, savingsRateHint } from '@/lib/savingsSeries';
 import { savingsPath } from '@/lib/overviewQueries';
 import { useAppState } from '@/state';
 import { money, moneyWhole, pct } from '@/format';
@@ -26,6 +26,7 @@ export function SavingsSparkline() {
   const fmtValue = mode === 'net' ? moneyWhole : (n: number) => pct(n, 1);
   const color = trend === 'up' ? t.green : trend === 'down' ? t.red : t.textSecondary;
   const plotted = points.filter((p) => p.value !== null).length;
+  const rateHint = savingsRateHint(series, money);
   const title = mode === 'net' ? 'Net Savings' : 'Savings Rate';
 
   return (
@@ -39,6 +40,7 @@ export function SavingsSparkline() {
       takeaway={
         lowIncome ? 'Low income data — showing net savings in dollars instead of a rate.' : undefined
       }
+      footer={rateHint ? <p className="text-[10px] text-text-muted mt-2 mb-0">{rateHint}</p> : null}
       table={{
         columns: [
           { label: 'Month' },

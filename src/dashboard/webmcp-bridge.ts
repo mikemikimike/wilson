@@ -179,6 +179,13 @@ function localTime(iso: string): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString();
 }
 
+/**
+ * What the AGENT ACCESS badge means, in one sentence. Verified against mcp/policies.ts: a tool call needs a live grant you
+ * create in this panel (per tab, time-limited), and data changes always wait for your approval.
+ */
+const AGENT_ACCESS_HINT =
+  'Agent access: lets an AI agent or MCP client use tools you grant, for a limited time. Nothing is shared until you grant a tool here, and every change waits for your approval.';
+
 const CHIP_COLOR = { green: T.green, red: T.red, amber: T.amber, muted: T.muted } as const;
 
 // ── Shared state ─────────────────────────────────────────────────────────────
@@ -926,7 +933,7 @@ function buildPanel(): void {
   const dot = el('span', `display:inline-block;width:8px;height:8px;border-radius:50%;background:${T.muted};`);
   const launcherLabel = el('span', `font:600 11px ${T.mono};letter-spacing:.08em;`, 'AGENT ACCESS');
   launcher.append(dot, launcherLabel);
-  launcher.setAttribute?.('aria-label', 'Agent access');
+  launcher.setAttribute?.('aria-label', AGENT_ACCESS_HINT);
   // Phone widths: collapse to a 32px dot-only button tucked into the corner so it stops covering cards (#180).
   const compact = typeof window.matchMedia === 'function' ? window.matchMedia('(max-width: 640px)') : null;
   const applyCompact = () => {
@@ -981,7 +988,9 @@ function buildPanel(): void {
     // Dot and launcher first: they must be right even while the panel is closed.
     const state = agentState;
     dot.style.background = state ? CHIP_COLOR[statusDot(state) === 'green' ? 'green' : statusDot(state) === 'red' ? 'red' : 'muted'] : T.muted;
-    launcher.title = !state ? 'Agent access' : !state.enabled ? 'Agent access is off' : 'Agent access';
+    const hint = !state ? AGENT_ACCESS_HINT : !state.enabled ? 'Agent access is off. No agent can use any tool.' : AGENT_ACCESS_HINT;
+    launcher.title = hint;
+    launcher.setAttribute?.('aria-label', hint);
     if (panel.hidden) return;
 
     panel.replaceChildren();

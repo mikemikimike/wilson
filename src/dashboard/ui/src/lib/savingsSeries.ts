@@ -99,3 +99,17 @@ export function buildSavingsSeries(
 
   return { mode, points, latest, trend, lowIncome };
 }
+
+/**
+ * One-line formula for a negative savings RATE (#186): "-168%" from $12 of income is correct maths but unexplained.
+ * Null unless the plotted metric is a rate below zero. Net mode (low income) already says why it is in dollars.
+ */
+export function savingsRateHint(
+  series: Pick<SavingsSeries, 'mode' | 'latest'>,
+  fmtMoney: (n: number) => string,
+): string | null {
+  const { mode, latest } = series;
+  if (mode !== 'rate' || !latest || latest.value === null || latest.value >= 0) return null;
+  if (latest.income === null || latest.expenses === null) return null;
+  return `Rate = (income − expenses) ÷ income = (${fmtMoney(latest.income)} − ${fmtMoney(latest.expenses)}) ÷ ${fmtMoney(latest.income)}. Below zero means more went out than came in; a small income makes it swing widely.`;
+}

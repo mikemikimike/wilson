@@ -5,7 +5,7 @@ import { OfflineUnavailable } from '@/components/OfflineUnavailable';
 import { ChartCard } from '@/charts/ChartCard';
 import { FilteredBadge } from '@/components/FilteredBadge';
 import { chartTokens } from '@/charts/tokens';
-import { buildHeatmapGrid, heatmapSummary, heatmapYearRange, isFilteredHeatmap } from '@/lib/heatmapGrid';
+import { buildHeatmapGrid, heatmapDayTitle, heatmapSummary, heatmapYearRange, isFilteredHeatmap } from '@/lib/heatmapGrid';
 import { dailySpendingPath } from '@/lib/overviewQueries';
 import { formatDate, money } from '@/format';
 import type { CoverageResponse, DailySpendingRow, StreakData } from '@/types';
@@ -54,7 +54,9 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
   // treated as covered (the pre-coverage behavior).
   const { data: coverage, loading: loadingCoverage } = useApi<CoverageResponse>('/api/coverage');
 
-  const budget = streakData?.dailyBudget ?? 50;
+  // No invented default: a missing or zero total means no budget (#181).
+  const budget = streakData?.dailyBudget ?? 0;
+  const hasBudget = budget > 0;
   const grid = useMemo(() => {
     const spending = new Map<string, number>();
     for (const row of dailyData ?? []) spending.set(row.date, row.spending);
@@ -68,8 +70,8 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
 
   const { weeks, months, maxAmount } = grid;
   const filtered = isFilteredHeatmap({ accountId, entityId, category });
-  const summary = heatmapSummary(grid, money(budget), filtered);
-  const cellColor = (amount: number) => (filtered ? getRelativeColor(amount, maxAmount) : getColor(amount, budget));
+  const summary = heatmapSummary(grid, money(budget), filtered, hasBudget);
+  const cellColor = (amount: number) => (filtered || !hasBudget ? getRelativeColor(amount, maxAmount) : getColor(amount, budget));
   const svgWidth = LABEL_WIDTH + weeks.length * TOTAL;
   const svgHeight = HEADER_HEIGHT + 7 * TOTAL;
   const t = chartTokens();
@@ -80,7 +82,7 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
     .filter((d) => d.covered && !d.future && d.amount > 0)
     .reverse()
     .map((d) =>
-      filtered ? [formatDate(d.date), money(d.amount)] : [formatDate(d.date), money(d.amount), d.amount <= budget ? 'Under' : 'Over'],
+      filtered || !hasBudget ? [formatDate(d.date), money(d.amount)] : [formatDate(d.date), money(d.amount), d.amount <= budget ? 'Under' : 'Over'],
     );
 
   return (
@@ -103,6 +105,13 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
             {/* …and the width of the 'Table' toggle that appears with the data. */}
             <span aria-hidden="true" className="invisible inline-block w-[52px] h-6" />
           </>
+        ) : summary.needsBudget ? (
+          <>
+            <FilteredBadge category={category} />
+            <a href="#goals" className="text-xs text-green hover:underline">
+              Set a budget to track this
+            </a>
+          </>
         ) : summary.tally || category ? (
           <>
             <FilteredBadge category={category} />
@@ -116,7 +125,7 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
         ) : undefined
       }
       table={{
-        columns: filtered
+        columns: filtered || !hasBudget
           ? [{ label: 'Date' }, { label: 'Spent', numeric: true }]
           : [{ label: 'Date' }, { label: 'Spent', numeric: true }, { label: 'Budget', numeric: true }],
         rows: tableRows,
@@ -131,7 +140,7 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
                 background: `repeating-linear-gradient(45deg, ${t.chartNeutral} 0 1.5px, ${t.chartUncovered} 1.5px 4px)`,
               }}
             />
-            No imported statements — not counted
+            Striped: days with no imported statement (not counted)
           </p>
         ) : null
       }
@@ -188,11 +197,7 @@ export function SpendingHeatmap({ onDayClick }: SpendingHeatmapProps) {
                 onClick={() => onDayClick?.(day.date)}
               >
                 <title>
-                  {day.future
-                    ? day.date
-                    : day.covered
-                      ? `${day.date}: ${money(day.amount)}`
-                      : `${day.date}: no imported data`}
+                  {heatmapDayTitle(day, money, formatDate)}
                 </title>
               </rect>
             )),

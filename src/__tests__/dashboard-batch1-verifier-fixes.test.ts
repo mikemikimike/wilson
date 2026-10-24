@@ -41,6 +41,7 @@ import { nextShowTable, tableToggleLabel } from '../dashboard/ui/src/charts/char
 import {
   buildHeatmapGrid,
   heatmapSummary,
+  heatmapDayTitle,
   heatmapYearRange,
   isFilteredHeatmap,
   TALLY_DAYS,
@@ -403,5 +404,38 @@ describe('L3 — heatmap tally', () => {
     expect(filtered.tally).toBeNull();
     expect(filtered.takeaway).not.toContain('300');
     expect(heatmapSummary({ underBudgetDays: 0, totalDays: 0 }, '$50.00', false).tally).toBeNull();
+  });
+
+  test('no budget (#181): no under-budget tally or verdict, and a prompt flag instead', () => {
+    const grid = { underBudgetDays: 4, totalDays: 6 };
+    const s = heatmapSummary(grid, '$0.00', false, false);
+    expect(s.tally).toBeNull();
+    expect(s.needsBudget).toBe(true);
+    expect(s.takeaway).not.toMatch(/Under the|4 of 6|\$0\.00/);
+    expect(s.takeaway).toContain('No budget is set');
+    // A filtered slice is never presented as the whole picture, even without a budget.
+    const f = heatmapSummary(grid, '$0.00', true, false);
+    expect(f.takeaway).toMatch(/^Filtered daily spending/);
+    expect(f.needsBudget).toBe(true);
+    expect(s.takeaway).toMatch(/^Daily spending/);
+    // With a budget the verdict is unchanged, and an empty window never asks for a budget.
+    expect(heatmapSummary(grid, '$50.00', false, true).needsBudget).toBe(false);
+    expect(heatmapSummary({ underBudgetDays: 0, totalDays: 0 }, '$0.00', false, false).needsBudget).toBe(false);
+  });
+
+  test('tooltip carries the full date with its year (#192)', () => {
+    const fmtDate = (d: string) => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const m = (n: number) => `$${n.toFixed(2)}`;
+    expect(heatmapDayTitle({ date: '2025-10-26', amount: 12, covered: true, future: false }, m, fmtDate)).toBe('Oct 26, 2025: $12.00');
+    expect(heatmapDayTitle({ date: '2025-10-26', amount: 0, covered: false, future: false }, m, fmtDate)).toBe('Oct 26, 2025: no imported statement');
+    expect(heatmapDayTitle({ date: '2026-10-30', amount: 0, covered: true, future: true }, m, fmtDate)).toBe('Oct 30, 2026');
+  });
+
+  test('the year window legitimately starts in the prior calendar year (#192)', () => {
+    // Late October 2026 -> the first column is late October 2025, so 2025 tooltips are in range, not a parse bug.
+    const { startDate, endDate } = heatmapYearRange(new Date(2026, 9, 24));
+    expect(endDate).toBe('2026-10-24');
+    expect(startDate.startsWith('2025-10-')).toBe(true);
+    expect(new Date(startDate + 'T00:00:00').getDay()).toBe(0);
   });
 });

@@ -77,7 +77,7 @@ function ProfileSection() {
       <div>
         <h2 className="text-xs text-text-secondary uppercase tracking-wide mb-3">Profile</h2>
         <div className="bg-surface-raised border border-border rounded-lg p-4">
-          <div className="h-[40px] animate-pulse bg-border-muted rounded" />
+          <div className="h-[40px] bg-border-muted/30 rounded" />
         </div>
       </div>
     );
@@ -281,7 +281,7 @@ function SecuritySection() {
       <div>
         <h2 className="text-xs text-text-secondary uppercase tracking-wide mb-3">Security</h2>
         <div className="bg-surface-raised border border-border rounded-lg p-4">
-          <div className="h-[60px] animate-pulse bg-border-muted rounded" />
+          <div className="h-[60px] bg-border-muted/30 rounded" />
         </div>
       </div>
     );
@@ -610,7 +610,7 @@ function MemoriesSection() {
         <div className="space-y-2">
           {[0, 1, 2].map((i) => (
             <div key={i} className="bg-surface-raised border border-border rounded-lg p-3">
-              <div className="h-[40px] animate-pulse bg-border-muted rounded" />
+              <div className="h-[40px] bg-border-muted/30 rounded" />
             </div>
           ))}
         </div>
@@ -677,7 +677,7 @@ function CustomPromptSection() {
           like currency, profession, or analysis style.
         </p>
         {loading ? (
-          <div className="h-[80px] animate-pulse bg-border-muted rounded" />
+          <div className="h-[80px] bg-border-muted/30 rounded" />
         ) : (
           <>
             <textarea
@@ -864,7 +864,7 @@ function ModelRow({ row, chatModelName, catalog, canOverride, onSave }: ModelRow
 
 function ModelsSection() {
   const { data, loading, refetch } = useApi<ModelsPanel>('/api/models');
-  const { data: authStatus } = useApi<AuthStatus>('/api/auth/status');
+  const { data: authStatus, loading: authLoading } = useApi<AuthStatus>('/api/auth/status');
   // Same gate the write route enforces: admin-only when auth is on, allowed
   // in single-user local mode (auth disabled — user is null there).
   const canOverride = authStatus ? (!authStatus.authEnabled || authStatus.user?.role === 'admin') : false;
@@ -880,13 +880,15 @@ function ModelsSection() {
     refetch();
   }
 
-  if (loading) {
+  // Wait for the auth answer too: it decides whether the rows get their override controls, and those change the row
+  // heights, so rendering the rows first would shift everything under them when it lands.
+  if (loading || authLoading) {
     return (
       <div>
         <h2 className="text-xs text-text-secondary uppercase tracking-wide mb-3">Models</h2>
         {/* Reserve the loaded row stack (7 task rows; taller when they wrap on a phone) so the sections below do not jump when it lands. */}
         <div className="bg-surface-raised border border-border rounded-lg p-4">
-          <div className="h-[700px] sm:h-[420px] animate-pulse bg-border-muted rounded" />
+          <div className="h-[867px] sm:h-[480px] bg-border-muted/30 rounded" />
         </div>
       </div>
     );
@@ -1007,7 +1009,7 @@ function EntitySection() {
 
         {/* Entity list */}
         {loading ? (
-          <div className="h-[60px] animate-pulse bg-border-muted rounded" />
+          <div className="h-[60px] bg-border-muted/30 rounded" />
         ) : entities && entities.length > 0 ? (
           <div className="space-y-1.5">
             {entities.map((e) => (

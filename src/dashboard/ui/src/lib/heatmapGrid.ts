@@ -170,16 +170,33 @@ export function heatmapSummary(
   grid: Pick<HeatmapGrid, 'underBudgetDays' | 'totalDays'>,
   budgetLabel: string,
   filtered: boolean,
-): { takeaway: string; tally: { under: number; total: number } | null } {
-  if (grid.totalDays === 0) return { takeaway: 'No imported data in the last year.', tally: null };
+  hasBudget = true,
+): { takeaway: string; tally: { under: number; total: number } | null; needsBudget: boolean } {
+  if (grid.totalDays === 0) return { takeaway: 'No imported data in the last year.', tally: null, needsBudget: false };
+  if (!hasBudget) {
+    // No budget total means no daily allowance: "under budget on N days" would be a verdict against nothing (NN-09).
+    return {
+      takeaway: `${filtered ? 'Filtered daily' : 'Daily'} spending on ${grid.totalDays} days with imported data, shaded by relative amount. No budget is set, so there is no under-budget count.`,
+      tally: null,
+      needsBudget: true,
+    };
+  }
   if (filtered) {
     return {
       takeaway: `Filtered daily spending on ${grid.totalDays} days with imported data. Shaded by relative amount — the ${budgetLabel} daily budget covers all spending, so no under-budget count is shown.`,
       tally: null,
+      needsBudget: false,
     };
   }
   return {
     takeaway: `Under the ${budgetLabel} daily budget on ${grid.underBudgetDays} of ${grid.totalDays} days with imported data.`,
     tally: { under: grid.underBudgetDays, total: grid.totalDays },
+    needsBudget: false,
   };
+}
+
+/** Cell tooltip: the full date WITH its year (the grid spans two calendar years, so '2025-10-26' alone is ambiguous). */
+export function heatmapDayTitle(day: Pick<HeatmapDay, 'date' | 'future' | 'covered' | 'amount'>, fmtMoney: (n: number) => string, fmtDate: (d: string) => string): string {
+  if (day.future) return fmtDate(day.date);
+  return day.covered ? `${fmtDate(day.date)}: ${fmtMoney(day.amount)}` : `${fmtDate(day.date)}: no imported statement`;
 }
