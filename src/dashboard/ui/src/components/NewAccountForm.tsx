@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api } from '@/api';
 import { apiErrorMessage } from '@/lib/firstAdmin';
 import {
+  ACCOUNTS_CHANGED_EVENT,
   ACCOUNT_NAME_MAX,
   ACCOUNT_SUBTYPE_GROUPS,
   EMPTY_NEW_ACCOUNT,
@@ -45,6 +46,7 @@ export function NewAccountForm({ onCreated, onCancel, compact }: NewAccountFormP
         method: 'POST',
         body: JSON.stringify(newAccountBody(input)),
       });
+      window.dispatchEvent(new Event(ACCOUNTS_CHANGED_EVENT));
       onCreated(res.account);
     } catch (err) {
       setError(apiErrorMessage(err, 'Could not add the account.'));

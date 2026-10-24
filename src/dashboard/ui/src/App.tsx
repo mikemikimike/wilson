@@ -5,6 +5,7 @@ import { TAB_IDS, type TabId } from '@webmcp-session';
 import { AppContext, type AppState } from '@/state';
 import { useDateRange } from '@/hooks/useDateRange';
 import { dropUnknownProfileIds, navigateToTab, useUrlState } from '@/hooks/useUrlState';
+import { ACCOUNTS_CHANGED_EVENT } from '@/lib/accountCreate';
 import { categoryChoices } from '@/lib/categoryOptions';
 import { ImportToast } from '@/components/ImportToast';
 import type { UrlTab } from '@/lib/urlState';
@@ -45,7 +46,11 @@ export function App() {
   );
   const { dateRange, setDateRange, goToPrevMonth, goToNextMonth, selectPreset, preset, monthLabel } = useDateRange();
 
-  const { data: accountsData } = useApi<Account[]>('/api/accounts');
+  const { data: accountsData, refetch: refetchAccountsData } = useApi<Account[]>('/api/accounts');
+  useEffect(() => {
+    window.addEventListener(ACCOUNTS_CHANGED_EVENT, refetchAccountsData);
+    return () => window.removeEventListener(ACCOUNTS_CHANGED_EVENT, refetchAccountsData);
+  }, [refetchAccountsData]);
   const { data: entitiesData } = useApi<Entity[]>('/api/entities');
   // Header category options: the shared list (lib/categoryOptions, #200) the
   // Transactions tab's filter also uses: every category row plus every label

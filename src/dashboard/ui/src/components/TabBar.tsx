@@ -60,12 +60,17 @@ export function TabBar({ activeTab, onTabChange }: TabBarProps) {
 
   useEffect(() => () => clearTimeout(tipTimer.current), []);
 
+  const touchTip = useRef<TabId | null>(null);
   const showTip = (id: TabId, autoHide = false) => {
+    // A tap fires pointerdown, then compat mouseenter + focus; those must not cancel the touch auto-hide timer.
+    if (!autoHide && touchTip.current === id) return;
+    touchTip.current = autoHide ? id : null;
     clearTimeout(tipTimer.current);
     setTip(TAB_HINTS[id] ? id : null);
-    if (autoHide) tipTimer.current = setTimeout(() => setTip(null), 4000);
+    if (autoHide) tipTimer.current = setTimeout(() => { touchTip.current = null; setTip(null); }, 4000);
   };
   const hideTip = () => {
+    touchTip.current = null;
     clearTimeout(tipTimer.current);
     setTip(null);
   };
@@ -82,7 +87,7 @@ export function TabBar({ activeTab, onTabChange }: TabBarProps) {
     measure();
   }, [activeTab, measure]);
 
-  const fade = 'absolute top-0 bottom-0 w-8 pointer-events-none transition-opacity duration-150 sm:hidden';
+  const fade = 'absolute top-0 bottom-0 w-8 pointer-events-none transition-opacity duration-150';
 
   return (
     <div className="relative shrink-0" onKeyDown={(e) => e.key === 'Escape' && hideTip()}>

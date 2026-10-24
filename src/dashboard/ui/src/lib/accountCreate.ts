@@ -18,6 +18,9 @@ export type { AccountSubtype };
 /** Mirrors ACCOUNT_NAME_MAX in src/dashboard/api.ts (not imported — that file pulls bun:sqlite into the ui program). */
 export const ACCOUNT_NAME_MAX = 80;
 
+/** Window event after an account is created, so lists outside the creating view (App's header filter) refetch. */
+export const ACCOUNTS_CHANGED_EVENT = 'wilson:accounts-changed';
+
 /** The import picker's "New account…" option value; never a real id (ids are positive integers). */
 export const NEW_ACCOUNT_OPTION = '__new__';
 
