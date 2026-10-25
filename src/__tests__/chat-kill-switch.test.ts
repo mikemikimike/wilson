@@ -106,7 +106,7 @@ function countSearches(): { count: () => number; restore: () => void } {
     n++;
     return original(args as never, config);
   };
-  return { count: () => n, restore: () => ((transactionSearchTool as ToolDef).func = original) };
+  return { count: () => n, restore: () => ((transactionSearchTool as ToolDef).func = original as ToolDef['func']) };
 }
 
 function setupProfile(): void {

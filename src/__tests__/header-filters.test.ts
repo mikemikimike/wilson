@@ -14,7 +14,7 @@ describe('agent access badge copy (#186)', () => {
   test('the launcher tooltip says what it allows and that nothing is shared until granted', async () => {
     const src = await Bun.file(new URL('../dashboard/webmcp-bridge.ts', import.meta.url)).text();
     expect(src).toContain('Nothing is shared until you grant a tool here');
-    expect(src).toContain("'Agent access is off. No agent can use any tool.'");
+    expect(src).toContain(`"Agent access is off. No agent, Wilson's own Chat included, can use any tool."`);
     // aria-label tracks the title so screen readers hear the off state too.
     expect(src).toContain("launcher.setAttribute?.('aria-label', hint)");
   });
