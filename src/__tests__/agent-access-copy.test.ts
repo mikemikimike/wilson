@@ -42,6 +42,10 @@ describe('Agent access copy', () => {
     expect(server).toMatch(/\/api\/chat\/local[\s\S]{0,600}isAgentAccessEnabled\(\)/);
   });
 
+  test('the Chat tab offers no in-tab model download while access is off (NN-01)', () => {
+    expect(read('../dashboard/ui/src/tabs/ChatTab.tsx')).toContain('{!accessOff && consent.reserve');
+  });
+
   test('the bridge panel says the same thing when access is off', () => {
     const bridge = read('../dashboard/webmcp-bridge.ts');
     expect(bridge).toContain(JSON.stringify(KILL_SWITCH_OFF_LINE));

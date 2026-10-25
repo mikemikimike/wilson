@@ -81,3 +81,15 @@ Scope: build **B1-a only (S0–S6)**. B1-b (S8–S12) parked until judge v33 mer
 | Lock release | Release on worker crash/onerror and on profile_changed; add hook-wiring tests | Jd |
 | LAN gate | Port judge P0b's loopback-peer/Host check into the interim gate now; once P0b lands, the interim file becomes a plain re-export | Jd |
 | Git history paths | Squash-merge at PR time; scan before any push | Jd |
+
+---
+
+# Decisions: Agent access kill switch covers Wilson's own Chat (2026-10-25)
+
+| Item | Decision | By |
+|---|---|---|
+| Scope | The switch gates outside agents and MCP clients (src/mcp/*) and Wilson's own dashboard Chat: server turns, /categorize, pending approvals, every tool call, and every model call (`callLlm` `mayCall`, asked before each attempt), so data read just before a flip never reaches another model call | Jd |
+| Terminal `wilson` agent | Not gated. The shell user owns the database outright; gating adds friction, not protection. Copy says "in this dashboard" | Jd (rec) |
+| Non-model slash commands (/budget, /export, /profile) | Not blocked: they make the same requests as the tabs, which stay usable while the switch is off | Jd (rec) |
+| In-tab model | Enforced in the client (re-reads the switch each turn, never loads while off) plus 403 `kill_switch` on `POST /api/chat/local`. It reads through ordinary dashboard routes, which can't be switched off without breaking the tabs; a modified browser can read what that login can already see. Accepted: the switch stops agents, not the signed-in user | Jd (rec) |
+| In-tab model download offer | Hidden while the switch is off (no huggingface.co prompt for a Chat that can't use data, NN-01) | Jd (rec) |

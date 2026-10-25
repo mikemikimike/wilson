@@ -21,11 +21,14 @@ export function getFastModel(modelProvider: string, fallbackModel: string): stri
 }
 
 // Generic retry helper with exponential backoff
-async function withRetry<T>(fn: () => Promise<T>, provider: string, maxAttempts = 3): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, provider: string, maxAttempts = 3, mayCall?: () => boolean): Promise<T> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
+      // Asked before every attempt, so a retry after Agent access was turned off never sends the prompt.
+      if (mayCall && !mayCall()) throw new ModelCallRefusedError();
       return await fn();
     } catch (e) {
+      if (e instanceof ModelCallRefusedError) throw e;
       const message = e instanceof Error ? e.message : String(e);
       const errorType = classifyError(message);
       logger.error(`[${provider} API] ${errorType} error (attempt ${attempt + 1}/${maxAttempts}): ${message}`);
@@ -56,6 +59,20 @@ export interface CallLlmOptions {
   callType?: string;
   /** Generation cap. Honored by the Transformers adapter; other adapters ignore it in this slice. */
   maxTokens?: number;
+  /**
+   * The caller's authority to make this call at all (the dashboard chat's Agent access switch), asked right before
+   * the provider is reached. When it says no, the call throws ModelCallRefusedError and no prompt leaves the
+   * process, so data a tool read just before the switch was turned off never reaches another model call.
+   */
+  mayCall?: () => boolean;
+}
+
+/** Thrown by callLlm when `mayCall` refuses: the run stops before any provider sees the prompt. */
+export class ModelCallRefusedError extends Error {
+  constructor() {
+    super('Model call refused: Agent access is off');
+    this.name = 'ModelCallRefusedError';
+  }
 }
 
 export interface LlmResult {
@@ -117,6 +134,7 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
         }),
       provider.displayName,
       maxAttempts,
+      options.mayCall,
     );
 
     // Structured-output gate: when a schema was supplied, validate what came back
@@ -148,6 +166,7 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
             }),
           provider.displayName,
           maxAttempts,
+          options.mayCall,
         );
         const second = validateStructuredOutput(finalResponse, outputSchema);
         if (!second.ok) {

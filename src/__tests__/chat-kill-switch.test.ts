@@ -52,7 +52,11 @@ let categorizeEntered: (() => void) | null = null;
 let agentCalls = 0;
 let categorizeCalls = 0;
 let categorizeTargetId = -1;
+/** Runs inside transaction_search, after its read: lets a test flip the switch between a tool and the next model call. */
+let onSearch: (() => void) | null = null;
 const llmSpy = scopedSpy(llm, 'callLlm', async (_prompt, options): Promise<LlmResult> => {
+  // The real callLlm refuses before the provider sees the prompt (llm-may-call.test.ts); the script honours it too.
+  if (options?.mayCall && !options.mayCall()) throw new llm.ModelCallRefusedError();
   if (options?.callType === 'agent') {
     agentCalls++;
     let response: LlmResponse = { content: 'All done.', toolCalls: [] };
@@ -104,7 +108,9 @@ function countSearches(): { count: () => number; restore: () => void } {
   let n = 0;
   (transactionSearchTool as ToolDef).func = async (args, config) => {
     n++;
-    return original(args as never, config);
+    const out = await original(args as never, config);
+    onSearch?.();
+    return out;
   };
   return { count: () => n, restore: () => ((transactionSearchTool as ToolDef).func = original as ToolDef['func']) };
 }
@@ -154,6 +160,7 @@ describe('Agent access off: Wilson\'s own Chat (in-process)', () => {
     setChatDeadlineMs(null);
     agentEntered = null;
     categorizeEntered = null;
+    onSearch = null;
     agentHold = null;
     categorizeHold = null;
     resetSwitch();
@@ -193,6 +200,17 @@ describe('Agent access off: Wilson\'s own Chat (in-process)', () => {
     expect(out).toMatchObject({ answer: CHAT_AGENT_ACCESS_OFF_ANSWER, agentAccessOff: true });
     expect(searches.count()).toBe(0);
     expect(agentCalls).toBe(1); // no second model call with tool results
+  });
+
+  test('switched off while a tool runs: what it read never reaches another model call', async () => {
+    script = [{ id: 'tc1', name: 'transaction_search', args: { query: 'restaurant' } }];
+    onSearch = switchOff;
+    releaseAgent();
+
+    const out = await handleChatMessage('how much did I spend on restaurants?');
+    expect(out).toMatchObject({ answer: CHAT_AGENT_ACCESS_OFF_ANSWER, agentAccessOff: true });
+    expect(searches.count()).toBe(1); // the read finished before the flip
+    expect(agentCalls).toBe(1); // ...but no model call was made with its result
   });
 
   test('switched off mid-run: the write the model then asks for is denied with no card', async () => {

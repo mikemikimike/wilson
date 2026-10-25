@@ -63,6 +63,7 @@ async function runMember(
       tools: tools.length > 0 ? tools : undefined,
       signal,
       ...traceOptions(trace),
+      ...(gate.mayUseTools ? { mayCall: gate.mayUseTools } : {}),
     });
 
     // No tool calls → member's final output
@@ -84,7 +85,7 @@ async function runMember(
   // Max iterations — force final output
   const { response: finalResponse } = await callLlm(
     `${iterationPrompt}\n\nYou've reached the iteration limit. Provide your final findings now.`,
-    { model, systemPrompt: systemPrompt ?? 'Provide your final findings.', signal, ...traceOptions(trace) },
+    { model, systemPrompt: systemPrompt ?? 'Provide your final findings.', signal, ...traceOptions(trace), ...(gate.mayUseTools ? { mayCall: gate.mayUseTools } : {}) },
   );
   return finalResponse.content;
 }
@@ -125,6 +126,7 @@ Assign a specific subtask to each relevant member. Not all members need to be us
       systemPrompt: team.dispatcher.systemPrompt ?? 'You coordinate financial analysis specialists. Assign clear, specific subtasks.',
       outputSchema: dispatchSchema,
       ...traceOptions(trace),
+      ...(options.mayUseTools ? { mayCall: options.mayUseTools } : {}),
     }));
   } catch (err) {
     if (err instanceof LlmValidationError) {
@@ -189,6 +191,7 @@ Synthesize these findings into a comprehensive, actionable answer.`;
     model: dispatcherModel,
     systemPrompt: team.dispatcher.systemPrompt ?? 'Synthesize your team\'s findings into a clear, actionable answer.',
     ...traceOptions(trace),
+    ...(options.mayUseTools ? { mayCall: options.mayUseTools } : {}),
   });
 
   return synthesisResponse.content;

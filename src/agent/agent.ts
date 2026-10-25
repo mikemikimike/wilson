@@ -97,6 +97,8 @@ export class Agent {
   private readonly toolExecutor: AgentToolExecutor;
   private readonly systemPrompt: string;
   private readonly signal?: AbortSignal;
+  /** Asked before every model call too, not only every tool call (callLlm `mayCall`). */
+  private readonly mayUseTools?: () => boolean;
   private readonly registry: RegisteredTool[];
   /** Set only when this agent selects tools per request (local Transformers.js model). */
   private readonly localParts: LocalPromptParts | null;
@@ -115,6 +117,7 @@ export class Agent {
     this.toolExecutor = new AgentToolExecutor(this.toolMap, config.signal, config.requestToolApproval, config.sessionApprovedTools, this.model, config.mayWrite, config.mayUseTools);
     this.systemPrompt = systemPrompt;
     this.signal = config.signal;
+    this.mayUseTools = config.mayUseTools;
     this.localParts = localParts;
   }
 
@@ -390,6 +393,7 @@ export class Agent {
       runId: ctx.runId,
       sequenceNum: ctx.sequenceNum,
       callType: 'agent',
+      ...(this.mayUseTools ? { mayCall: this.mayUseTools } : {}),
     });
     return { response: result.response, usage: result.usage, interactionId: result.interactionId };
   }

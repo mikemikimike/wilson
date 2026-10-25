@@ -52,6 +52,7 @@ async function runStepAgent(
       runId: trace.runId,
       sequenceNum: trace.next(),
       callType: CHAIN_CALL_TYPE,
+      ...(gate.mayUseTools ? { mayCall: gate.mayUseTools } : {}),
     });
 
     // No tool calls → this is the step's final output
@@ -74,7 +75,7 @@ async function runStepAgent(
   // Max iterations reached — ask for a summary without tools
   const { response: finalResponse } = await callLlm(
     `${iterationPrompt}\n\nYou've reached the iteration limit. Provide your final output now.`,
-    { model, systemPrompt: stepSystemPrompt, signal, runId: trace.runId, sequenceNum: trace.next(), callType: CHAIN_CALL_TYPE },
+    { model, systemPrompt: stepSystemPrompt, signal, runId: trace.runId, sequenceNum: trace.next(), callType: CHAIN_CALL_TYPE, ...(gate.mayUseTools ? { mayCall: gate.mayUseTools } : {}) },
   );
   return finalResponse.content;
 }

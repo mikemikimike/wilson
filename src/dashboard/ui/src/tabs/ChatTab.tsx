@@ -1082,7 +1082,8 @@ export function ChatTab() {
               </button>
             </div>
           )}
-          {consent.reserve && !(consent.offered && !consent.optedIn && consent.dismissed) ? (
+          {/* Agent access off: no in-tab model offer either; a download (NN-01) for a Chat that can't use data is pointless. */}
+          {!accessOff && consent.reserve && !(consent.offered && !consent.optedIn && consent.dismissed) ? (
             /* In-tab model row. Its space is held from first paint on a WebGPU browser (min-h fits the opt-in at
                360px and wider), and the status line replaces it in place once opted in. */
             <div
