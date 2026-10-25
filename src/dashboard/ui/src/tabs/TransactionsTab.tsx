@@ -196,13 +196,13 @@ function TxTableHead({ entities }: { entities: Entity[] }) {
   return (
     <thead className="sticky top-0 bg-surface-raised z-10">
       <tr className="border-b border-border text-text-secondary text-xs uppercase tracking-wide">
-        <th className="text-left px-4 py-3 font-medium">Date</th>
-        <th className="text-left px-4 py-3 font-medium">Description</th>
-        <th className="text-right px-4 py-3 font-medium">Amount</th>
-        <th className="text-left px-4 py-3 font-medium">Category</th>
-        <th className="text-left px-4 py-3 font-medium">Account</th>
+        <th className="text-left px-2 sm:px-4 py-3 font-medium">Date</th>
+        <th className="text-left px-2 sm:px-4 py-3 font-medium">Description</th>
+        <th className="text-right px-2 sm:px-4 py-3 font-medium">Amount</th>
+        <th className="text-left px-2 sm:px-4 py-3 font-medium">Category</th>
+        <th className="text-left px-2 sm:px-4 py-3 font-medium">Account</th>
         {entities.length > 1 && (
-          <th className="text-left px-4 py-3 font-medium">Entity</th>
+          <th className="text-left px-2 sm:px-4 py-3 font-medium">Entity</th>
         )}
       </tr>
     </thead>
@@ -238,12 +238,13 @@ function TxRow({
         highlighted ? 'bg-green/10 outline outline-1 outline-green/40' : ''
       }`}
     >
-      <td className="px-4 py-3 text-text-secondary font-mono text-xs whitespace-nowrap">
+      <td className="px-2 sm:px-4 py-3 text-text-secondary font-mono text-xs whitespace-nowrap">
         {formatDate(tx.date)}
       </td>
-      <td className="px-4 py-3 text-text">
+      {/* Phone: a narrow, wrapping description keeps Amount on screen; Category and Account scroll (first-timer, 2026-10-25). */}
+      <td className="px-2 sm:px-4 py-3 text-text">
         <div className="flex items-center gap-2">
-          <span className="truncate max-w-[300px]">
+          <span className="max-w-[9rem] break-words sm:truncate sm:max-w-[300px]">
             {tx.merchant_name ?? tx.description}
           </span>
           {/* SQLite hands back 0/1, not a boolean — `0 && …` would render a literal "0". */}
@@ -262,19 +263,19 @@ function TxRow({
           )}
         </div>
         {tx.merchant_name && tx.description !== tx.merchant_name && (
-          <div className="text-xs text-text-muted truncate max-w-[300px]">
+          <div className="text-xs text-text-muted max-w-[9rem] break-words sm:truncate sm:max-w-[300px]">
             {tx.description}
           </div>
         )}
       </td>
       <td
-        className={`px-4 py-3 text-right font-mono whitespace-nowrap ${
+        className={`px-2 sm:px-4 py-3 text-right font-mono whitespace-nowrap ${
           tx.amount < 0 ? 'text-red' : 'text-green'
         }`}
       >
         {formatAmount(tx.amount)}
       </td>
-      <td className="px-4 py-3 text-text-secondary text-xs">
+      <td className="px-2 sm:px-4 py-3 text-text-secondary text-xs">
         {editing ? (
           <div className="flex items-center gap-1.5">
             {/* '' is Uncategorized: choosing it clears the category and the verified flag (#200). */}
@@ -306,7 +307,7 @@ function TxRow({
           </div>
         )}
       </td>
-      <td className="px-4 py-3 text-text-secondary text-xs">
+      <td className="px-2 sm:px-4 py-3 text-text-secondary text-xs">
         {editing && editing.accounts.length > 0 ? (
           <RowPicker
             txId={tx.id}
@@ -322,7 +323,7 @@ function TxRow({
         )}
       </td>
       {entities.length > 1 && (
-        <td className="px-4 py-3">
+        <td className="px-2 sm:px-4 py-3">
           <EntityCell tx={tx} entities={entities} canEdit={editing != null} onSaved={onSaved} />
         </td>
       )}

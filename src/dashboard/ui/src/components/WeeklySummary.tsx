@@ -3,6 +3,7 @@ import { OfflineUnavailable } from '@/components/OfflineUnavailable';
 import { money } from '@/format';
 import { useAppState } from '@/state';
 import { entityScopedPath } from '@/lib/overviewQueries';
+import { weeklyChange } from '@/lib/weeklyChange';
 import type { WeeklySummaryData, StreakData } from '@/types';
 
 export function WeeklySummary() {
@@ -36,11 +37,8 @@ export function WeeklySummary() {
     );
   }
 
-  const { thisWeek, change } = weekData;
-  const isDown = change.amount <= 0;
-  const arrow = isDown ? '\u2193' : '\u2191';
-  const changeColor = isDown ? 'text-green' : 'text-red';
-  const pctText = Math.abs(change.percent).toFixed(0);
+  const { thisWeek, lastWeek, change } = weekData;
+  const delta = weeklyChange(thisWeek.total, lastWeek.total, change.amount, change.percent);
 
   const topCat = thisWeek.byCategory.length > 0
     ? thisWeek.byCategory.reduce((a, b) => (b.total > a.total ? b : a))
@@ -56,9 +54,15 @@ export function WeeklySummary() {
           {money(Math.abs(thisWeek.total))}
         </span>{' '}
         spent{' '}
-        <span className={`font-semibold ${changeColor}`}>
-          ({arrow}{pctText}% vs last week)
-        </span>
+        {delta.kind === 'change' ? (
+          <span className={`font-semibold ${delta.down ? 'text-green' : 'text-red'}`}>
+            ({delta.down ? '\u2193' : '\u2191'}{delta.percent}% vs last week)
+          </span>
+        ) : (
+          <span className="text-text-muted">
+            {delta.kind === 'none' ? '(no spending recorded this week or last)' : '(no spending last week to compare)'}
+          </span>
+        )}
         {topCat && (
           <>
             . Top category:{' '}

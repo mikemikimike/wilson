@@ -69,3 +69,20 @@ export function catalogOptionLabel(model: CatalogModel): string {
     ? `${model.displayName} (${size} — downloads on first use)`
     : `${model.displayName} (downloads on first use)`;
 }
+
+/**
+ * What the Chat tab says before the first question when the server's chat model can't run (first-timer, 2026-10-25),
+ * or null when it can or it's unknown. Read from GET /api/models, so the visitor learns it before a question fails.
+ */
+export function chatModelNotice(models: { tasks: { task: string; model: string | null; availability: ModelAvailability | null }[] } | null | undefined): string | null {
+  const row = models?.tasks.find((t) => t.task === 'chat');
+  if (!row) return null;
+  const name = row.model?.replace(/^ollama:/, '') ?? '';
+  if (row.availability === 'not-installed') {
+    return `Chat can't answer yet: its model (${name || 'the chat model'}) isn't installed on this computer. Run \`ollama pull ${name || '<model>'}\` in a terminal, or pick another model in ${MODELS_SETTINGS_LABEL}.`;
+  }
+  if (row.availability === 'unreachable') {
+    return `Chat can't answer yet: Ollama, which runs its model on this computer, isn't running. Start Ollama, or pick another model in ${MODELS_SETTINGS_LABEL}.`;
+  }
+  return null;
+}

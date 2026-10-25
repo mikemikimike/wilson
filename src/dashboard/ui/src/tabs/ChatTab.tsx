@@ -15,7 +15,7 @@ import {
 import { api, authedFetch, getBaseUrl } from '@/api';
 import { readAuthToken } from '@/lib/authSession';
 import { parseTaxExportArgs } from '@/lib/taxExport';
-import type { BudgetVsActualRow, ChatHistoryRow, ChatResponse, ChatSessionRow } from '@/types';
+import type { BudgetVsActualRow, ChatHistoryRow, ChatResponse, ChatSessionRow, ModelsPanel } from '@/types';
 import { moneyWhole, parseDbTimestamp } from '@/format';
 import { ChatMarkdown, LocalChatMarkdown } from '@/lib/chatMarkdown';
 import { buildChatRequest, hasHandoffPayload } from '@/lib/chat-request';
@@ -36,7 +36,7 @@ import { CHAT_AGENT_ACCESS_LINK, CHAT_AGENT_ACCESS_OFF_ANSWER, CHAT_AGENT_ACCESS
 import { categorizeProgressLabel, isCategorizeQuery } from '@/lib/categorizeProgress';
 import { navigateToTab, navigateUrl, readUrlState, reloadForProfileSwitch, useUrlState } from '@/hooks/useUrlState';
 import { withSession } from '@/lib/urlState';
-import { MODELS_SETTINGS_LABEL, pointsToModelSettings } from '@/lib/modelSetup';
+import { chatModelNotice, MODELS_SETTINGS_LABEL, pointsToModelSettings } from '@/lib/modelSetup';
 import { adoptSession, reconcileUrlSession } from '@/lib/chatSessionSync';
 import {
   applySelection,
@@ -221,7 +221,11 @@ export function ChatTab() {
   const inTabStatus = inTabStatusLine(hybrid.modelStatus);
   // NN-01: the in-tab model downloads from huggingface.co only after this opt-in (hybrid/consent.ts).
   const consent = hybrid.consent;
-  const optInCopy = inTabOptInCopy(consent.downloadSize, consent.serverModel);
+  // Say before the first question when the server's chat model can't run, instead of failing it (first-timer, 2026-10-25).
+  const { data: modelsPanel } = useApi<ModelsPanel>('/api/models');
+  const modelNotice = chatModelNotice(modelsPanel);
+  const chatReady = modelsPanel ? modelNotice === null : null;
+  const optInCopy = inTabOptInCopy(consent.downloadSize, consent.serverModel, chatReady);
   // Turns answered on-device in this chat, so a later server handoff can close the history gap.
   const priorLocalTurnsRef = useRef<PriorLocalTurn[]>([]);
   const { sources, loaded: sourcesLoaded, ensureLoaded } = useMentionSources();
@@ -935,7 +939,20 @@ export function ChatTab() {
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full gap-1.5 text-text-muted text-sm">
-              <span>No messages yet. Ask Wilson anything about your finances.</span>
+              {modelNotice && !accessOff ? (
+                <div className="max-w-md text-center space-y-2" data-testid="chat-model-notice">
+                  <p className="text-text">{modelNotice}</p>
+                  <button
+                    type="button"
+                    onClick={() => navigateToTab('settings')}
+                    className="text-xs px-2 py-1 rounded border border-green-700/50 text-green hover:bg-green-900/30"
+                  >
+                    Open {MODELS_SETTINGS_LABEL}
+                  </button>
+                </div>
+              ) : (
+                <span>No messages yet. Ask Wilson anything about your finances.</span>
+              )}
               <span className="text-xs">
                 Type <kbd className="font-mono text-green">/</kbd> for commands or{' '}
                 <kbd className="font-mono text-green">@</kbd> to reference an account, category or merchant.

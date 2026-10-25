@@ -101,11 +101,20 @@ export function serverModelLabel(raw: string | null | undefined): string {
   return m ? m[2] : id;
 }
 
-export function inTabOptInCopy(downloadSize: string | null | undefined, serverModel: string | null | undefined): InTabOptInCopy {
+export function inTabOptInCopy(
+  downloadSize: string | null | undefined,
+  serverModel: string | null | undefined,
+  serverReady: boolean | null = null,
+): InTabOptInCopy {
   const size = formatDownloadSize(downloadSize);
-  const what = size ? `a one-time ${size} download` : 'a one-time download';
+  const what = size ? `the model once (${size})` : 'the model once';
+  // Never promise a fallback that can't answer: when the server's model isn't installed, say so (first-timer, 2026-10-25).
+  const until =
+    serverReady === false
+      ? `Until then, Chat can't answer: ${serverModelLabel(serverModel)} isn't ready.`
+      : `Until then, questions go to ${serverModelLabel(serverModel)}.`;
   return {
-    text: `Run chat on this device? It needs ${what} from huggingface.co, then runs in this tab. Until then, questions go to ${serverModelLabel(serverModel)}.`,
+    text: `Run chat on this device? It downloads ${what} from huggingface.co (none of your data is sent), then runs in this tab. ${until}`,
     accept: size ? `Download ${size}` : 'Download',
     dismiss: 'Not now',
   };

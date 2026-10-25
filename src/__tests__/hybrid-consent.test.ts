@@ -166,17 +166,25 @@ describe('consent helpers (prelabel pattern: key with a revision, try/catch stor
 describe('opt-in copy', () => {
   test('states the size, huggingface.co once, on this device, and who answers until then', () => {
     expect(inTabOptInCopy('~3.6GB', 'claude-sonnet-4-5')).toEqual({
-      text: 'Run chat on this device? It needs a one-time 3.6 GB download from huggingface.co, then runs in this tab. Until then, questions go to claude-sonnet-4-5.',
+      text: 'Run chat on this device? It downloads the model once (3.6 GB) from huggingface.co (none of your data is sent), then runs in this tab. Until then, questions go to claude-sonnet-4-5.',
       accept: 'Download 3.6 GB',
       dismiss: 'Not now',
     });
     expect(inTabOptInCopy('~3.6GB', 'ollama:gemma4:12b').text).toContain('questions go to gemma4:12b.');
     expect(inTabOptInCopy('unknown', null)).toEqual({
-      text: "Run chat on this device? It needs a one-time download from huggingface.co, then runs in this tab. Until then, questions go to the server's model.",
+      text: "Run chat on this device? It downloads the model once from huggingface.co (none of your data is sent), then runs in this tab. Until then, questions go to the server's model.",
       accept: 'Download',
       dismiss: 'Not now',
     });
     expect(serverModelLabel('  ')).toBe("the server's model");
+  });
+
+  test("never promises a fallback that can't answer (first-timer, 2026-10-25)", () => {
+    const off = inTabOptInCopy('~3.6GB', 'ollama:qwen3:8b', false).text;
+    expect(off).toEndWith("Until then, Chat can't answer: qwen3:8b isn't ready.");
+    expect(off).not.toContain('questions go to');
+    // Unknown readiness keeps the plain fallback line.
+    expect(inTabOptInCopy('~3.6GB', 'ollama:qwen3:8b', null).text).toContain('questions go to qwen3:8b.');
   });
 });
 
@@ -363,7 +371,7 @@ describe('production wiring', () => {
 
   test('ChatTab shows the opt-in copy and a turn-off link', () => {
     const tab = readFileSync(join(UI, 'tabs/ChatTab.tsx'), 'utf8');
-    expect(tab).toContain('inTabOptInCopy(consent.downloadSize, consent.serverModel)');
+    expect(tab).toContain('inTabOptInCopy(consent.downloadSize, consent.serverModel, chatReady)');
     expect(tab).toContain('onClick={consent.optIn}');
     expect(tab).toContain('onClick={consent.optOut}');
   });
