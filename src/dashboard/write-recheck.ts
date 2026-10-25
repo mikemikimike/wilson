@@ -28,19 +28,23 @@ export function isStateChanging(method: string): boolean {
 
 /**
  * Cap on a write's body (#197): 1 MB, far above any JSON body a dashboard route takes (the largest, a chat query, is
- * at most 100,000 characters). Statement import routes keep Bun's own limit instead (`bodyCapFor`).
+ * at most 100,000 characters). /api/import keeps Bun's own limit and the demo trace step has its own (`bodyCapFor`).
  */
 export const JSON_BODY_MAX_BYTES = 1_048_576;
 
 /**
- * Routes that carry a whole parsed statement (thousands of rows): no cap of ours, so Bun's own request-body limit
- * (`maxRequestBodySize`, 128 MB by default) stays theirs, exactly as before the JSON cap existed.
+ * Routes that carry a whole parsed statement (thousands of rows). /api/import keeps Bun's own request-body limit
+ * (`maxRequestBodySize`, 128 MB by default), exactly as before the JSON cap existed. The demo trace step is capped
+ * at TRACE_BODY_MAX_BYTES: it refuses more than 2,000 rows anyway, so it never needs Bun's full limit.
  */
-const IMPORT_BODY_PATHS = new Set(['/api/import', '/api/demo/trace/step']);
+const IMPORT_BODY_PATHS = new Set(['/api/import']);
+export const TRACE_BODY_MAX_BYTES = 16 * 1_048_576;
+const BODY_CAPS: Record<string, number> = { '/api/demo/trace/step': TRACE_BODY_MAX_BYTES };
 
-/** The body cap for a write to `path`: JSON_BODY_MAX_BYTES, or undefined (Bun's limit) for a statement import. */
+/** The body cap for a write to `path`: a route's own cap, undefined (Bun's limit) for /api/import, else JSON_BODY_MAX_BYTES. */
 export function bodyCapFor(path: string): number | undefined {
-  return IMPORT_BODY_PATHS.has(path) ? undefined : JSON_BODY_MAX_BYTES;
+  if (IMPORT_BODY_PATHS.has(path)) return undefined;
+  return BODY_CAPS[path] ?? JSON_BODY_MAX_BYTES;
 }
 
 /** The 413 for a body over `max` bytes. */

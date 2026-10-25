@@ -6,7 +6,7 @@ import { setInitialProfile, closeAll } from '../dashboard/db-manager.js';
 import { createUser, enableAuth } from '../dashboard/auth.js';
 import { outOfRangeInt } from '../dashboard/spending-params.js';
 import { checkTransactionListParams } from '../dashboard/transactions-query.js';
-import { JSON_BODY_MAX_BYTES, bodyCapFor } from '../dashboard/write-recheck.js';
+import { JSON_BODY_MAX_BYTES, TRACE_BODY_MAX_BYTES, bodyCapFor } from '../dashboard/write-recheck.js';
 import { createMirrorSchema } from '../dashboard/ui/src/store/mirror-schema.js';
 import { serveApiPath } from '../dashboard/ui/src/store/mirror-reads.js';
 import { MirrorTestBinding } from './mirror-helpers.js';
@@ -150,6 +150,7 @@ describe('dashboard server: >2^53 params and the body cap', () => {
   test('a statement import over 1 MB is not capped (it keeps Bun\'s own limit)', async () => {
     expect(bodyCapFor('/api/import')).toBeUndefined();
     expect(bodyCapFor('/api/memories')).toBe(JSON_BODY_MAX_BYTES);
+    expect(bodyCapFor('/api/demo/trace/step')).toBe(TRACE_BODY_MAX_BYTES);
     const { base, page } = await start();
     const transactions = Array.from({ length: 6000 }, (_, i) => ({
       date: '2026-03-10',

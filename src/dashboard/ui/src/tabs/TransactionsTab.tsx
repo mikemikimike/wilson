@@ -714,7 +714,7 @@ export function TransactionsTab() {
             data-testid="import-banner"
             data-tone={banner.tone}
             className={`flex items-center justify-between border text-text rounded-md px-3 py-2 text-sm ${
-              banner.tone === 'success' ? 'border-green-700/50 bg-green-900/30' : 'border-border bg-surface-raised'
+              banner.tone === 'success' ? 'border-green-700/50 bg-green-900/30' : 'border-amber-500/40 bg-amber-500/10'
             }`}
           >
             <span className="min-w-0 break-words">{banner.message}</span>
