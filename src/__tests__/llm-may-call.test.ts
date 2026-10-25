@@ -6,7 +6,7 @@ import { getAdapter } from '../model/providers/index.js';
  * callLlm `mayCall` (the dashboard chat's Agent access switch): asked before every attempt, so once it says no the
  * prompt never reaches the provider, including a retry after a failed first attempt.
  */
-describe('callLlm mayCall', () => {
+describe('callLlm mayCall (Agent access kill switch)', () => {
   const adapter = getAdapter('ollama');
   let spy: ReturnType<typeof spyOn> | null = null;
   afterEach(() => {
