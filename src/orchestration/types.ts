@@ -37,6 +37,8 @@ export interface OrchestrationApprovalOptions {
   sessionApprovedTools?: Set<string>;
   /** The parent run's write authority (#165): asked again at every mutating call a step or member makes. */
   mayWrite?: () => boolean;
+  /** The parent run's authority to run any tool (the dashboard chat's Agent access switch), asked at every inner call. */
+  mayUseTools?: () => boolean;
 }
 
 export interface ChainRunOptions extends OrchestrationApprovalOptions {

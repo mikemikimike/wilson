@@ -33,6 +33,11 @@ export interface ApprovalGateResult {
  * mid-run. It is asked before a session approval or a card can let the call
  * through, and once more after the answer, so a write never runs on rights
  * that lapsed while it waited. No means denied, without asking.
+ *
+ * `mayUseTools`, when given, is the caller's authority to run ANY tool, read or write, asked again at this very
+ * call: the dashboard chat passes the Agent access switch (src/mcp/global-state.ts isAgentAccessEnabled), so a switch
+ * turned off mid-run stops the next call, and a write approved after the flip does not run. No means denied, without
+ * asking.
  */
 export async function gateToolCall(
   toolName: string,
@@ -41,7 +46,9 @@ export async function gateToolCall(
   requestToolApproval: ToolApprovalHandler | undefined,
   sessionApprovedTools: Set<string> | undefined,
   mayWrite?: () => boolean,
+  mayUseTools?: () => boolean,
 ): Promise<ApprovalGateResult> {
+  if (mayUseTools && !mayUseTools()) return { asked: false, decision: null, allowed: false };
   if (!isMutatingCall(tool, args)) return { asked: false, decision: null, allowed: true };
   if (mayWrite && !mayWrite()) return { asked: false, decision: null, allowed: false };
   const session = sessionApprovalScope(toolName, tool, args);
@@ -49,6 +56,7 @@ export async function gateToolCall(
 
   const decision = (await requestToolApproval?.({ tool: toolName, args, session })) ?? 'deny';
   if (decision !== 'deny' && mayWrite && !mayWrite()) return { asked: true, decision: 'deny', allowed: false };
+  if (decision !== 'deny' && mayUseTools && !mayUseTools()) return { asked: true, decision: 'deny', allowed: false };
   if (decision === 'allow-session' && session) {
     // Only this tool (or tool + action): approving bulk categorize for the
     // session must not also wave through delete_transaction, nor memory_manage

@@ -59,7 +59,7 @@ export function AgentAccessCenter() {
       <div>
         <h2 className="text-xs text-text-secondary uppercase tracking-wide mb-1">Agent access</h2>
         <p className="text-xs text-text-muted">
-          What an AI agent may do in Wilson. Nothing is exposed until you grant it, and changes to your data always wait for your approval.
+          What an AI agent may do in Wilson. An outside agent gets nothing until you grant it, and changes to your data always wait for your approval.
         </p>
       </div>
 

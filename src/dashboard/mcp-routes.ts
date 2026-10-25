@@ -27,7 +27,7 @@ import type { z } from 'zod';
 import type { Database } from '../db/compat-sqlite.js';
 import { canWrite, isAuthEnabled, type DashboardUser } from './auth.js';
 import { getCurrentProfileName } from './db-manager.js';
-import { expireChatOperation, getPendingChatOperation, respondToChatOperation } from './chat.js';
+import { expireChatOperation, getPendingChatOperation, respondToChatOperation, stopChatForKillSwitch } from './chat.js';
 import {
   listCatalog,
   grantLocalAccess,
@@ -464,6 +464,8 @@ export async function handleMcpRoute(req: Request, url: URL, path: string, ctx: 
       // A chat card answers only the exact request it was created for; a
       // stale one is refused (409) and changes nothing.
       const result = respondToChatOperation(activeDb, id, 'allow-once');
+      // Agent access was switched off while the card waited: the request was denied, nothing ran.
+      if (!result.ok && result.code === 'kill_switch') return errorResponse(403, 'kill_switch', result.error, headers);
       if (!result.ok) return json({ error: result.error, outcome: 'stale' }, 409, headers);
       return json({ outcome: result.status }, 200, headers);
     }
@@ -599,6 +601,8 @@ export async function handleMcpRoute(req: Request, url: URL, path: string, ctx: 
     // Only a real change flips the switch: turning off an already-off switch must not move the epoch.
     if (body.data.enabled !== undefined && body.data.enabled !== isAgentAccessEnabled()) {
       setKillSwitch(activeDb, body.data.enabled);
+      // The switch covers Wilson's own Chat too: a chat run in flight stops now and its pending card is denied.
+      if (!body.data.enabled) stopChatForKillSwitch();
     }
     const scope = deriveScope(req, ctx, s.session ?? '');
     if (!scope) return ORIGIN_REQUIRED(headers);

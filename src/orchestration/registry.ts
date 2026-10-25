@@ -41,6 +41,7 @@ export function chainToTool(chain: ChainDef): ToolDef {
         requestToolApproval: config?.requestToolApproval,
         sessionApprovedTools: config?.sessionApprovedTools,
         mayWrite: config?.mayWrite,
+        mayUseTools: config?.mayUseTools,
       });
       return result;
     },
@@ -69,6 +70,7 @@ export function teamToTool(team: TeamDef): ToolDef {
         requestToolApproval: config?.requestToolApproval,
         sessionApprovedTools: config?.sessionApprovedTools,
         mayWrite: config?.mayWrite,
+        mayUseTools: config?.mayUseTools,
       });
       return result;
     },

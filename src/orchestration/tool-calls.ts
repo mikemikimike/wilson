@@ -11,6 +11,8 @@ export interface OrchestrationGate {
   sessionApprovedTools?: Set<string>;
   /** The parent run's write authority (#165), asked at every inner mutating call. */
   mayWrite?: () => boolean;
+  /** The parent run's authority to run any tool, read or write (the dashboard chat's Agent access switch). */
+  mayUseTools?: () => boolean;
   signal?: AbortSignal;
   model?: string;
 }
@@ -25,6 +27,7 @@ export function orchestrationGate(options: {
   requestToolApproval?: ToolApprovalHandler;
   sessionApprovedTools?: Set<string>;
   mayWrite?: () => boolean;
+  mayUseTools?: () => boolean;
   signal?: AbortSignal;
   model?: string;
 }): OrchestrationGate {
@@ -32,6 +35,7 @@ export function orchestrationGate(options: {
     requestToolApproval: serializeApprovals(options.requestToolApproval, options.signal),
     sessionApprovedTools: options.sessionApprovedTools,
     ...(options.mayWrite ? { mayWrite: options.mayWrite } : {}),
+    ...(options.mayUseTools ? { mayUseTools: options.mayUseTools } : {}),
     signal: options.signal,
     model: options.model,
   };
@@ -60,7 +64,7 @@ export async function runOrchestratedToolCall(
   let allowed: boolean;
   try {
     const handler = gate.signal?.aborted ? undefined : gate.requestToolApproval;
-    ({ allowed } = await gateToolCall(tc.name, tool, tc.args, handler, gate.sessionApprovedTools, gate.mayWrite));
+    ({ allowed } = await gateToolCall(tc.name, tool, tc.args, handler, gate.sessionApprovedTools, gate.mayWrite, gate.mayUseTools));
   } catch (err) {
     // A handler that fails cannot have approved anything: fail closed.
     logger.warn(`Orchestration approval failed; denying ${tc.name}`, {
@@ -79,6 +83,7 @@ export async function runOrchestratedToolCall(
     ...(gate.requestToolApproval ? { requestToolApproval: gate.requestToolApproval } : {}),
     ...(gate.sessionApprovedTools ? { sessionApprovedTools: gate.sessionApprovedTools } : {}),
     ...(gate.mayWrite ? { mayWrite: gate.mayWrite } : {}),
+    ...(gate.mayUseTools ? { mayUseTools: gate.mayUseTools } : {}),
   };
   try {
     const result = await tool.func(tc.args, config);

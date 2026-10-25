@@ -239,6 +239,8 @@ export interface ChatResponse {
   serverHost?: string | null;
   /** True when the turn failed (model unreachable, deadline, no answer): `answer` is the error text and the bubble gets no provenance badge (#177). */
   failed?: boolean;
+  /** True when the Agent access switch is off: the turn was not run and `answer` says so (src/dashboard/chat.ts). */
+  agentAccessOff?: boolean;
 }
 
 // "@" mention wire format for POST /api/chat (validated + re-resolved from the

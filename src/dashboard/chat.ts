@@ -26,6 +26,8 @@ import { modelLocality } from '../model/locality.js';
 import { formatCategorizeSummary, parseCategorizeResult } from '../tools/categorize/summary.js';
 import { canWrite, getUser, mayUseChatSession, onAuthEnabled, onWriteRevoked, type DashboardUser } from './auth.js';
 import { ensureHandoffSecret, setHandoffReplayDb } from '../training/handoff-tag.js';
+import { isAgentAccessEnabled } from '../mcp/global-state.js';
+import { CHAT_AGENT_ACCESS_OFF_ANSWER } from './ui/src/lib/agentAccessCopy.js';
 
 /** The dashboard user a chat run belongs to (auth on); null when auth is off. */
 export type ChatUser = Pick<DashboardUser, 'id' | 'role'>;
@@ -236,6 +238,18 @@ function runMayWrite(db: Database | null, owner: ChatUser | null): boolean {
   }
 }
 
+/**
+ * Whether Wilson's own Chat may run any tool (read or write) right now: the Agent access switch
+ * (Settings → Agent access, src/mcp/global-state.ts). Process-global, kept outside every profile, so it holds across
+ * profile switches exactly as it does for MCP clients (TM-8.8/TM-8.9). Asked at every point a chat tool would run:
+ * the start of each message and "/categorize", every tool call (approval-gate.ts `mayUseTools`), every write a
+ * tool makes in batches (`mayWrite`), each poll and each approval of a pending card, and once more before an answer
+ * is returned, so a switch turned off mid-conversation stops the next step and drops what the run read.
+ */
+export function chatMayUseTools(): boolean {
+  return isAgentAccessEnabled();
+}
+
 /** Deterministic JSON (object keys sorted at every level). */
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
@@ -312,6 +326,14 @@ export function getPendingChatOperation(
   }
   if (!runner || !current || !requestId) return null;
 
+  // Agent access was switched off while the request waited: it can never be approved, so deny it now and take its
+  // card off the queue, for every viewer and every role.
+  if (!chatMayUseTools()) {
+    retireBinding(db, 'kill_switch');
+    runner.respondToApproval('deny', requestId);
+    return null;
+  }
+
   // The run's owner can no longer write (demoted or deactivated since the request was raised, by any path): the
   // request can never be approved, so deny it now instead of leaving it waiting out the chat deadline (#165).
   if (chatRunOwner && !runMayWrite(chatDb, chatRunOwner)) {
@@ -373,7 +395,7 @@ export function getPendingChatOperation(
 
 export type ChatOperationResult =
   | { ok: true; status: 'committed' | 'rejected' }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: 'kill_switch' };
 
 const STALE_CARD_ERROR =
   'This approval is no longer pending — the request it was created for was cancelled, answered or replaced. Nothing was changed.';
@@ -433,6 +455,12 @@ export function respondToChatOperation(db: Database, operationId: string, decisi
   if (!exact) {
     retireBinding(db, 'request no longer pending');
     return { ok: false, error: STALE_CARD_ERROR };
+  }
+  // Approving runs a chat tool: Agent access must be on now, not just when the card was raised.
+  if (decision !== 'deny' && !chatMayUseTools()) {
+    retireBinding(db, 'kill_switch');
+    runner.respondToApproval('deny', b.requestId);
+    return { ok: false, error: CHAT_AGENT_ACCESS_OFF_ANSWER, code: 'kill_switch' };
   }
   // Approving runs the owner's write: it needs the owner's write rights now, not when the card was raised (#165).
   if (decision !== 'deny' && !runMayWrite(chatDb, chatRunOwner)) {
@@ -546,6 +574,23 @@ export function revokeChatWritesForUser(db: Database, userId: number): boolean {
   return true;
 }
 
+/**
+ * Agent access was just switched off (PUT /api/mcp/settings): the chat run in flight, if any, stops now. Its pending
+ * approval is denied and its card taken off the queue, and a "/categorize" is aborted before its next batch. Not
+ * scoped to a profile or user: the switch is process-global. Every tool call, write and approval re-checks the switch
+ * on its own as well, so a flip made outside this process (the file edited by hand) is honoured at the next step.
+ * Returns true when a run was stopped.
+ */
+export function stopChatForKillSwitch(): boolean {
+  if (!activeChatRun || !cancelActiveRun) {
+    retireBinding(chatDb, 'kill_switch');
+    return false;
+  }
+  retireBinding(chatDb, 'kill_switch');
+  cancelActiveRun();
+  return true;
+}
+
 // deactivateUser and setUserRole call this (a hook, because auth.ts cannot import this module), so no caller of
 // either can forget the run: deactivation cancels it (#159), a demotion strips its writes (#165). The user's
 // 'allow-session' approvals are dropped either way, run or not, so a user given write rights back later in the
@@ -646,7 +691,7 @@ export function initChatSession(db: Database): void {
  */
 export async function handleChatMessage(
   query: string, sessionId?: string, contextBlock?: string, options: { user?: ChatUser | null; db?: Database } = {}
-): Promise<{ answer: string; sessionId: string | null; busy?: true; stale?: true; failed?: true }> {
+): Promise<{ answer: string; sessionId: string | null; busy?: true; stale?: true; failed?: true; agentAccessOff?: true }> {
   const user = options.user ?? null;
   // The runner and the agent tools are bound to the CURRENT profile's db (initChatSession). A caller that
   // authenticated against a different db (a request that outlived a profile switch) must not run on this one.
@@ -662,6 +707,12 @@ export async function handleChatMessage(
   if ('direct' in expansion) {
     return { answer: expansion.direct, sessionId: callerSessionId(sessionId, user) };
   }
+  // Agent access is off: no chat tool may read or write the user's data, and a model turn without tools makes numbers
+  // up, so the model is not called at all. Local help (the `direct` answers above) still works. Same for every role.
+  if (!chatMayUseTools()) {
+    logger.info(`Dashboard chat: refused a turn while agent access is off`);
+    return accessOffReply(sessionId, user);
+  }
   if ('action' in expansion && readOnlyUser) {
     return { answer: viewerCannotWrite(user!, '/categorize'), sessionId: callerSessionId(sessionId, user) };
   }
@@ -674,9 +725,9 @@ export async function handleChatMessage(
     }
     const controller = new AbortController();
     const runDb = chatDb;
-    // Asked before each batch writes (#165): an owner who lost write rights stops the run there.
+    // Asked before each batch writes (#165): an owner who lost write rights, or Agent access switched off, stops it.
     const mayWrite = () => {
-      if (runMayWrite(runDb, user)) return true;
+      if (chatMayUseTools() && runMayWrite(runDb, user)) return true;
       controller.abort();
       return false;
     };
@@ -695,6 +746,7 @@ export async function handleChatMessage(
     // A run in which the model answered no batch (it could not be reached, the tool failed) is marked like a
     // failed agent turn, so no provenance badge claims a model answered it (#177).
     const outcome = await categorizing;
+    if (!chatMayUseTools()) return accessOffReply(sessionId, user);
     return {
       answer: outcome.answer,
       sessionId: callerSessionId(sessionId, user),
@@ -747,8 +799,13 @@ export async function handleChatMessage(
   };
   // A writer's run re-checks its owner at every write it makes (#165), so rights lost mid-run are honoured.
   // Its 'allow-session' approvals are its owner's alone (#172); with auth off the owner is null, as before.
-  const mayWrite = () => runMayWrite(runDb, user);
-  const run = runner.runQuery(query, readOnlyUser ? { approvals: 'deny' } : { mayWrite, userId: user?.id ?? null });
+  const mayWrite = () => chatMayUseTools() && runMayWrite(runDb, user);
+  // Every tool call, read or write, asks the Agent access switch again at the moment it would run.
+  const mayUseTools = chatMayUseTools;
+  const run = runner.runQuery(
+    query,
+    readOnlyUser ? { approvals: 'deny', mayUseTools } : { mayWrite, mayUseTools, userId: user?.id ?? null },
+  );
   const settled: Promise<void> = run.then(
     () => {},
     () => {},
@@ -770,6 +827,13 @@ export async function handleChatMessage(
     });
     const result = await Promise.race([run, timedOut]);
     const durationMs = Date.now() - startTime;
+    // Switched off while the run was in flight: its next tool call was refused (or it was stopped by
+    // stopChatForKillSwitch), and whatever it read before the flip is dropped, not answered from.
+    if (!chatMayUseTools()) {
+      if (result === 'timeout') runner.cancelExecution();
+      logger.info(`Dashboard chat: run ended by agent access being switched off`, { durationMs: Date.now() - startTime });
+      return accessOffReply(undefined, user, chatHistory.getSessionId() ?? null);
+    }
     if (result === 'timeout') {
       // Stops the agent loop and denies any pending approval (its card is
       // expired by the runner change listener). An in-flight local inference
@@ -824,6 +888,16 @@ function callerSessionId(sessionId: string | undefined, user: ChatUser | null): 
   if (sessionId) return sessionId;
   const current = chatHistory?.getSessionId() ?? null;
   return current && (!user || (chatDb !== null && mayUseChatSession(chatDb, current, user))) ? current : null;
+}
+
+/**
+ * The reply to a chat turn while Agent access is off. No model answered it (so no provenance badge), and
+ * `agentAccessOff` lets the Chat tab show its notice by the composer at once.
+ */
+function accessOffReply(
+  sessionId: string | undefined, user: ChatUser | null, session: string | null = callerSessionId(sessionId, user),
+): { answer: string; sessionId: string | null; failed: true; agentAccessOff: true } {
+  return { answer: CHAT_AGENT_ACCESS_OFF_ANSWER, sessionId: session, failed: true, agentAccessOff: true };
 }
 
 /** Answer for a write a read-only dashboard user asked for (#156). */

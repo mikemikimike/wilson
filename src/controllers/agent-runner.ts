@@ -214,10 +214,12 @@ export class AgentRunnerController {
    * reads, and each write after the demotion is denied.
    * `options.userId` names who the run is for (#172): it reads and adds to that user's 'allow-session'
    * approvals only. Omitted or null, the run uses the shared anonymous approvals (TUI, dashboard with auth off).
+   * `options.mayUseTools` is the run's authority to run any tool at all, asked again at every tool call: the
+   * dashboard chat passes the Agent access switch, so a switch turned off mid-run stops the next call.
    */
   async runQuery(
     query: string,
-    options: { approvals?: 'ask' | 'deny'; mayWrite?: () => boolean; userId?: number | null } = {},
+    options: { approvals?: 'ask' | 'deny'; mayWrite?: () => boolean; mayUseTools?: () => boolean; userId?: number | null } = {},
   ): Promise<RunQueryResult | undefined> {
     const approvals = options.approvals ?? this.approvals;
     const controller = new AbortController();
@@ -259,6 +261,7 @@ export class AgentRunnerController {
         sessionApprovedTools:
           approvals === 'deny' ? new Set<string>() : this.sessionApprovalsFor(options.userId ?? null),
         ...(options.mayWrite ? { mayWrite: options.mayWrite } : {}),
+        ...(options.mayUseTools ? { mayUseTools: options.mayUseTools } : {}),
       });
       const stream = agent.run(query, this.inMemoryChatHistory);
       for await (const event of stream) {

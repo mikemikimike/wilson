@@ -80,6 +80,11 @@ export interface ToolInvokeConfig {
    * (categorize) stops once it says no; inner calls of chains and teams pass it to the approval gate.
    */
   mayWrite?: () => boolean;
+  /**
+   * The caller's authority to run any tool, read or write (the dashboard chat's Agent access switch). Inner calls
+   * of chains and teams pass it to the approval gate, so a switch turned off mid-chain stops the next call.
+   */
+  mayUseTools?: () => boolean;
 }
 
 /**

@@ -43,6 +43,11 @@ export interface AgentConfig {
    * approval gate, and inside a tool that writes in batches. Absent = only the approval gate decides.
    */
   mayWrite?: () => boolean;
+  /**
+   * The run's authority to run any tool at all, read or write, asked again at every tool call (and after each
+   * approval answer). The dashboard chat passes the Agent access switch. Absent = no such limit.
+   */
+  mayUseTools?: () => boolean;
 }
 
 /**

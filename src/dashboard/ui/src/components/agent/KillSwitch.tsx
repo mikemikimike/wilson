@@ -6,7 +6,7 @@ import { KILL_SWITCH_HINT, KILL_SWITCH_OFF_LINE } from '@/lib/agentAccessCopy';
 /**
  * The global switch. On: agent access works as configured below. Off: no tool is exposed to any outside agent or
  * MCP client, in any profile, grants are revoked and pending approvals are rejected. Turning it off asks first.
- * Wilson's own Chat agent is not gated by it, and the copy says so.
+ * Wilson's own Chat is gated by it too (src/dashboard/chat.ts): no chat tool runs and pending chat cards are denied.
  */
 export function KillSwitch({
   state,
@@ -83,6 +83,7 @@ export function KillSwitch({
       >
         <p className="text-sm text-text-secondary">
           Every grant is revoked, pending approvals are rejected, and no tool is exposed to any agent or MCP client in any profile.
+          Wilson's own Chat stops using your data too, until you turn this back on.
           Turning it back on does not bring grants back: grant again from this page.
         </p>
       </Dialog>

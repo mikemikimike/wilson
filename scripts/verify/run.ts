@@ -133,7 +133,7 @@ const TM_HINTS: Record<number, { files: string[]; terms: RegExp }> = {
   6: { files: ['mcp-webmcp-session-not-bearer', 'mcp-client-tokens', 'mcp-audit-log'], terms: /session_generation|sessionGeneration|token/ },
   7: { files: ['dashboard-origin-gate', 'prelabel-origin-gate'], terms: /Access-Control-Allow-Origin/ },
   8: { files: ['mcp-approval-hardening', 'chat-role-demotion', 'chat-deactivation'], terms: /expire|demot|deactivat/i },
-  9: { files: ['mcp-kill-switch'], terms: /kill switch|killSwitch/i },
+  9: { files: ['mcp-kill-switch', 'chat-kill-switch'], terms: /kill switch|killSwitch/i },
 };
 
 function parseThreatModel(): RuleRow[] {

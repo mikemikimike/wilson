@@ -31,6 +31,8 @@ import { ImportStatementDialog, type ImportResponse } from '@/components/ImportS
 import { ChatApprovalCard } from '@/components/ChatApprovalCard';
 import { usePendingChatApproval } from '@/hooks/usePendingChatApproval';
 import { useCategorizeProgress } from '@/hooks/useCategorizeProgress';
+import { useChatAgentAccess } from '@/hooks/useChatAgentAccess';
+import { CHAT_AGENT_ACCESS_LINK, CHAT_AGENT_ACCESS_OFF_ANSWER, CHAT_AGENT_ACCESS_OFF_NOTICE } from '@/lib/agentAccessCopy';
 import { categorizeProgressLabel, isCategorizeQuery } from '@/lib/categorizeProgress';
 import { navigateToTab, navigateUrl, readUrlState, reloadForProfileSwitch, useUrlState } from '@/hooks/useUrlState';
 import { withSession } from '@/lib/urlState';
@@ -101,6 +103,18 @@ interface DisplayMessage {
   mentionLabels?: string[];
   /** Mentions sent with this (user) message — restored by ArrowUp recall. */
   mentions?: MentionEntry[];
+}
+
+/** Settings → Agent access: switch to Settings, then bring the Agent access section into view once it renders. */
+function openAgentAccessSettings() {
+  navigateToTab('settings');
+  let tries = 0;
+  const reveal = () => {
+    const el = document.querySelector('[data-testid="agent-access-center"]');
+    if (el) el.scrollIntoView({ block: 'start' });
+    else if (++tries < 40) requestAnimationFrame(reveal);
+  };
+  requestAnimationFrame(reveal);
 }
 
 /** Option item for the composer popover (commands, mentions, arg values). */
@@ -216,6 +230,9 @@ export function ChatTab() {
   const approval = usePendingChatApproval(sending && serverInFlight);
   // /categorize runs for minutes on a local model; show the server's batch progress meanwhile.
   const categorizeProgress = useCategorizeProgress(sending && serverInFlight && categorizing);
+  // The Agent access switch covers this Chat too: off, no turn may use the user's data (the server enforces it).
+  const access = useChatAgentAccess();
+  const accessOff = access.agentAccess === false;
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -669,7 +686,8 @@ export function ChatTab() {
     const sentMentions = pruneMentions(query, mentions);
     // Commands and mentions need tools/ids → straight to the server agent;
     // the raw slash text is expanded server-side (src/dashboard/chat-commands.ts).
-    const needsServer = query.startsWith('/') || sentMentions.length > 0;
+    // With Agent access off the in-tab model is not tried either: the server answers that access is off.
+    const needsServer = query.startsWith('/') || sentMentions.length > 0 || accessOff;
 
     setMessages((prev) => [
       ...prev,
@@ -764,6 +782,8 @@ export function ChatTab() {
           body: JSON.stringify(request),
         });
 
+        if (res.agentAccessOff) access.setOff();
+        else access.refresh();
         setSessionId(res.sessionId);
         if (res.sessionId) {
           setActive(res.sessionId);
@@ -965,6 +985,15 @@ export function ChatTab() {
                       ))}
                     </div>
                   )}
+                  {msg.role === 'assistant' && msg.content === CHAT_AGENT_ACCESS_OFF_ANSWER && (
+                    <button
+                      type="button"
+                      onClick={openAgentAccessSettings}
+                      className="mt-2 text-xs px-2 py-1 min-h-6 rounded border border-green-700/50 text-green hover:bg-green-900/30"
+                    >
+                      {CHAT_AGENT_ACCESS_LINK}
+                    </button>
+                  )}
                   {pointsToModelSettings(msg.content) && (
                     // The missing-model error's fix is a setting: take the user there (#182).
                     <button
@@ -1036,6 +1065,23 @@ export function ChatTab() {
             emptyText={sourcesLoaded ? undefined : 'Loading…'}
             status={status}
           />
+          {accessOff && (
+            /* Shown before anything is sent (NN-09): with the switch off, questions get the access-off reply. */
+            <div
+              role="status"
+              data-testid="chat-agent-access-off"
+              className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-red/50 bg-red/10 px-3 py-2 text-xs leading-4 text-text-secondary"
+            >
+              <p className="min-w-0 flex-1 basis-56 break-words">{CHAT_AGENT_ACCESS_OFF_NOTICE}</p>
+              <button
+                type="button"
+                onClick={openAgentAccessSettings}
+                className="shrink-0 inline-flex items-center min-h-6 px-1 text-green underline hover:text-text"
+              >
+                {CHAT_AGENT_ACCESS_LINK}
+              </button>
+            </div>
+          )}
           {consent.reserve && !(consent.offered && !consent.optedIn && consent.dismissed) ? (
             /* In-tab model row. Its space is held from first paint on a WebGPU browser (min-h fits the opt-in at
                360px and wider), and the status line replaces it in place once opted in. */

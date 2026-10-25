@@ -39,6 +39,7 @@ import { buildScheduleC, scheduleCToCsv, scheduleCToXlsxBuffer } from '../tools/
 import { hasLicense } from '../licensing/license.js';
 import { getCheckoutUrl } from '../licensing/upsell.js';
 import { initChatSession, handleChatMessage, getCategorizeProgress, nextChatModelId, nextChatModelInfo, serverChatModelInfo } from './chat.js';
+import { CHAT_AGENT_ACCESS_OFF_ANSWER } from './ui/src/lib/agentAccessCopy.js';
 import {
   isAuthEnabled, enableAuth, disableAuth, lanAuthReady, hasActiveAdmin,
   listUsers, getUserCount, deactivateUser, LastAdminError, hashPassword, insertUser, createFirstAdmin,
@@ -51,7 +52,7 @@ import {
 import {
   checkHost, checkStateChange, corsHeaders, isAllowedOrigin, isLoopbackBind, isLoopbackPeer, requireBrowserProof,
 } from './origin-gate.js';
-import { getGlobalAgentState } from '../mcp/global-state.js';
+import { getGlobalAgentState, isAgentAccessEnabled } from '../mcp/global-state.js';
 import { handleMcpRoute } from './mcp-routes.js';
 import { bodyCapFor, isStateChanging, readBodyThenRecheck } from './write-recheck.js';
 import { handleSyncRoute, syncCorsHeaders } from './sync-routes.js';
@@ -1206,6 +1207,11 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
         if (path === '/api/chat/history') {
           return Response.json(apiChatHistory(activeDb, chatUser), { headers });
         }
+        if (path === '/api/chat/access') {
+          // Whether Wilson's own Chat may use the user's data (the Agent access switch, all profiles). Holds no data,
+          // so every signed-in role may read it: the Chat tab shows its notice before anything is sent.
+          return Response.json({ agentAccess: isAgentAccessEnabled() }, { headers: { ...headers, 'Cache-Control': 'no-store' } });
+        }
         if (path === '/api/chat/progress') {
           return Response.json({ progress: getCategorizeProgress() }, { headers });
         }
@@ -1240,14 +1246,17 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           if (!mentions.ok) {
             return Response.json({ error: mentions.error }, { status: 400, headers });
           }
-          const contextBlock = resolveMentionContext(activeDb, mentions.mentions);
+          // Agent access off: nothing is read for the turn (no mention rows, no handoff steps re-run); handleChatMessage
+          // answers it with the access-off reply, or runs a local help command.
+          const accessOn = isAgentAccessEnabled();
+          const contextBlock = accessOn ? resolveMentionContext(activeDb, mentions.mentions) : '';
           // On-device subagent handoff (advisory): validated, its steps re-run
           // on this DB, rendered as a framed untrusted block after the mention
           // block. Invalid or oversized payloads render '' and never fail the chat.
           // Honoured only while subagent.enabled is on: with the flag off the field
           // is not even parsed, so a forged handoff cannot inject a block or make the
           // server run tools on a path the feature does not expose.
-          const handoffBlock = apiLocalChatConfig().subagent.enabled
+          const handoffBlock = accessOn && apiLocalChatConfig().subagent.enabled
             ? await buildHandoffContext(body.localHandoff, { exec: serverReadExecutor(activeDb), db: activeDb })
             : '';
           // The handoff build awaited: ask the whole question again (same profile, same live login, auth
@@ -1278,8 +1287,14 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
           // serverModelLocal: while the in-tab model downloads, the browser lets the server answer only when the
           // model its next turn would use runs on this machine; otherwise the turn waits for the in-tab model.
           // serverModel: named in the Chat opt-in ("until then, questions go to <model>").
+          // agentAccess: the in-tab model reads the user's data too, so with the Agent access switch off it does not run.
           return Response.json(
-            { ...apiLocalChatConfig(), serverModelLocal: nextChatModelInfo().serverModelLocal, serverModel: nextChatModelId() },
+            {
+              ...apiLocalChatConfig(),
+              serverModelLocal: nextChatModelInfo().serverModelLocal,
+              serverModel: nextChatModelId(),
+              agentAccess: isAgentAccessEnabled(),
+            },
             { headers },
           );
         }
@@ -1306,6 +1321,11 @@ export async function startDashboardServer(db: Database, preferredPort?: number,
 
         if (path === '/api/chat/local' && req.method === 'POST') {
           const body = await jsonBody<{ query?: string; answer?: string; sessionId?: string }>(req);
+          // An in-tab answer is Wilson's Chat using the user's data: with Agent access off it is not accepted, so the
+          // browser drops it and the turn gets the server's access-off reply instead.
+          if (!isAgentAccessEnabled()) {
+            return Response.json({ error: CHAT_AGENT_ACCESS_OFF_ANSWER, code: 'kill_switch' }, { status: 403, headers });
+          }
           const result = apiRecordLocalChatMessage(activeDb, body, chatUser);
           if ('error' in result) {
             return Response.json({ error: result.error }, { status: result.forbidden ? 403 : 400, headers });

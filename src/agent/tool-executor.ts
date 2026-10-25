@@ -41,6 +41,8 @@ export class AgentToolExecutor {
     private readonly model?: string,
     /** The run's write authority, asked again at every mutating call and handed to the tool (#165). */
     private readonly mayWrite?: () => boolean,
+    /** The run's authority to run any tool, read or write, asked again at every call (the dashboard chat's Agent access switch). */
+    private readonly mayUseTools?: () => boolean,
   ) {
     this.sessionApprovedTools = sessionApprovedTools ?? new Set();
   }
@@ -107,6 +109,7 @@ export class AgentToolExecutor {
       this.requestToolApproval,
       this.sessionApprovedTools,
       this.mayWrite,
+      this.mayUseTools,
     );
     if (gate.asked && gate.decision) {
       yield { type: 'tool_approval', tool: toolName, args: toolArgs, approved: gate.decision };
@@ -155,6 +158,7 @@ export class AgentToolExecutor {
         ...(this.requestToolApproval ? { requestToolApproval: this.requestToolApproval } : {}),
         sessionApprovedTools: this.sessionApprovedTools,
         ...(this.mayWrite ? { mayWrite: this.mayWrite } : {}),
+        ...(this.mayUseTools ? { mayUseTools: this.mayUseTools } : {}),
       };
 
       // Launch tool invocation -- closes the channel when it settles

@@ -988,7 +988,7 @@ function buildPanel(): void {
     // Dot and launcher first: they must be right even while the panel is closed.
     const state = agentState;
     dot.style.background = state ? CHIP_COLOR[statusDot(state) === 'green' ? 'green' : statusDot(state) === 'red' ? 'red' : 'muted'] : T.muted;
-    const hint = !state ? AGENT_ACCESS_HINT : !state.enabled ? 'Agent access is off. No agent can use any tool.' : AGENT_ACCESS_HINT;
+    const hint = !state ? AGENT_ACCESS_HINT : !state.enabled ? "Agent access is off. No agent, Wilson's own Chat included, can use any tool." : AGENT_ACCESS_HINT;
     launcher.title = hint;
     launcher.setAttribute?.('aria-label', hint);
     if (panel.hidden) return;
@@ -1022,7 +1022,7 @@ function buildPanel(): void {
     killRow.append(toggle);
     kill.append(killRow);
     if (!state.enabled) {
-      kill.append(el('div', `color:${T.red};margin-top:6px;`, "Agent access is off. No tools are exposed to any outside agent or MCP client. This does not turn off Wilson's own Chat."));
+      kill.append(el('div', `color:${T.red};margin-top:6px;`, "Agent access is off. Wilson's own Chat cannot use your data, and no tools are exposed to any outside agent or MCP client."));
     } else if (confirmingOff) {
       kill.append(el('div', `color:${T.muted};margin:6px 0;`, 'Turn off agent access? Every grant is revoked and pending approvals are rejected, in every profile.'));
       const row = el('div', 'display:flex;gap:8px;');

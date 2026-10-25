@@ -27,8 +27,8 @@ export function whatThisIs(hostname: string): string {
  * controls, in the same terms as the bridge panel and Settings → Agent access.
  */
 export const AGENT_ACCESS_HINT =
-  'The Agent access button in the bottom-left corner controls what AI agents may do in this dashboard. ' +
-  'Agents get no tools unless they are granted, and any change they propose waits for a person to approve it.';
+  "The Agent access button in the bottom-left corner controls what AI agents may do in this dashboard, Wilson's own Chat included. " +
+  'Outside agents get no tools unless they are granted, and any change an agent proposes waits for a person to approve it.';
 
 /** Why Sign in is disabled, or null when it can be pressed. */
 export function signInBlockedReason(username: string, password: string): string | null {

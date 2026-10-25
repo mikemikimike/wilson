@@ -161,6 +161,11 @@ export interface LocalChatConfigResponse {
   serverModelLocal?: boolean;
   /** The server's chat model id (named in the Chat opt-in copy); absent from older servers. */
   serverModel?: string | null;
+  /**
+   * The Agent access switch (Settings → Agent access). The in-tab model reads the user's data, so with it false no
+   * turn runs on-device. Absent from older servers = on (those servers have no such switch for Chat).
+   */
+  agentAccess?: boolean;
   /** Browser subagent flag (absent from older servers = off). */
   subagent?: {
     enabled: boolean;
@@ -428,6 +433,20 @@ export function createHybridChat(opts: HybridOpts) {
   }
 
   /**
+   * Whether Agent access is on, asked fresh for every turn (the switch can flip mid-conversation). Off, or no clear
+   * answer, means no on-device turn: the server answers it, and it enforces the switch itself.
+   */
+  async function agentAccessOn(): Promise<boolean> {
+    try {
+      const res = await fetchImpl(`${base}/api/config/local-chat`);
+      if (!res.ok) return false;
+      return ((await res.json()) as Partial<LocalChatConfigResponse> | null)?.agentAccess !== false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * For a turn that needs the model: null when it is ready (now, or after
    * waiting). Otherwise the {ok:false} the turn resolves with, carrying the
    * load failure when that is why the model is not ready.
@@ -511,8 +530,14 @@ export function createHybridChat(opts: HybridOpts) {
 
   // ── Local attempt ───────────────────────────────────────────────────────
 
-  /** Best-effort record of a locally-answered exchange. Losing a history row must never become a user-facing error. */
-  async function recordLocal(query: string, answer: string, sessionId?: string | null): Promise<string | null> {
+  /**
+   * Best-effort record of a locally-answered exchange. Losing a history row must never become a user-facing error.
+   * The one refusal that matters is Agent access switched off while the turn ran (403 kill_switch): the answer was
+   * made from the user's data after the switch said no, so `accessOff` tells the caller to drop it.
+   */
+  async function recordLocal(
+    query: string, answer: string, sessionId?: string | null,
+  ): Promise<{ sessionId: string | null; accessOff?: true }> {
     try {
       const body: Record<string, unknown> = { query, answer };
       const sid = sessionId ?? null;
@@ -524,12 +549,16 @@ export function createHybridChat(opts: HybridOpts) {
       });
       if (res.ok) {
         const data = (await res.json()) as { sessionId?: string | null };
-        return data?.sessionId ?? null;
+        return { sessionId: data?.sessionId ?? null };
+      }
+      if (res.status === 403) {
+        const data = (await res.json().catch(() => null)) as { code?: string } | null;
+        if (data?.code === 'kill_switch') return { sessionId: null, accessOff: true };
       }
     } catch {
       // best-effort only
     }
-    return null;
+    return { sessionId: null };
   }
 
   /** Bundle mode (slice-1 behaviour): pre-fetched context in the prompt, one generation, no tools. */
@@ -615,8 +644,9 @@ export function createHybridChat(opts: HybridOpts) {
       return { ok: false, reason: checked.reason };
     }
 
-    const recordedSessionId = await recordLocal(query, classified.text, sessionId);
-    return { ok: true, answer: classified.text, sessionId: recordedSessionId, source: 'local' };
+    const recorded = await recordLocal(query, classified.text, sessionId);
+    if (recorded.accessOff) return { ok: false };
+    return { ok: true, answer: classified.text, sessionId: recorded.sessionId, source: 'local' };
   }
 
   /** A subagent handoff result. Total: a payload that cannot be built degrades to a plain {ok:false}. */
@@ -753,10 +783,11 @@ export function createHybridChat(opts: HybridOpts) {
       switch (outcome.kind) {
         case 'answer': {
           const recorded = await recordLocal(query, outcome.text, sessionId);
+          if (recorded.accessOff) return { ok: false };
           return {
             ok: true,
             answer: outcome.text,
-            sessionId: recorded,
+            sessionId: recorded.sessionId,
             source: 'local',
             mode: 'subagent',
             steps: outcome.steps.map((st) => ({ tool: st.tool, ms: st.ms })),
@@ -792,6 +823,11 @@ export function createHybridChat(opts: HybridOpts) {
       if (consentGate && !(await consented())) {
         return (await fetchConfig()) ? { ok: false, reason: 'not-opted-in' } : { ok: false };
       }
+
+      // ── Agent access gate ───────────────────────────────────────────────
+      // The in-tab model reads the user's data (bundle rows, the mirror). With the switch off the turn goes to the
+      // server, which answers that Agent access is off without calling any model.
+      if (!(await agentAccessOn())) return { ok: false };
 
       const cfg = await loadConfig();
       if (!cfg) return { ok: false };
