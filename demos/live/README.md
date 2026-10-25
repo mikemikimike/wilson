@@ -17,6 +17,18 @@ node demos/live/webmcp-live.mjs reset           # between runs: access back ON, 
 
 `--fresh` on `up`/`check` reseeds the scratch HOME. Override with `WILSON_LIVE_DIR`, `WILSON_LIVE_PORT`, `WILSON_LIVE_CDP`.
 
+## A fresh show machine
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/openaccountant/wilson/feat/webmcp-live-test/demos/live/setup-show-machine.sh
+bash setup-show-machine.sh --macos             # toolchain, clone to ~/dev/wilson, deps, UI build, then check --fresh
+bash setup-show-machine.sh --status            # what is there and what is missing, changes nothing
+```
+
+It installs Xcode CLT, Homebrew, git, gh, node 22, bun 1.4.2 and Chrome 156+ when they are missing, then clones wilson and builds the UI
+(npm installs ship none, #195). `--with-models` adds Ollama with gemma4:12b and granite4.1:3b, which only recording needs;
+pull them days ahead. Re-running it is safe. Do Not Disturb, the monitor resolution and the fallback clips stay manual.
+
 ## The stage run
 
 1. `webmcp list`: no tools. Grants are per tab, so nothing is exposed until the human grants it.
