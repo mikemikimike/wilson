@@ -104,6 +104,120 @@ describe('callLlm', () => {
     expect(callCount).toBe(1);
   });
 
+  test('local Ollama requests use an explicit deadline and do not retry a timed-out call', async () => {
+    let callCount = 0;
+    let seenSignal: AbortSignal | undefined;
+    mockAdapterFn = async (opts: { signal?: AbortSignal }) => {
+      callCount++;
+      seenSignal = opts.signal;
+      return await new Promise<LlmResponse>((_, reject) => {
+        if (opts.signal?.aborted) {
+          reject(new Error('local request timed out'));
+          return;
+        }
+        opts.signal?.addEventListener('abort', () => reject(new Error('local request timed out')), { once: true });
+      });
+    };
+
+    await expect(callLlm('slow local batch', { model: 'ollama:gemma4:12b', timeoutMs: 20 })).rejects.toThrow('local request timed out');
+    expect(callCount).toBe(1);
+    expect(seenSignal).toBeDefined();
+  });
+
+  test('local Ollama uses its default request deadline when no timeout is configured', async () => {
+    let seenSignal: AbortSignal | undefined;
+    mockAdapterFn = async (opts: { signal?: AbortSignal }) => {
+      seenSignal = opts.signal;
+      return makeLlmResponse();
+    };
+
+    await callLlm('test', { model: 'ollama:llama3' });
+
+    expect(seenSignal).toBeDefined();
+    expect(seenSignal?.aborted).toBe(false);
+  });
+
+  test('local Ollama does not retry a timed-out structured-output repair', async () => {
+    let callCount = 0;
+    mockAdapterFn = async (opts: { signal?: AbortSignal }) => {
+      callCount++;
+      if (callCount === 1) return makeLlmResponse({ content: 'not json', structured: { value: 123 } });
+      return await new Promise<LlmResponse>((_, reject) => {
+        if (opts.signal?.aborted) {
+          reject(new Error('local repair timed out'));
+          return;
+        }
+        opts.signal?.addEventListener('abort', () => reject(new Error('local repair timed out')), { once: true });
+      });
+    };
+
+    await expect(
+      callLlm('test', {
+        model: 'ollama:llama3',
+        outputSchema: z.object({ value: z.string() }),
+        timeoutMs: 20,
+      }),
+    ).rejects.toThrow('local repair timed out');
+    expect(callCount).toBe(2);
+  });
+
+  test('local Ollama retries a transient failure before the request deadline', async () => {
+    let callCount = 0;
+    mockAdapterFn = async () => {
+      callCount++;
+      if (callCount === 1) throw new Error('connection reset');
+      return makeLlmResponse({ content: 'retry succeeded' });
+    };
+
+    const result = await callLlm('test', { model: 'ollama:llama3', timeoutMs: 1000 });
+    expect(result.response.content).toBe('retry succeeded');
+    expect(callCount).toBe(2);
+  });
+
+  test('Ollama cloud models keep the existing retry and timeout behavior', async () => {
+    let callCount = 0;
+    let seenSignal: AbortSignal | undefined;
+    mockAdapterFn = async (opts: { signal?: AbortSignal }) => {
+      callCount++;
+      seenSignal = opts.signal;
+      if (callCount === 1) throw new Error('service unavailable');
+      return makeLlmResponse();
+    };
+
+    await callLlm('test', { model: 'ollama:gpt-oss:120b-cloud' });
+    expect(callCount).toBe(2);
+    expect(seenSignal).toBeUndefined();
+  });
+
+  test('Ollama combines caller cancellation with its request deadline', async () => {
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    mockAdapterFn = async (opts: { signal?: AbortSignal }) => {
+      seenSignal = opts.signal;
+      return makeLlmResponse();
+    };
+
+    await callLlm('test', { model: 'ollama:llama3', signal: controller.signal, timeoutMs: 1000 });
+    expect(seenSignal).toBeDefined();
+    expect(seenSignal).not.toBe(controller.signal);
+    expect(seenSignal?.aborted).toBe(false);
+  });
+
+  test('local Ollama caller cancellation does not retry the aborted request', async () => {
+    const controller = new AbortController();
+    let callCount = 0;
+    mockAdapterFn = async () => {
+      callCount++;
+      controller.abort();
+      throw new Error('request aborted');
+    };
+
+    await expect(
+      callLlm('test', { model: 'ollama:llama3', signal: controller.signal, timeoutMs: 1000 }),
+    ).rejects.toThrow('request aborted');
+    expect(callCount).toBe(1);
+  });
+
   test('maxTokens reaches the adapter', async () => {
     let seen: unknown;
     mockAdapterFn = async (opts: { maxTokens?: number }) => {

@@ -6,11 +6,15 @@ import { buildRepairPrompt, LlmValidationError, validateStructuredOutput } from 
 import { logger } from '../utils/logger.js';
 import { classifyError, isNonRetryableError } from '../utils/errors.js';
 import { resolveProvider, getProviderById } from '../providers.js';
+import { modelLocality } from './locality.js';
 import { traceStore } from '../utils/trace-store.js';
 import { interactionStore } from '../utils/interaction-store.js';
 
 export const DEFAULT_PROVIDER = 'ollama';
 export const DEFAULT_MODEL = 'ollama:qwen3:8b';
+
+/** Default bound for slow local Ollama generations; callers can set a shorter per-call deadline. */
+export const DEFAULT_LOCAL_OLLAMA_TIMEOUT_MS = 10 * 60_000;
 
 /**
  * Gets the fast model variant for the given provider.
@@ -21,7 +25,12 @@ export function getFastModel(modelProvider: string, fallbackModel: string): stri
 }
 
 // Generic retry helper with exponential backoff
-async function withRetry<T>(fn: () => Promise<T>, provider: string, maxAttempts = 3): Promise<T> {
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  provider: string,
+  maxAttempts = 3,
+  shouldRetry: (error: unknown) => boolean = () => true,
+): Promise<T> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       return await fn();
@@ -30,7 +39,7 @@ async function withRetry<T>(fn: () => Promise<T>, provider: string, maxAttempts 
       const errorType = classifyError(message);
       logger.error(`[${provider} API] ${errorType} error (attempt ${attempt + 1}/${maxAttempts}): ${message}`);
 
-      if (isNonRetryableError(message)) {
+      if (isNonRetryableError(message) || !shouldRetry(e)) {
         throw new Error(`[${provider} API] ${message}`);
       }
 
@@ -56,6 +65,8 @@ export interface CallLlmOptions {
   callType?: string;
   /** Generation cap. Honored by the Transformers adapter; other adapters ignore it in this slice. */
   maxTokens?: number;
+  /** Per-request deadline for local Ollama calls. */
+  timeoutMs?: number;
 }
 
 export interface LlmResult {
@@ -74,7 +85,19 @@ export interface LlmResult {
  * Always returns LlmResponse — no string | AIMessage branching downstream.
  */
 export async function callLlm(prompt: string, options: CallLlmOptions = {}): Promise<LlmResult> {
-  const { model = DEFAULT_MODEL, systemPrompt, outputSchema, tools, toolIndex, signal, runId, sequenceNum, callType, maxTokens } = options;
+  const {
+    model = DEFAULT_MODEL,
+    systemPrompt,
+    outputSchema,
+    tools,
+    toolIndex,
+    signal,
+    runId,
+    sequenceNum,
+    callType,
+    maxTokens,
+    timeoutMs = DEFAULT_LOCAL_OLLAMA_TIMEOUT_MS,
+  } = options;
   const finalSystemPrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
 
   const provider = resolveProvider(model);
@@ -95,6 +118,20 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
   // Local Transformers.js runs greedy (do_sample: false) in-process: a failed
   // call fails identically on retry — and a failed WebGPU prefill on a large
   // prompt can take a minute and a half — so it gets exactly one attempt.
+  const isLocalOllama = provider.id === 'ollama' && modelLocality(model).local;
+  const localTimeoutSignal = isLocalOllama
+    ? AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs)))
+    : undefined;
+  const requestSignal = signal && localTimeoutSignal
+    ? AbortSignal.any([signal, localTimeoutSignal])
+    : (signal ?? localTimeoutSignal);
+  // A local timeout must not enqueue the same generation again; other transient errors can still retry.
+  const shouldRetry = localTimeoutSignal
+    ? (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        return !localTimeoutSignal?.aborted && !signal?.aborted && classifyError(message) !== 'timeout';
+      }
+    : undefined;
   const maxAttempts = provider.id === 'transformers' ? 1 : 3;
   const startTime = Date.now();
   const promptChars = prompt.length + finalSystemPrompt.length;
@@ -112,11 +149,12 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
           tools,
           ...(toolIndex ? { toolIndex } : {}),
           outputSchema,
-          signal,
+          signal: requestSignal,
           maxTokens,
         }),
       provider.displayName,
       maxAttempts,
+      shouldRetry,
     );
 
     // Structured-output gate: when a schema was supplied, validate what came back
@@ -143,11 +181,12 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
                 compact: provider.id === 'transformers',
               }),
               outputSchema,
-              signal,
+              signal: requestSignal,
               maxTokens,
             }),
           provider.displayName,
           maxAttempts,
+          shouldRetry,
         );
         const second = validateStructuredOutput(finalResponse, outputSchema);
         if (!second.ok) {
